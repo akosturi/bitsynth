@@ -1,7 +1,10 @@
 //  Tables V2
 
-#ifndef _TABLES
-#define _TABLES
+#ifndef BITSYNTH_TABLES_H
+#define BITSYNTH_TABLES_H
+
+#include <avr/pgmspace.h>
+#include <stdint.h>
 
 //This table id compatible with 20000.00 Hz. sampling rate
 //Envelope frequency tuning word vs. MIDI range value [0-127]
@@ -54,7 +57,7 @@ const uint16_t PROGMEM PITCHS[] = {
   0x5462,0x5966,0x5EB7,0x6459,0x6A50,0x70A3,0x7756,0x7E6E,0x85F3,0x8DEA,0x965A,0x9F4B,0xA8C4,0xB2CD,0xBD6F,0xC8B2,
   };
 */
-const PROGMEM char SinTable[] =
+const int8_t PROGMEM SinTable[] =
 {
   0,  //0
   3,  //1
@@ -314,7 +317,7 @@ const PROGMEM char SinTable[] =
   -4, //255
 };
 
-const PROGMEM char TriangleTable[] =
+const int8_t PROGMEM TriangleTable[] =
 {
   0,	//0
   1,	//1
@@ -574,7 +577,7 @@ const PROGMEM char TriangleTable[] =
   -2,	//255
 };
 
-const PROGMEM char  SquareTable[] =
+const int8_t PROGMEM SquareTable[] =
 {
   127,	//0
   127,	//1
@@ -833,9 +836,9 @@ const PROGMEM char  SquareTable[] =
   -125,	//254
   -1,	//255
 };
-const PROGMEM char SawTable[] =
+const int8_t PROGMEM SawTable[] =
 {
-  128,	//0
+  -128,	//0
   127,	//1
   126,	//2
   125,	//3
@@ -1092,7 +1095,7 @@ const PROGMEM char SawTable[] =
   -125,	//254
   -127,	//255
 };
-const PROGMEM char RampTable[] =
+const int8_t PROGMEM RampTable[] =
 {
   -127,	//0
   -126,	//1
@@ -1351,7 +1354,7 @@ const PROGMEM char RampTable[] =
   126,	//254
   127,	//255
 };
-const PROGMEM char NoiseTable[] =
+const uint8_t PROGMEM NoiseTable[] =
 {
   62,
   57,
@@ -1610,7 +1613,7 @@ const PROGMEM char NoiseTable[] =
   68,
   67,
 };
-const PROGMEM char Env0[] =
+const uint8_t PROGMEM Env0[] =
 {
   255,  //0
   254,  //1
@@ -1740,10 +1743,8 @@ const PROGMEM char Env0[] =
   0,  //125
   0,  //126
   0,  //127
-  0,  //127
-  0, //127
 };
-const PROGMEM char Env1[] =
+const uint8_t PROGMEM Env1[] =
 {
   255,	//0
   242,	//1
@@ -1873,11 +1874,8 @@ const PROGMEM char Env1[] =
   0,	//125
   0,	//126
   0,	//127
-  0,	//127
-  0,	//127
-  0,	//127
 };
-const PROGMEM char Env2[] =
+const uint8_t PROGMEM Env2[] =
 {
   255,	//0
   254,	//1
@@ -2007,15 +2005,9 @@ const PROGMEM char Env2[] =
   0,	//125
   0,	//126
   0,	//127
-  0,	//127
-  0,	//127
-  0,	//127
 };
-const PROGMEM char Env3[] =
+const uint8_t PROGMEM Env3[] =
 {
-  255,
-  255,
-  255,
   255,
   255,
   255,
