@@ -61,6 +61,8 @@ volatile uint8_t divider = 4;
 volatile uint16_t tim = 0;
 volatile uint8_t tik = 0;
 volatile uint8_t output_mode = CHA;
+volatile uint8_t noiseVoiceMask = 0;
+volatile int16_t pwmQuantizationError = 0;
 
 //*********************************************************************************************
 //  Audio driver interrupt
@@ -80,23 +82,39 @@ ISR(TIMER1_COMPA_vect)
   // Volume envelope generator
   //-------------------------------
 
-  if (!(((uint8_t*)&EPCW[divider])[1] & 0x80)) {
-    AMP[divider] = pgm_read_byte(envs[divider] + (((uint8_t*)&(EPCW[divider] += EFTW[divider]))[1]));
-  } else {
+  if (((uint8_t*)&EPCW[divider])[1] & 0x80) {
     AMP[divider] = 0;
+  } else {
+    EPCW[divider] += EFTW[divider];
+    const uint8_t envelopeIndex = ((uint8_t*)&EPCW[divider])[1];
+    AMP[divider] = (envelopeIndex & 0x80) ? 0 : pgm_read_byte(envs[divider] + envelopeIndex);
   }
 
   //-------------------------------
   //  Synthesizer/audio mixer
   //-------------------------------
 
-  OCR2A = OCR2B = 127 +
-                  ((
-                     (((int8_t)pgm_read_byte(wavs[0] + ((uint8_t*)&(PCW[0] += FTW[0]))[1]) * AMP[0]) >> 8) +
-                     (((int8_t)pgm_read_byte(wavs[1] + ((uint8_t*)&(PCW[1] += FTW[1]))[1]) * AMP[1]) >> 8) +
-                     (((int8_t)pgm_read_byte(wavs[2] + ((uint8_t*)&(PCW[2] += FTW[2]))[1]) * AMP[2]) >> 8) +
-                     (((int8_t)pgm_read_byte(wavs[3] + ((uint8_t*)&(PCW[3] += FTW[3]))[1]) * AMP[3]) >> 8)
-                   ) >> 2);
+  int16_t mixQ8 =
+    (((int8_t)pgm_read_byte(wavs[0] + ((uint8_t*)&(PCW[0] += FTW[0]))[1]) * AMP[0]) >> 2) +
+    (((int8_t)pgm_read_byte(wavs[1] + ((uint8_t*)&(PCW[1] += FTW[1]))[1]) * AMP[1]) >> 2) +
+    (((int8_t)pgm_read_byte(wavs[2] + ((uint8_t*)&(PCW[2] += FTW[2]))[1]) * AMP[2]) >> 2) +
+    (((int8_t)pgm_read_byte(wavs[3] + ((uint8_t*)&(PCW[3] += FTW[3]))[1]) * AMP[3]) >> 2);
+
+  const bool shapeOutput = !noiseVoiceMask;
+  if (shapeOutput) {
+    mixQ8 += pwmQuantizationError;
+  }
+
+  const int16_t quantizedMix = (mixQ8 + 128) >> 8;
+  pwmQuantizationError = shapeOutput ? mixQ8 - (quantizedMix << 8) : 0;
+
+  int16_t pwmSample = 127 + quantizedMix;
+  if (pwmSample < 0) {
+    pwmSample = 0;
+  } else if (pwmSample > 255) {
+    pwmSample = 255;
+  }
+  OCR2A = OCR2B = (uint8_t)pwmSample;
 
   //************************************************
   //  Modulation engine
@@ -274,6 +292,11 @@ class synth
 
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         wavs[voice] = selectedWave;
+        if (wave == NOISE) {
+          noiseVoiceMask |= (1 << voice);
+        } else {
+          noiseVoiceMask &= ~(1 << voice);
+        }
       }
     }
 
