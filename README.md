@@ -1,14 +1,13 @@
 # bitsynth
-An arduino based simple synth and sequencer.
+An Arduino Nano based wavetable synth and 8-step sequencer.
 
 # original synth engine made by
 https://github.com/dzlonline/the_synth
 
-# statistics library made by
-https://github.com/dndubins/QuickStats
-
 # before start
-This is a very simple arduino based wavetable synth with control and sequence functions. I made it with Arduino Nano. I am not an expert coder. If you find the code a little dodgy, feel free to make it transparent. Originally I made this stuff for my own usage. Later I would like to update the code with comments and attach the schematic.
+This is a simple Arduino based wavetable synth with live controls and sequence functions. It was originally built for an Arduino Nano.
 
 # start
-Copy the files into a folder. Download and copy the 3rd party sources (the_synth, QuickStats, LiquidCrystal) to the folder as well. Open the sequencer.ino with the IDE. Try to compile the project. If you get errors double-check the included libraries and the path.
+Copy the files into a folder and open `sequencer.ino` with the Arduino IDE. The synth engine is included locally as `synth.h`/`tables.h`. Install the official `LiquidCrystal` library from Library Manager if your IDE or CLI setup does not already provide it.
+
+If you get compile errors, double-check that you are building for an AVR Arduino with Timer2 support, such as Nano, Uno, or Pro Mini.

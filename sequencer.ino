@@ -1,204 +1,301 @@
-#include "synth.h"
 #include <LiquidCrystal.h>
-#include "QuickStats.h"
+#include "synth.h"
 
 LiquidCrystal lcd(2, 3, 4, 5, 6, 7);
 
-int sensorValue = 0;
-int bit1 = 8;
-int bit2 = 9;
-int bit3 = 10;
+const uint8_t kMuxBit0Pin = 8;
+const uint8_t kMuxBit1Pin = 9;
+const uint8_t kMuxBit2Pin = 10;
 
-int value = 0;
-byte mode = 0;
-byte osc = 0;
+const uint8_t kSettingsAnalogPin = A0;
+const uint8_t kStepButtonPin = A1;
+const uint8_t kPitchAnalogPin = A2;
+const uint8_t kResetButtonPin = A3;
 
-int aPitch[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-int aSet[4] = {0, 0, 0, 0};
+const uint8_t kVoice = 0;
+const uint8_t kStepCount = 8;
+const uint8_t kSettingsCount = 4;
+const uint8_t kWaveCount = 6;
+const uint8_t kAnalogSamples = 5;
+const uint8_t kButtonDebounceMs = 25;
+const uint16_t kDefaultTempoMs = 50;
 
-int mySensVals[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-int aReading[8];
-int aState[8] = {1, 1, 1, 1, 1, 1, 1, 1};
-int aPrevious[8] = {1, 1, 1, 1, 1, 1, 1, 1};
-const int quant = 10;
-float med[quant];
-String aOsc[6] = {"SIN", "TRI", "SQR", "SAW", "RMP", "WAV"};
-long interval = 50;
-unsigned long previousMillis = 0;
-int i = 0;
+const uint8_t kWaveIds[kWaveCount] = {SINE, TRIANGLE, SQUARE, SAW, RAMP, NOISE};
+
+struct SynthControls {
+  uint8_t waveform;
+  uint16_t tempoMs;
+  uint8_t length;
+  uint8_t modulation;
+};
 
 synth edgar;
-QuickStats stats;
 
+SynthControls controls = {0, kDefaultTempoMs, 64, 64};
+SynthControls lastDisplayedControls = {255, 0, 255, 255};
+
+uint8_t stepPitch[kStepCount] = {0};
+bool stepEnabled[kStepCount] = {true, true, true, true, true, true, true, true};
+
+uint8_t buttonStableState[kStepCount] = {HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH};
+uint8_t buttonLastReading[kStepCount] = {HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH};
+unsigned long buttonLastChangeMs[kStepCount] = {0};
+
+uint8_t currentStep = 0;
+uint8_t lastDisplayedStep = 255;
+uint8_t renderedStep = 255;
+uint8_t configuredWaveform = 255;
+uint8_t configuredLength = 255;
+uint8_t configuredModulation = 255;
+unsigned long lastStepMs = 0;
+bool resetHeld = false;
+bool lastDisplayedResetHeld = false;
+bool displayDirty = true;
 
 void setup() {
   edgar.begin(CHA);
-  pinMode(bit1, OUTPUT);
-  pinMode(bit2, OUTPUT);
-  pinMode(bit3, OUTPUT);
-  pinMode(A0, INPUT);
-  pinMode(A1, INPUT_PULLUP);
-  pinMode(A2, INPUT);
-  pinMode(A3, INPUT_PULLUP);
-  lcd.clear();
+  edgar.setupVoice(kVoice, SINE, 0, ENVELOPE0, controls.length, controls.modulation);
+
+  pinMode(kMuxBit0Pin, OUTPUT);
+  pinMode(kMuxBit1Pin, OUTPUT);
+  pinMode(kMuxBit2Pin, OUTPUT);
+  pinMode(kSettingsAnalogPin, INPUT);
+  pinMode(kStepButtonPin, INPUT_PULLUP);
+  pinMode(kPitchAnalogPin, INPUT);
+  pinMode(kResetButtonPin, INPUT_PULLUP);
+
   lcd.begin(16, 2);
-  lcd.print("BitSynth");
+  lcd.clear();
+  lcd.print(F("BitSynth"));
   delay(500);
   lcd.clear();
 }
 
-void loop()
-{
-  //A block, 4 pots
-  for (int count = 0; count < 4 ; count++)
-  {
-    digitalWrite(bit1, bitRead(count, 0));
-    digitalWrite(bit2, bitRead(count, 1));
-    digitalWrite(bit3, bitRead(count, 2));
-    for (int x = 0; x < quant; x++)
-    {
-      med[x] = analogRead(A0);
+void loop() {
+  const unsigned long now = millis();
+
+  readControls();
+  scanStepButtons(now);
+  scanResetButton();
+  applySynthControls();
+  runSequencer(now);
+  renderDisplay();
+}
+
+void selectMuxChannel(uint8_t channel) {
+  digitalWrite(kMuxBit0Pin, bitRead(channel, 0));
+  digitalWrite(kMuxBit1Pin, bitRead(channel, 1));
+  digitalWrite(kMuxBit2Pin, bitRead(channel, 2));
+  delayMicroseconds(5);
+}
+
+uint16_t readMedianAnalog(uint8_t pin) {
+  uint16_t samples[kAnalogSamples];
+
+  for (uint8_t i = 0; i < kAnalogSamples; ++i) {
+    const uint16_t value = analogRead(pin);
+    uint8_t insertAt = i;
+
+    while (insertAt > 0 && samples[insertAt - 1] > value) {
+      samples[insertAt] = samples[insertAt - 1];
+      --insertAt;
     }
-    mySensVals[count] = stats.median(med, quant);
-    if (count == 0)
-    {
-      aSet[count] = map(mySensVals[count], 0, 1023, 5, 0);
-    }
-    else if (count == 1)
-    {
-      aSet[count] = map(mySensVals[count], 0, 1023, 10, 350);
-    }
-    else if (count == 2)
-    {
-      aSet[count] = map(mySensVals[count], 0, 1023, 127, 0);
-    }
-    else if (count == 3)
-    {
-      aSet[count] = map(mySensVals[count], 0, 1023, 999, 1);
+
+    samples[insertAt] = value;
+  }
+
+  return samples[kAnalogSamples / 2];
+}
+
+uint8_t mapToByte(uint16_t value, int16_t outMin, int16_t outMax) {
+  return (uint8_t)constrain(map(value, 0, 1023, outMin, outMax), min(outMin, outMax), max(outMin, outMax));
+}
+
+void readControls() {
+  SynthControls nextControls;
+
+  for (uint8_t channel = 0; channel < kSettingsCount; ++channel) {
+    selectMuxChannel(channel);
+    const uint16_t value = readMedianAnalog(kSettingsAnalogPin);
+
+    switch (channel) {
+      case 0:
+        nextControls.waveform = mapToByte(value, kWaveCount - 1, 0);
+        break;
+      case 1:
+        nextControls.tempoMs = (uint16_t)map(value, 0, 1023, 10, 350);
+        break;
+      case 2:
+        nextControls.length = mapToByte(value, 127, 0);
+        break;
+      case 3:
+        nextControls.modulation = mapToByte(value, 127, 0);
+        break;
     }
   }
-  //B block, 8 buttons
-  for (int count = 0; count < 8 ; count++)
-  {
-    digitalWrite(bit1, bitRead(count, 0));
-    digitalWrite(bit2, bitRead(count, 1));
-    digitalWrite(bit3, bitRead(count, 2));
-    aReading[count] = digitalRead(A1);
-    if (aReading[count] == LOW && aPrevious[count] == HIGH)
-    {
-      if (aState[count] == LOW)
-      {
-        aState[count] = HIGH;
+
+  for (uint8_t step = 0; step < kStepCount; ++step) {
+    selectMuxChannel(step);
+    stepPitch[step] = mapToByte(readMedianAnalog(kPitchAnalogPin), 84, 12);
+  }
+
+  if (nextControls.waveform != controls.waveform ||
+      nextControls.tempoMs != controls.tempoMs ||
+      nextControls.length != controls.length ||
+      nextControls.modulation != controls.modulation) {
+    controls = nextControls;
+    displayDirty = true;
+  }
+}
+
+void scanStepButtons(unsigned long now) {
+  for (uint8_t step = 0; step < kStepCount; ++step) {
+    selectMuxChannel(step);
+    const uint8_t reading = digitalRead(kStepButtonPin);
+
+    if (reading != buttonLastReading[step]) {
+      buttonLastChangeMs[step] = now;
+      buttonLastReading[step] = reading;
+    }
+
+    if ((now - buttonLastChangeMs[step]) >= kButtonDebounceMs &&
+        reading != buttonStableState[step]) {
+      buttonStableState[step] = reading;
+
+      if (reading == LOW) {
+        stepEnabled[step] = !stepEnabled[step];
+        displayDirty = true;
       }
-      else
-      {
-        aState[count] = LOW;
-      }
     }
-    aPrevious[count] = aReading[count];
   }
-  //C block, 8 pots
-  for (int count = 0; count < 8 ; count++)
-  {
-    digitalWrite(bit1, bitRead(count, 0));
-    digitalWrite(bit2, bitRead(count, 1));
-    digitalWrite(bit3, bitRead(count, 2));
-    for (int x = 0; x < quant; x++)
-    {
-      med[x] = analogRead(A2);
+}
+
+void scanResetButton() {
+  selectMuxChannel(0);
+  const bool pressed = digitalRead(kResetButtonPin) == LOW;
+
+  if (pressed && !resetHeld) {
+    for (uint8_t step = 0; step < kStepCount; ++step) {
+      stepEnabled[step] = true;
     }
-    mySensVals[count] = stats.median(med, quant);
-    aPitch[count] = map(mySensVals[count], 0, 1023, 84, 12);
+    displayDirty = true;
   }
-  //D block, 1 buttons
-  digitalWrite(bit1, bitRead(0, 0));
-  digitalWrite(bit2, bitRead(0, 1));
-  digitalWrite(bit3, bitRead(0, 2));
-  int rst = digitalRead(A3);
-  if (rst == 0)
-  {
-    for (int y = 0; y < 8; y++)
-    {
-      aState[y] = HIGH;
-    }
-    lcd.setCursor(0, 1);
-    lcd.print("RST");
+
+  if (pressed != resetHeld) {
+    resetHeld = pressed;
+    displayDirty = true;
   }
-  else
-  {
-    lcd.setCursor(0, 1);
-    lcd.print("   ");
+}
+
+void applySynthControls() {
+  if (controls.waveform != configuredWaveform) {
+    edgar.setWave(kVoice, kWaveIds[controls.waveform]);
+    configuredWaveform = controls.waveform;
   }
-  switch (aSet[0])
-  {
+
+  if (controls.length != configuredLength) {
+    edgar.setLength(kVoice, controls.length);
+    configuredLength = controls.length;
+  }
+
+  if (controls.modulation != configuredModulation) {
+    edgar.setMod(kVoice, controls.modulation);
+    configuredModulation = controls.modulation;
+  }
+}
+
+void runSequencer(unsigned long now) {
+  if ((unsigned long)(now - lastStepMs) < controls.tempoMs) {
+    return;
+  }
+
+  lastStepMs = now;
+  playStep(currentStep);
+  lastDisplayedStep = currentStep;
+  currentStep = (currentStep + 1) & 0x07;
+  displayDirty = true;
+}
+
+void playStep(uint8_t step) {
+  if (!stepEnabled[step]) {
+    return;
+  }
+
+  edgar.setPitch(kVoice, stepPitch[step]);
+  edgar.trigger(kVoice);
+}
+
+void printWaveLabel(uint8_t waveform) {
+  switch (waveform) {
     case 0:
-      {
-        edgar.setupVoice(0, SINE, 0, ENVELOPE0, 0, 64, 500);
-        break;
-      }
+      lcd.print(F("SIN"));
+      break;
     case 1:
-      {
-        edgar.setupVoice(0, TRIANGLE, 0, ENVELOPE0, 0, 64, 500);
-        break;
-      }
+      lcd.print(F("TRI"));
+      break;
     case 2:
-      {
-        edgar.setupVoice(0, SQUARE, 0, ENVELOPE0, 0, 64, 500);
-        break;
-      }
+      lcd.print(F("SQR"));
+      break;
     case 3:
-      {
-        edgar.setupVoice(0, SAW, 0, ENVELOPE0, 0, 64, 500);
-        break;
-      }
+      lcd.print(F("SAW"));
+      break;
     case 4:
-      {
-        edgar.setupVoice(0, RAMP, 0, ENVELOPE0, 0, 64, 500);
-        break;
+      lcd.print(F("RMP"));
+      break;
+    default:
+      lcd.print(F("WAV"));
+      break;
+  }
+}
+
+void printPadded3(uint16_t value) {
+  if (value < 100) {
+    lcd.print(' ');
+  }
+  if (value < 10) {
+    lcd.print(' ');
+  }
+  lcd.print(value);
+}
+
+void renderDisplay() {
+  const bool controlsChanged = controls.waveform != lastDisplayedControls.waveform ||
+                               controls.tempoMs != lastDisplayedControls.tempoMs ||
+                               controls.length != lastDisplayedControls.length ||
+                               controls.modulation != lastDisplayedControls.modulation;
+  const bool stepChanged = renderedStep != lastDisplayedStep;
+  const bool resetChanged = resetHeld != lastDisplayedResetHeld;
+
+  if (!displayDirty && !controlsChanged && !stepChanged && !resetChanged) {
+    return;
+  }
+
+  if (displayDirty || stepChanged || controls.waveform != lastDisplayedControls.waveform) {
+    lcd.setCursor(0, 0);
+    for (uint8_t step = 0; step < kStepCount; ++step) {
+      if (step == lastDisplayedStep) {
+        lcd.write(0xFF);
+      } else {
+        lcd.print(stepEnabled[step] ? '.' : ' ');
       }
-    case 5:
-      {
-        edgar.setupVoice(0, NOISE, 0, ENVELOPE0, 0, 64, 500);
-        break;
-      }
-  }
-  unsigned long currentMillis = millis();
-  while (currentMillis - previousMillis >= aSet[1] && i < 8)
-  {
-    previousMillis = currentMillis;
-    if (aState[i] == 1)
-    {
-      //edgar.setMod(0, aSet[3]);
-      edgar.setLength(0, aSet[2]);
-      edgar.setPitch(0, aPitch[i]);
-      edgar.setFilter(0, aSet[3]);
-      lcd.setCursor(13, 0);
-      lcd.print(aOsc[aSet[0]]); //Osc
-      lcd.setCursor(3, 1);
-      lcd.print("             ");
-      lcd.setCursor(4, 1);
-      lcd.print(aSet[1]); //Speed
-      lcd.setCursor(9, 1);
-      lcd.print(aSet[2]); //Length
-      lcd.setCursor(13, 1);
-      lcd.print(aSet[3]); //Mod
-      lcd.setCursor(0, 0);
-      lcd.print("        ");
-      lcd.setCursor(i, 0);
-      lcd.write(0xFF);
-      lcd.setCursor(0, 0);
-      lcd.print(i);
-      edgar.trigger(0);
-      delay(aSet[1]);
     }
-    else
-    {
-      delay(aSet[1]);
-    }
-    i++;
+    lcd.print(F("     "));
+    printWaveLabel(controls.waveform);
+    renderedStep = lastDisplayedStep;
   }
-  if (i == 8)
-  {
-    i = 0;
+
+  if (controlsChanged || resetChanged) {
+    lcd.setCursor(0, 1);
+    lcd.print(resetHeld ? F("RST ") : F("    "));
+    printPadded3(controls.tempoMs);
+    lcd.print(' ');
+    printPadded3(controls.length);
+    lcd.print(' ');
+    printPadded3(controls.modulation);
+    lcd.print(' ');
   }
+
+  lastDisplayedControls = controls;
+  lastDisplayedResetHeld = resetHeld;
+  displayDirty = false;
 }

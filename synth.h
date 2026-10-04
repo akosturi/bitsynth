@@ -5,12 +5,17 @@
 //  Optimized audio driver, modulation engine, envelope engine.
 //
 //  Dzl/Illutron 2014
-//
 //*************************************************************************************
+
+#include <Arduino.h>
 #include <avr/pgmspace.h>
 #include <avr/interrupt.h>
+#include <util/atomic.h>
 #include "tables.h"
-#include "Filters.h"
+
+#ifndef F_CPU
+#define F_CPU 16000000UL
+#endif
 
 #define DIFF 1
 #define CHA 2
@@ -28,66 +33,58 @@
 #define ENVELOPE2 2
 #define ENVELOPE3 3
 
-#define FS 20000.0                                              //-Sample rate (NOTE: must match tables.h)
+#define FS 20000UL
 
-#define SET(x,y) (x |=(1<<y))		        		//-Bit set/clear macros
-#define CLR(x,y) (x &= (~(1<<y)))       			// |
-#define CHK(x,y) (x & (1<<y))           			// |
-#define TOG(x,y) (x^=(1<<y))            			//-+
+#define SET(x,y) (x |= (1 << y))
+#define CLR(x,y) (x &= (~(1 << y)))
+#define CHK(x,y) (x & (1 << y))
+#define TOG(x,y) (x ^= (1 << y))
 
-volatile unsigned int PCW[4] = {
-  0, 0, 0, 0
-};			//-Wave phase accumolators
-volatile unsigned int FTW[4] = {
-  1000, 200, 300, 400
-};           //-Wave frequency tuning words
-volatile unsigned char AMP[4] = {
-  255, 255, 255, 255
-};           //-Wave amplitudes [0-255]
-volatile unsigned int PITCH[4] = {
-  500, 500, 500, 500
-};          //-Voice pitch
-volatile int FILTER[4] = {
-  128, 128, 128, 128
-};  
-volatile int MOD[4] = {
-  20, 0, 64, 127
-};                         //-Voice envelope modulation [0-1023 512=no mod. <512 pitch down >512 pitch up]
-volatile unsigned int wavs[4];                                  //-Wave table selector [address of wave in memory]
-volatile unsigned int envs[4];                                  //-Envelopte selector [address of envelope in memory]
-volatile unsigned int EPCW[4] = {
-  0x8000, 0x8000, 0x8000, 0x8000
-}; //-Envelope phase accumolator
-volatile unsigned int EFTW[4] = {
-  10, 10, 10, 10
-};               //-Envelope speed tuning word
-volatile unsigned char divider = 4;                             //-Sample rate decimator for envelope
-volatile unsigned int tim = 0;
-volatile unsigned char tik = 0;
-volatile unsigned char output_mode;
+const uint8_t SYNTH_VOICE_COUNT = 4;
+const uint8_t SYNTH_MIDI_NOTE_MAX = 127;
+const uint8_t SYNTH_LENGTH_MAX = 127;
 
+volatile uint16_t PCW[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
+volatile uint16_t FTW[SYNTH_VOICE_COUNT] = {1000, 200, 300, 400};
+volatile uint8_t AMP[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
+volatile uint16_t PITCH[SYNTH_VOICE_COUNT] = {500, 500, 500, 500};
+volatile int16_t MOD[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
+volatile uint16_t wavs[SYNTH_VOICE_COUNT] = {
+  (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable
+};
+volatile uint16_t envs[SYNTH_VOICE_COUNT] = {
+  (uint16_t)Env0, (uint16_t)Env0, (uint16_t)Env0, (uint16_t)Env0
+};
+volatile uint16_t EPCW[SYNTH_VOICE_COUNT] = {0x8000, 0x8000, 0x8000, 0x8000};
+volatile uint16_t EFTW[SYNTH_VOICE_COUNT] = {10, 10, 10, 10};
+volatile uint8_t divider = 4;
+volatile uint16_t tim = 0;
+volatile uint8_t tik = 0;
+volatile uint8_t output_mode = CHA;
 
 //*********************************************************************************************
 //  Audio driver interrupt
 //*********************************************************************************************
 
-SIGNAL(TIMER1_COMPA_vect)
+ISR(TIMER1_COMPA_vect)
 {
   //-------------------------------
   // Time division
   //-------------------------------
   divider++;
-  if (!(divider &= 0x03))
+  if (!(divider &= 0x03)) {
     tik = 1;
+  }
 
   //-------------------------------
   // Volume envelope generator
   //-------------------------------
 
-  if (!(((unsigned char*)&EPCW[divider])[1] & 0x80))
-    AMP[divider] = pgm_read_byte(envs[divider] + (((unsigned char*) & (EPCW[divider] += EFTW[divider]))[1]));
-  else
+  if (!(((uint8_t*)&EPCW[divider])[1] & 0x80)) {
+    AMP[divider] = pgm_read_byte(envs[divider] + (((uint8_t*)&(EPCW[divider] += EFTW[divider]))[1]));
+  } else {
     AMP[divider] = 0;
+  }
 
   //-------------------------------
   //  Synthesizer/audio mixer
@@ -95,26 +92,69 @@ SIGNAL(TIMER1_COMPA_vect)
 
   OCR2A = OCR2B = 127 +
                   ((
-                     (((signed char)pgm_read_byte(wavs[0] + ((unsigned char *) & (PCW[0] += FTW[0]))[1]) * AMP[0]) >> 8) +
-                     (((signed char)pgm_read_byte(wavs[1] + ((unsigned char *) & (PCW[1] += FTW[1]))[1]) * AMP[1]) >> 8) +
-                     (((signed char)pgm_read_byte(wavs[2] + ((unsigned char *) & (PCW[2] += FTW[2]))[1]) * AMP[2]) >> 8) +
-                     (((signed char)pgm_read_byte(wavs[3] + ((unsigned char *) & (PCW[3] += FTW[3]))[1]) * AMP[3]) >> 8)
+                     (((int8_t)pgm_read_byte(wavs[0] + ((uint8_t*)&(PCW[0] += FTW[0]))[1]) * AMP[0]) >> 8) +
+                     (((int8_t)pgm_read_byte(wavs[1] + ((uint8_t*)&(PCW[1] += FTW[1]))[1]) * AMP[1]) >> 8) +
+                     (((int8_t)pgm_read_byte(wavs[2] + ((uint8_t*)&(PCW[2] += FTW[2]))[1]) * AMP[2]) >> 8) +
+                     (((int8_t)pgm_read_byte(wavs[3] + ((uint8_t*)&(PCW[3] += FTW[3]))[1]) * AMP[3]) >> 8)
                    ) >> 2);
 
   //************************************************
   //  Modulation engine
   //************************************************
-  //  FTW[divider] = PITCH[divider] + (int)   (((PITCH[divider]/64)*(EPCW[divider]/64)) /128)*MOD[divider];
-  FTW[divider] = PITCH[divider] + (int)   (((PITCH[divider] >> 6) * (EPCW[divider] >> 6)) / 128) * MOD[divider];
+  FTW[divider] = PITCH[divider] + (int16_t)((((PITCH[divider] >> 6) * (EPCW[divider] >> 6)) / 128) * MOD[divider]);
   tim++;
 }
 
 class synth
 {
   private:
+    bool validVoice(uint8_t voice) const
+    {
+      return voice < SYNTH_VOICE_COUNT;
+    }
+
+    void configureTimer1()
+    {
+      TCCR1A = 0x00;
+      TCCR1B = 0x09;
+      TCCR1C = 0x00;
+      OCR1A = (uint16_t)((F_CPU / FS) - 1);
+    }
+
+    void enableTimer1Interrupt()
+    {
+      SET(TIMSK1, OCIE1A);
+    }
+
+    void configureChaOutput()
+    {
+      output_mode = CHA;
+      TCCR2A = 0x83;
+      TCCR2B = 0x01;
+      OCR2A = OCR2B = 127;
+      SET(DDRB, 3);
+    }
+
+    void configureChbOutput()
+    {
+      output_mode = CHB;
+      TCCR2A = 0x23;
+      TCCR2B = 0x01;
+      OCR2A = OCR2B = 127;
+      SET(DDRD, 3);
+    }
+
+    void configureDifferentialOutput()
+    {
+      output_mode = DIFF;
+      TCCR2A = 0xB3;
+      TCCR2B = 0x01;
+      OCR2A = OCR2B = 127;
+      SET(DDRB, 3);
+      SET(DDRD, 3);
+    }
 
   public:
-
     synth()
     {
     }
@@ -125,231 +165,282 @@ class synth
 
     void begin()
     {
-      output_mode = CHA;
-      TCCR1A = 0x00;                                  //-Start audio interrupt
-      TCCR1B = 0x09;
-      TCCR1C = 0x00;
-      OCR1A = 16000000.0 / FS;			  //-Auto sample rate
-      SET(TIMSK1, OCIE1A);                            //-Start audio interrupt
-      sei();                                          //-+
-
-      TCCR2A = 0x83;                                  //-8 bit audio PWM
-      TCCR2B = 0x01;                                  // |
-      OCR2A = 127;                                    //-+
-      SET(DDRB, 3);				    //-PWM pin
+      begin(CHA);
     }
 
     //*********************************************************************
-    //  Startup fancy selecting varoius output modes
+    //  Startup selecting various output modes
     //*********************************************************************
 
-    void begin(unsigned char d)
+    void begin(uint8_t outputMode)
     {
-      TCCR1A = 0x00;                                  //-Start audio interrupt
-      TCCR1B = 0x09;
-      TCCR1C = 0x00;
-      OCR1A = 16000000.0 / FS;			  //-Auto sample rate
-      SET(TIMSK1, OCIE1A);                            //-Start audio interrupt
-      sei();                                          //-+
+      cli();
+      configureTimer1();
 
-      output_mode = d;
-
-      switch (d)
+      switch (outputMode)
       {
-        case DIFF:                                        //-Differntial signal on CHA and CHB pins (11,3)
-          TCCR2A = 0xB3;                                  //-8 bit audio PWM
-          TCCR2B = 0x01;                                  // |
-          OCR2A = OCR2B = 127;                            //-+
-          SET(DDRB, 3);				      //-PWM pin
-          SET(DDRD, 3);				      //-PWM pin
+        case DIFF:
+          configureDifferentialOutput();
           break;
-
-        case CHB:                                         //-Single ended signal on CHB pin (3)
-          TCCR2A = 0x23;                                  //-8 bit audio PWM
-          TCCR2B = 0x01;                                  // |
-          OCR2A = OCR2B = 127;                            //-+
-          SET(DDRD, 3);				      //-PWM pin
+        case CHB:
+          configureChbOutput();
           break;
-
         case CHA:
         default:
-          output_mode = CHA;                              //-Single ended signal in CHA pin (11)
-          TCCR2A = 0x83;                                  //-8 bit audio PWM
-          TCCR2B = 0x01;                                  // |
-          OCR2A = OCR2B = 127;                            //-+
-          SET(DDRB, 3);				      //-PWM pin
+          configureChaOutput();
           break;
-
       }
+
+      enableTimer1Interrupt();
+      sei();
     }
 
     //*********************************************************************
     //  Timing/sequencing functions
     //*********************************************************************
 
-    unsigned char synthTick(void)
+    uint8_t synthTick()
     {
       if (tik)
       {
         tik = 0;
-        return 1;  //-True every 4 samples
+        return 1;
       }
       return 0;
     }
 
-    unsigned char voiceFree(unsigned char voice)
+    uint8_t voiceFree(uint8_t voice)
     {
-      if (!(((unsigned char*)&EPCW[voice])[1] & 0x80))
+      if (!validVoice(voice)) {
         return 0;
+      }
+
+      if (!(((uint8_t*)&EPCW[voice])[1] & 0x80)) {
+        return 0;
+      }
+
       return 1;
     }
 
-
     //*********************************************************************
-    //  Setup all voice parameters in MIDI range
-    //  voice[0-3],wave[0-6],pitch[0-127],envelope[0-4],length[0-127],mod[0-127:64=no mod]
+    //  Setup voice parameters in MIDI range
+    //  voice[0-3], wave[0-5], pitch[0-127], envelope[0-3],
+    //  length[0-127], mod[0-127:64=no mod]
     //*********************************************************************
 
-    void setupVoice(unsigned char voice, unsigned char wave, unsigned char pitch, unsigned char env, unsigned char length, unsigned int mod, unsigned int freq)
+    void setupVoice(uint8_t voice, uint8_t wave, uint8_t pitch, uint8_t env, uint8_t length, uint8_t mod)
     {
       setWave(voice, wave);
       setPitch(voice, pitch);
       setEnvelope(voice, env);
       setLength(voice, length);
       setMod(voice, mod);
-      setFilter(voice, freq);
+    }
+
+    void setupVoice(uint8_t voice, uint8_t wave, uint8_t pitch, uint8_t env, uint8_t length, uint8_t mod, uint16_t)
+    {
+      setupVoice(voice, wave, pitch, env, length, mod);
     }
 
     //*********************************************************************
-    //  Setup wave [0-6]
+    //  Setup wave [0-5]
     //*********************************************************************
 
-    void setWave(unsigned char voice, unsigned char wave)
+    void setWave(uint8_t voice, uint8_t wave)
     {
+      if (!validVoice(voice)) {
+        return;
+      }
+
+      uint16_t selectedWave = (uint16_t)SinTable;
       switch (wave)
       {
         case TRIANGLE:
-          wavs[voice] = (unsigned int)TriangleTable;
+          selectedWave = (uint16_t)TriangleTable;
           break;
         case SQUARE:
-          wavs[voice] = (unsigned int)SquareTable;
+          selectedWave = (uint16_t)SquareTable;
           break;
         case SAW:
-          wavs[voice] = (unsigned int)SawTable;
+          selectedWave = (uint16_t)SawTable;
           break;
         case RAMP:
-          wavs[voice] = (unsigned int)RampTable;
+          selectedWave = (uint16_t)RampTable;
           break;
         case NOISE:
-          wavs[voice] = (unsigned int)NoiseTable;
-          break;
-        default:
-          wavs[voice] = (unsigned int)SinTable;
+          selectedWave = (uint16_t)NoiseTable;
           break;
       }
+
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        wavs[voice] = selectedWave;
+      }
     }
+
     //*********************************************************************
     //  Setup Pitch [0-127]
     //*********************************************************************
 
-    void setPitch(unsigned char voice, unsigned char MIDInote)
+    void setPitch(uint8_t voice, uint8_t midiNote)
     {
-      PITCH[voice] = pgm_read_word(&PITCHS[MIDInote]);
-    }
+      if (!validVoice(voice)) {
+        return;
+      }
 
-    //*********************************************************************
-    //  Setup Envelope [0-4]
-    //*********************************************************************
+      if (midiNote > SYNTH_MIDI_NOTE_MAX) {
+        midiNote = SYNTH_MIDI_NOTE_MAX;
+      }
 
-    void setEnvelope(unsigned char voice, unsigned char env)
-    {
-      switch (env)
-      {
-        case 1:
-          envs[voice] = (unsigned int)Env0;
-          break;
-        case 2:
-          envs[voice] = (unsigned int)Env1;
-          break;
-        case 3:
-          envs[voice] = (unsigned int)Env2;
-          break;
-        case 4:
-          envs[voice] = (unsigned int)Env3;
-          break;
-        default:
-          envs[voice] = (unsigned int)Env0;
-          break;
+      const uint16_t pitch = pgm_read_word(&PITCHS[midiNote]);
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        PITCH[voice] = pitch;
       }
     }
 
     //*********************************************************************
-    //  Setup Length [0-128]
+    //  Setup Envelope [0-3]
     //*********************************************************************
 
-    void setLength(unsigned char voice, unsigned char length)
+    void setEnvelope(uint8_t voice, uint8_t env)
     {
-      EFTW[voice] = pgm_read_word(&EFTWS[length]);
+      if (!validVoice(voice)) {
+        return;
+      }
+
+      uint16_t selectedEnvelope = (uint16_t)Env0;
+      switch (env)
+      {
+        case ENVELOPE1:
+          selectedEnvelope = (uint16_t)Env1;
+          break;
+        case ENVELOPE2:
+          selectedEnvelope = (uint16_t)Env2;
+          break;
+        case ENVELOPE3:
+          selectedEnvelope = (uint16_t)Env3;
+          break;
+      }
+
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        envs[voice] = selectedEnvelope;
+      }
     }
 
     //*********************************************************************
-    //  Setup Filter [0-128]
+    //  Setup Length [0-127]
     //*********************************************************************
 
-    void setFilter(unsigned char voice, unsigned int freq)
+    void setLength(uint8_t voice, uint8_t length)
     {
-      FilterOnePole lowpassFilter(LOWPASS, (float)freq);
-      FILTER[voice] = lowpassFilter.input(pgm_read_word(&EFTWS[255]));
+      if (!validVoice(voice)) {
+        return;
+      }
+
+      if (length > SYNTH_LENGTH_MAX) {
+        length = SYNTH_LENGTH_MAX;
+      }
+
+      const uint16_t envelopeSpeed = pgm_read_word(&EFTWS[length]);
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        EFTW[voice] = envelopeSpeed;
+      }
     }
 
     //*********************************************************************
-    //  Setup mod
+    //  Legacy compatibility. This synth engine has no audio filter stage.
     //*********************************************************************
 
-    void setMod(unsigned char voice, unsigned char mod)
+    void setFilter(uint8_t, uint16_t)
     {
-      //    MOD[voice]=(unsigned int)mod*8;//0-1023 512=no mod
-      MOD[voice] = (int)mod - 64; //0-1023 512=no mod
+    }
+
+    //*********************************************************************
+    //  Setup mod [0-127:64=no mod]
+    //*********************************************************************
+
+    void setMod(uint8_t voice, uint8_t mod)
+    {
+      if (!validVoice(voice)) {
+        return;
+      }
+
+      if (mod > 127) {
+        mod = 127;
+      }
+
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        MOD[voice] = (int16_t)mod - 64;
+      }
     }
 
     //*********************************************************************
     //  Midi trigger
     //*********************************************************************
 
-    void mTrigger(unsigned char voice, unsigned char MIDInote)
+    void mTrigger(uint8_t voice, uint8_t midiNote)
     {
-      PITCH[voice] = pgm_read_word(&PITCHS[MIDInote]);
-      EPCW[voice] = 0;
-      FTW[divider] = PITCH[voice] + (int)   (((PITCH[voice] >> 6) * (EPCW[voice] >> 6)) / 128) * MOD[voice];
+      if (!validVoice(voice)) {
+        return;
+      }
+
+      if (midiNote > SYNTH_MIDI_NOTE_MAX) {
+        midiNote = SYNTH_MIDI_NOTE_MAX;
+      }
+
+      const uint16_t pitch = pgm_read_word(&PITCHS[midiNote]);
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        PITCH[voice] = pitch;
+        EPCW[voice] = 0;
+        FTW[voice] = pitch;
+      }
     }
 
     //*********************************************************************
     //  Set frequency direct
     //*********************************************************************
 
-    void setFrequency(unsigned char voice, float f)
+    void setFrequency(uint8_t voice, float frequency)
     {
-      PITCH[voice] = f / (FS / 65535.0);
+      if (!validVoice(voice)) {
+        return;
+      }
+
+      const uint16_t pitch = (uint16_t)(frequency / (FS / 65535.0));
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        PITCH[voice] = pitch;
+      }
     }
 
     //*********************************************************************
     //  Set time
     //*********************************************************************
 
-    void setTime(unsigned char voice, float t)
+    void setTime(uint8_t voice, float seconds)
     {
-      EFTW[voice] = (1.0 / t) / (FS / (32767.5 * 10.0)); //[s];
+      if (!validVoice(voice) || seconds <= 0.0) {
+        return;
+      }
+
+      const uint16_t envelopeSpeed = (uint16_t)((1.0 / seconds) / (FS / (32767.5 * 10.0)));
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        EFTW[voice] = envelopeSpeed;
+      }
     }
 
     //*********************************************************************
     //  Simple trigger
     //*********************************************************************
 
-    void trigger(unsigned char voice)
+    void trigger(uint8_t voice)
     {
-      EPCW[voice] = 0;
-      FTW[voice] = FILTER[voice];
-      //    FTW[voice]=PITCH[voice]+(PITCH[voice]*(EPCW[voice]/(32767.5*128.0  ))*((int)MOD[voice]-512));
+      if (!validVoice(voice)) {
+        return;
+      }
+
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        EPCW[voice] = 0;
+        FTW[voice] = PITCH[voice];
+      }
     }
 
     //*********************************************************************
@@ -358,14 +449,13 @@ class synth
 
     void suspend()
     {
-      CLR(TIMSK1, OCIE1A);                            //-Stop audio interrupt
-    }
-    void resume()
-    {
-      SET(TIMSK1, OCIE1A);                            //-Start audio interrupt
+      CLR(TIMSK1, OCIE1A);
     }
 
+    void resume()
+    {
+      SET(TIMSK1, OCIE1A);
+    }
 };
 
 #endif
-
