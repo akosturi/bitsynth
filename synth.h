@@ -63,6 +63,9 @@ volatile uint8_t tik = 0;
 volatile uint8_t output_mode = CHA;
 volatile uint8_t noiseVoiceMask = 0;
 volatile int16_t pwmQuantizationError = 0;
+volatile uint8_t sampleHoldFrames = 1;
+volatile uint8_t sampleHoldCounter = 0;
+volatile uint8_t heldPwmSample = 127;
 
 //*********************************************************************************************
 //  Audio driver interrupt
@@ -114,6 +117,17 @@ ISR(TIMER1_COMPA_vect)
   } else if (pwmSample > 255) {
     pwmSample = 255;
   }
+
+  if (sampleHoldFrames > 1) {
+    if (sampleHoldCounter == 0) {
+      heldPwmSample = (uint8_t)pwmSample;
+      sampleHoldCounter = sampleHoldFrames - 1;
+    } else {
+      --sampleHoldCounter;
+      pwmSample = heldPwmSample;
+    }
+  }
+
   OCR2A = OCR2B = (uint8_t)pwmSample;
 
   //************************************************
@@ -320,6 +334,17 @@ class synth
       }
     }
 
+    void setPitchWord(uint8_t voice, uint16_t pitch)
+    {
+      if (!validVoice(voice)) {
+        return;
+      }
+
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        PITCH[voice] = pitch;
+      }
+    }
+
     //*********************************************************************
     //  Setup Envelope [0-3]
     //*********************************************************************
@@ -396,6 +421,20 @@ class synth
       }
     }
 
+    void setSampleHold(uint8_t frames)
+    {
+      if (frames < 1) {
+        frames = 1;
+      } else if (frames > 16) {
+        frames = 16;
+      }
+
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        sampleHoldFrames = frames;
+        sampleHoldCounter = 0;
+      }
+    }
+
     //*********************************************************************
     //  Midi trigger
     //*********************************************************************
@@ -463,6 +502,19 @@ class synth
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         EPCW[voice] = 0;
         FTW[voice] = PITCH[voice];
+      }
+    }
+
+    void stopVoice(uint8_t voice)
+    {
+      if (!validVoice(voice)) {
+        return;
+      }
+
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        EPCW[voice] = 0x8000;
+        AMP[voice] = 0;
+        FTW[voice] = 0;
       }
     }
 

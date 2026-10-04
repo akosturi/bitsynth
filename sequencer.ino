@@ -12,15 +12,42 @@ const uint8_t kStepButtonPin = A1;
 const uint8_t kPitchAnalogPin = A2;
 const uint8_t kResetButtonPin = A3;
 
-const uint8_t kVoice = 0;
+const uint8_t kMainVoice = 0;
+const uint8_t kSecondVoice = 1;
 const uint8_t kStepCount = 8;
 const uint8_t kSettingsCount = 4;
 const uint8_t kWaveCount = 6;
+const uint8_t kVoiceModeCount = 5;
+const uint8_t kScaleCount = 5;
+const uint8_t kPageCount = 3;
 const uint8_t kAnalogSamples = 5;
 const uint8_t kButtonDebounceMs = 25;
+const uint16_t kResetLongPressMs = 700;
 const uint16_t kDefaultTempoMs = 50;
 
 const uint8_t kWaveIds[kWaveCount] = {SINE, TRIANGLE, SQUARE, SAW, RAMP, NOISE};
+
+enum ControlPage : uint8_t {
+  PAGE_SYNTH = 0,
+  PAGE_PERFORM = 1,
+  PAGE_FX = 2
+};
+
+enum VoiceMode : uint8_t {
+  VOICE_SINGLE = 0,
+  VOICE_DETUNE = 1,
+  VOICE_OCTAVE = 2,
+  VOICE_FIFTH = 3,
+  VOICE_SUB = 4
+};
+
+enum ScaleMode : uint8_t {
+  SCALE_CHROMATIC = 0,
+  SCALE_MAJOR = 1,
+  SCALE_MINOR = 2,
+  SCALE_PENTATONIC = 3,
+  SCALE_BLUES = 4
+};
 
 struct SynthControls {
   uint8_t waveform;
@@ -29,11 +56,27 @@ struct SynthControls {
   uint8_t modulation;
 };
 
+struct PerformanceControls {
+  uint8_t voiceMode;
+  uint8_t scale;
+  uint8_t swing;
+  uint8_t glide;
+};
+
+struct FxControls {
+  uint8_t sampleHoldFrames;
+};
+
 synth edgar;
 
-SynthControls controls = {0, kDefaultTempoMs, 64, 64};
-SynthControls lastDisplayedControls = {255, 0, 255, 255};
+SynthControls synthControls = {0, kDefaultTempoMs, 64, 64};
+SynthControls lastDisplayedSynthControls = {255, 0, 255, 255};
+PerformanceControls performanceControls = {VOICE_SINGLE, SCALE_CHROMATIC, 0, 0};
+PerformanceControls lastDisplayedPerformanceControls = {255, 255, 255, 255};
+FxControls fxControls = {1};
+FxControls lastDisplayedFxControls = {255};
 
+uint8_t rawStepPitch[kStepCount] = {0};
 uint8_t stepPitch[kStepCount] = {0};
 bool stepEnabled[kStepCount] = {true, true, true, true, true, true, true, true};
 
@@ -41,20 +84,34 @@ uint8_t buttonStableState[kStepCount] = {HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIG
 uint8_t buttonLastReading[kStepCount] = {HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH};
 unsigned long buttonLastChangeMs[kStepCount] = {0};
 
+uint8_t controlPage = PAGE_SYNTH;
+uint8_t lastDisplayedPage = 255;
 uint8_t currentStep = 0;
 uint8_t lastDisplayedStep = 255;
 uint8_t renderedStep = 255;
 uint8_t configuredWaveform = 255;
 uint8_t configuredLength = 255;
 uint8_t configuredModulation = 255;
+uint8_t configuredVoiceMode = 255;
+uint8_t configuredSampleHoldFrames = 255;
+uint16_t nextStepIntervalMs = kDefaultTempoMs;
 unsigned long lastStepMs = 0;
 bool resetHeld = false;
+bool resetLongPressHandled = false;
 bool lastDisplayedResetHeld = false;
+unsigned long resetPressedAtMs = 0;
 bool displayDirty = true;
+
+uint16_t currentMainPitchWord = 0;
+uint16_t targetMainPitchWord = 0;
+uint16_t currentSecondPitchWord = 0;
+uint16_t targetSecondPitchWord = 0;
 
 void setup() {
   edgar.begin(CHA);
-  edgar.setupVoice(kVoice, SINE, 0, ENVELOPE0, controls.length, controls.modulation);
+  edgar.setupVoice(kMainVoice, SINE, 0, ENVELOPE0, synthControls.length, synthControls.modulation);
+  edgar.setupVoice(kSecondVoice, SINE, 0, ENVELOPE0, synthControls.length, synthControls.modulation);
+  edgar.stopVoice(kSecondVoice);
 
   pinMode(kMuxBit0Pin, OUTPUT);
   pinMode(kMuxBit1Pin, OUTPUT);
@@ -76,8 +133,9 @@ void loop() {
 
   readControls();
   scanStepButtons(now);
-  scanResetButton();
+  scanResetButton(now);
   applySynthControls();
+  updateGlide();
   runSequencer(now);
   renderDisplay();
 }
@@ -111,39 +169,76 @@ uint8_t mapToByte(uint16_t value, int16_t outMin, int16_t outMax) {
   return (uint8_t)constrain(map(value, 0, 1023, outMin, outMax), min(outMin, outMax), max(outMin, outMax));
 }
 
+uint8_t mapToIndex(uint16_t value, uint8_t count) {
+  uint8_t index = mapToByte(value, count - 1, 0);
+  return index >= count ? count - 1 : index;
+}
+
 void readControls() {
-  SynthControls nextControls;
+  uint16_t settingValues[kSettingsCount];
 
   for (uint8_t channel = 0; channel < kSettingsCount; ++channel) {
     selectMuxChannel(channel);
-    const uint16_t value = readMedianAnalog(kSettingsAnalogPin);
+    settingValues[channel] = readMedianAnalog(kSettingsAnalogPin);
+  }
 
-    switch (channel) {
-      case 0:
-        nextControls.waveform = mapToByte(value, kWaveCount - 1, 0);
-        break;
-      case 1:
-        nextControls.tempoMs = (uint16_t)map(value, 0, 1023, 10, 350);
-        break;
-      case 2:
-        nextControls.length = mapToByte(value, 127, 0);
-        break;
-      case 3:
-        nextControls.modulation = mapToByte(value, 127, 0);
-        break;
-    }
+  switch (controlPage) {
+    case PAGE_SYNTH:
+      readSynthPage(settingValues);
+      break;
+    case PAGE_PERFORM:
+      readPerformancePage(settingValues);
+      break;
+    case PAGE_FX:
+      readFxPage(settingValues);
+      break;
   }
 
   for (uint8_t step = 0; step < kStepCount; ++step) {
     selectMuxChannel(step);
-    stepPitch[step] = mapToByte(readMedianAnalog(kPitchAnalogPin), 84, 12);
+    rawStepPitch[step] = mapToByte(readMedianAnalog(kPitchAnalogPin), 84, 12);
+    stepPitch[step] = quantizeNote(rawStepPitch[step], performanceControls.scale);
   }
+}
 
-  if (nextControls.waveform != controls.waveform ||
-      nextControls.tempoMs != controls.tempoMs ||
-      nextControls.length != controls.length ||
-      nextControls.modulation != controls.modulation) {
-    controls = nextControls;
+void readSynthPage(const uint16_t values[]) {
+  SynthControls nextControls;
+  nextControls.waveform = mapToIndex(values[0], kWaveCount);
+  nextControls.tempoMs = (uint16_t)map(values[1], 0, 1023, 10, 350);
+  nextControls.length = mapToByte(values[2], 127, 0);
+  nextControls.modulation = mapToByte(values[3], 127, 0);
+
+  if (nextControls.waveform != synthControls.waveform ||
+      nextControls.tempoMs != synthControls.tempoMs ||
+      nextControls.length != synthControls.length ||
+      nextControls.modulation != synthControls.modulation) {
+    synthControls = nextControls;
+    displayDirty = true;
+  }
+}
+
+void readPerformancePage(const uint16_t values[]) {
+  PerformanceControls nextControls;
+  nextControls.voiceMode = mapToIndex(values[0], kVoiceModeCount);
+  nextControls.scale = mapToIndex(values[1], kScaleCount);
+  nextControls.swing = mapToByte(values[2], 75, 0);
+  nextControls.glide = mapToByte(values[3], 127, 0);
+
+  if (nextControls.voiceMode != performanceControls.voiceMode ||
+      nextControls.scale != performanceControls.scale ||
+      nextControls.swing != performanceControls.swing ||
+      nextControls.glide != performanceControls.glide) {
+    performanceControls = nextControls;
+    displayDirty = true;
+  }
+}
+
+void readFxPage(const uint16_t values[]) {
+  FxControls nextControls;
+  nextControls.sampleHoldFrames = mapToByte(values[0], 1, 16);
+
+  if (nextControls.sampleHoldFrames != fxControls.sampleHoldFrames) {
+    fxControls = nextControls;
     displayDirty = true;
   }
 }
@@ -170,15 +265,23 @@ void scanStepButtons(unsigned long now) {
   }
 }
 
-void scanResetButton() {
+void scanResetButton(unsigned long now) {
   selectMuxChannel(0);
   const bool pressed = digitalRead(kResetButtonPin) == LOW;
 
   if (pressed && !resetHeld) {
-    for (uint8_t step = 0; step < kStepCount; ++step) {
-      stepEnabled[step] = true;
-    }
+    resetPressedAtMs = now;
+    resetLongPressHandled = false;
+  }
+
+  if (pressed && !resetLongPressHandled && (now - resetPressedAtMs) >= kResetLongPressMs) {
+    controlPage = (controlPage + 1) % kPageCount;
+    resetLongPressHandled = true;
     displayDirty = true;
+  }
+
+  if (!pressed && resetHeld && !resetLongPressHandled) {
+    resetSteps();
   }
 
   if (pressed != resetHeld) {
@@ -187,33 +290,71 @@ void scanResetButton() {
   }
 }
 
+void resetSteps() {
+  for (uint8_t step = 0; step < kStepCount; ++step) {
+    stepEnabled[step] = true;
+  }
+  displayDirty = true;
+}
+
 void applySynthControls() {
-  if (controls.waveform != configuredWaveform) {
-    edgar.setWave(kVoice, kWaveIds[controls.waveform]);
-    configuredWaveform = controls.waveform;
+  if (synthControls.waveform != configuredWaveform) {
+    edgar.setWave(kMainVoice, kWaveIds[synthControls.waveform]);
+    edgar.setWave(kSecondVoice, kWaveIds[synthControls.waveform]);
+    configuredWaveform = synthControls.waveform;
   }
 
-  if (controls.length != configuredLength) {
-    edgar.setLength(kVoice, controls.length);
-    configuredLength = controls.length;
+  if (synthControls.length != configuredLength) {
+    edgar.setLength(kMainVoice, synthControls.length);
+    edgar.setLength(kSecondVoice, synthControls.length);
+    configuredLength = synthControls.length;
   }
 
-  if (controls.modulation != configuredModulation) {
-    edgar.setMod(kVoice, controls.modulation);
-    configuredModulation = controls.modulation;
+  if (synthControls.modulation != configuredModulation) {
+    edgar.setMod(kMainVoice, synthControls.modulation);
+    edgar.setMod(kSecondVoice, synthControls.modulation);
+    configuredModulation = synthControls.modulation;
+  }
+
+  if (performanceControls.voiceMode != configuredVoiceMode) {
+    configuredVoiceMode = performanceControls.voiceMode;
+    if (performanceControls.voiceMode == VOICE_SINGLE) {
+      edgar.stopVoice(kSecondVoice);
+    }
+  }
+
+  if (fxControls.sampleHoldFrames != configuredSampleHoldFrames) {
+    edgar.setSampleHold(fxControls.sampleHoldFrames);
+    configuredSampleHoldFrames = fxControls.sampleHoldFrames;
   }
 }
 
 void runSequencer(unsigned long now) {
-  if ((unsigned long)(now - lastStepMs) < controls.tempoMs) {
+  if ((unsigned long)(now - lastStepMs) < nextStepIntervalMs) {
     return;
   }
 
   lastStepMs = now;
   playStep(currentStep);
+  nextStepIntervalMs = intervalAfterStep(currentStep);
   lastDisplayedStep = currentStep;
   currentStep = (currentStep + 1) & 0x07;
   displayDirty = true;
+}
+
+uint16_t intervalAfterStep(uint8_t step) {
+  const uint16_t tempo = synthControls.tempoMs;
+  const uint16_t offset = ((uint32_t)tempo * performanceControls.swing) / 200;
+
+  if (offset == 0) {
+    return tempo;
+  }
+
+  if (step & 0x01) {
+    return tempo + offset;
+  }
+
+  return tempo > offset + 5 ? tempo - offset : 5;
 }
 
 void playStep(uint8_t step) {
@@ -221,8 +362,135 @@ void playStep(uint8_t step) {
     return;
   }
 
-  edgar.setPitch(kVoice, stepPitch[step]);
-  edgar.trigger(kVoice);
+  const uint8_t note = stepPitch[step];
+  targetMainPitchWord = pitchWordForNote(note);
+  targetSecondPitchWord = secondVoicePitchWord(note, targetMainPitchWord);
+
+  if (performanceControls.glide == 0 || currentMainPitchWord == 0) {
+    currentMainPitchWord = targetMainPitchWord;
+    edgar.setPitchWord(kMainVoice, currentMainPitchWord);
+  }
+
+  edgar.trigger(kMainVoice);
+
+  if (performanceControls.voiceMode == VOICE_SINGLE) {
+    edgar.stopVoice(kSecondVoice);
+    return;
+  }
+
+  if (performanceControls.glide == 0 || currentSecondPitchWord == 0) {
+    currentSecondPitchWord = targetSecondPitchWord;
+    edgar.setPitchWord(kSecondVoice, currentSecondPitchWord);
+  }
+
+  edgar.trigger(kSecondVoice);
+}
+
+void updateGlide() {
+  if (performanceControls.glide == 0) {
+    return;
+  }
+
+  if (currentMainPitchWord != targetMainPitchWord) {
+    currentMainPitchWord = glidePitch(currentMainPitchWord, targetMainPitchWord);
+    edgar.setPitchWord(kMainVoice, currentMainPitchWord);
+  }
+
+  if (performanceControls.voiceMode != VOICE_SINGLE && currentSecondPitchWord != targetSecondPitchWord) {
+    currentSecondPitchWord = glidePitch(currentSecondPitchWord, targetSecondPitchWord);
+    edgar.setPitchWord(kSecondVoice, currentSecondPitchWord);
+  }
+}
+
+uint16_t glidePitch(uint16_t current, uint16_t target) {
+  const uint8_t divisor = map(performanceControls.glide, 1, 127, 2, 24);
+  const int32_t difference = (int32_t)target - current;
+
+  if (difference == 0) {
+    return target;
+  }
+
+  int32_t step = difference / divisor;
+  if (step == 0) {
+    step = difference > 0 ? 1 : -1;
+  }
+
+  return (uint16_t)(current + step);
+}
+
+uint16_t pitchWordForNote(uint8_t note) {
+  if (note > SYNTH_MIDI_NOTE_MAX) {
+    note = SYNTH_MIDI_NOTE_MAX;
+  }
+  return pgm_read_word(&PITCHS[note]);
+}
+
+uint16_t secondVoicePitchWord(uint8_t note, uint16_t mainPitchWord) {
+  switch (performanceControls.voiceMode) {
+    case VOICE_DETUNE:
+      return mainPitchWord + (mainPitchWord >> 6);
+    case VOICE_OCTAVE:
+      return pitchWordForNote(transposeNote(note, 12));
+    case VOICE_FIFTH:
+      return pitchWordForNote(transposeNote(note, 7));
+    case VOICE_SUB:
+      return pitchWordForNote(transposeNote(note, -12));
+    default:
+      return mainPitchWord;
+  }
+}
+
+uint8_t transposeNote(uint8_t note, int8_t semitones) {
+  int16_t transposed = (int16_t)note + semitones;
+
+  if (transposed < 0) {
+    return 0;
+  }
+
+  if (transposed > SYNTH_MIDI_NOTE_MAX) {
+    return SYNTH_MIDI_NOTE_MAX;
+  }
+
+  return (uint8_t)transposed;
+}
+
+uint8_t quantizeNote(uint8_t note, uint8_t scale) {
+  if (scale == SCALE_CHROMATIC) {
+    return note;
+  }
+
+  for (uint8_t distance = 0; distance < 6; ++distance) {
+    if (note >= distance && noteAllowedInScale(note - distance, scale)) {
+      return note - distance;
+    }
+
+    if (note + distance <= SYNTH_MIDI_NOTE_MAX && noteAllowedInScale(note + distance, scale)) {
+      return note + distance;
+    }
+  }
+
+  return note;
+}
+
+bool noteAllowedInScale(uint8_t note, uint8_t scale) {
+  const uint8_t pitchClass = note % 12;
+
+  switch (scale) {
+    case SCALE_MAJOR:
+      return pitchClass == 0 || pitchClass == 2 || pitchClass == 4 || pitchClass == 5 ||
+             pitchClass == 7 || pitchClass == 9 || pitchClass == 11;
+    case SCALE_MINOR:
+      return pitchClass == 0 || pitchClass == 2 || pitchClass == 3 || pitchClass == 5 ||
+             pitchClass == 7 || pitchClass == 8 || pitchClass == 10;
+    case SCALE_PENTATONIC:
+      return pitchClass == 0 || pitchClass == 2 || pitchClass == 4 ||
+             pitchClass == 7 || pitchClass == 9;
+    case SCALE_BLUES:
+      return pitchClass == 0 || pitchClass == 3 || pitchClass == 5 ||
+             pitchClass == 6 || pitchClass == 7 || pitchClass == 10;
+    default:
+      return true;
+  }
 }
 
 void printWaveLabel(uint8_t waveform) {
@@ -248,6 +516,67 @@ void printWaveLabel(uint8_t waveform) {
   }
 }
 
+void printVoiceLabel(uint8_t mode) {
+  switch (mode) {
+    case VOICE_DETUNE:
+      lcd.print(F("DTN"));
+      break;
+    case VOICE_OCTAVE:
+      lcd.print(F("OCT"));
+      break;
+    case VOICE_FIFTH:
+      lcd.print(F("FIF"));
+      break;
+    case VOICE_SUB:
+      lcd.print(F("SUB"));
+      break;
+    default:
+      lcd.print(F("ONE"));
+      break;
+  }
+}
+
+void printScaleLabel(uint8_t scale) {
+  switch (scale) {
+    case SCALE_MAJOR:
+      lcd.print(F("MAJ"));
+      break;
+    case SCALE_MINOR:
+      lcd.print(F("MIN"));
+      break;
+    case SCALE_PENTATONIC:
+      lcd.print(F("PEN"));
+      break;
+    case SCALE_BLUES:
+      lcd.print(F("BLU"));
+      break;
+    default:
+      lcd.print(F("CHR"));
+      break;
+  }
+}
+
+void printPageLabel() {
+  switch (controlPage) {
+    case PAGE_PERFORM:
+      lcd.print(F("PRF"));
+      break;
+    case PAGE_FX:
+      lcd.print(F("FX "));
+      break;
+    default:
+      lcd.print(F("SYN"));
+      break;
+  }
+}
+
+void printPadded2(uint8_t value) {
+  if (value < 10) {
+    lcd.print('0');
+  }
+  lcd.print(value);
+}
+
 void printPadded3(uint16_t value) {
   if (value < 100) {
     lcd.print(' ');
@@ -258,11 +587,27 @@ void printPadded3(uint16_t value) {
   lcd.print(value);
 }
 
+void printSpaces(uint8_t count) {
+  while (count--) {
+    lcd.print(' ');
+  }
+}
+
+bool controlsChangedForDisplay() {
+  return controlPage != lastDisplayedPage ||
+         synthControls.waveform != lastDisplayedSynthControls.waveform ||
+         synthControls.tempoMs != lastDisplayedSynthControls.tempoMs ||
+         synthControls.length != lastDisplayedSynthControls.length ||
+         synthControls.modulation != lastDisplayedSynthControls.modulation ||
+         performanceControls.voiceMode != lastDisplayedPerformanceControls.voiceMode ||
+         performanceControls.scale != lastDisplayedPerformanceControls.scale ||
+         performanceControls.swing != lastDisplayedPerformanceControls.swing ||
+         performanceControls.glide != lastDisplayedPerformanceControls.glide ||
+         fxControls.sampleHoldFrames != lastDisplayedFxControls.sampleHoldFrames;
+}
+
 void renderDisplay() {
-  const bool controlsChanged = controls.waveform != lastDisplayedControls.waveform ||
-                               controls.tempoMs != lastDisplayedControls.tempoMs ||
-                               controls.length != lastDisplayedControls.length ||
-                               controls.modulation != lastDisplayedControls.modulation;
+  const bool controlsChanged = controlsChangedForDisplay();
   const bool stepChanged = renderedStep != lastDisplayedStep;
   const bool resetChanged = resetHeld != lastDisplayedResetHeld;
 
@@ -270,32 +615,74 @@ void renderDisplay() {
     return;
   }
 
-  if (displayDirty || stepChanged || controls.waveform != lastDisplayedControls.waveform) {
-    lcd.setCursor(0, 0);
-    for (uint8_t step = 0; step < kStepCount; ++step) {
-      if (step == lastDisplayedStep) {
-        lcd.write(0xFF);
-      } else {
-        lcd.print(stepEnabled[step] ? '.' : ' ');
-      }
+  lcd.setCursor(0, 0);
+  for (uint8_t step = 0; step < kStepCount; ++step) {
+    if (step == lastDisplayedStep) {
+      lcd.write(0xFF);
+    } else {
+      lcd.print(stepEnabled[step] ? '.' : ' ');
     }
-    lcd.print(F("     "));
-    printWaveLabel(controls.waveform);
-    renderedStep = lastDisplayedStep;
+  }
+  lcd.print(' ');
+  printPageLabel();
+  lcd.print(' ');
+  printPageValueLabel();
+
+  lcd.setCursor(0, 1);
+  if (resetHeld && !resetLongPressHandled) {
+    lcd.print(F("RST             "));
+  } else if (resetHeld) {
+    lcd.print(F("PAGE            "));
+  } else {
+    printPageValues();
   }
 
-  if (controlsChanged || resetChanged) {
-    lcd.setCursor(0, 1);
-    lcd.print(resetHeld ? F("RST ") : F("    "));
-    printPadded3(controls.tempoMs);
-    lcd.print(' ');
-    printPadded3(controls.length);
-    lcd.print(' ');
-    printPadded3(controls.modulation);
-    lcd.print(' ');
-  }
-
-  lastDisplayedControls = controls;
+  renderedStep = lastDisplayedStep;
+  lastDisplayedPage = controlPage;
+  lastDisplayedSynthControls = synthControls;
+  lastDisplayedPerformanceControls = performanceControls;
+  lastDisplayedFxControls = fxControls;
   lastDisplayedResetHeld = resetHeld;
   displayDirty = false;
+}
+
+void printPageValueLabel() {
+  switch (controlPage) {
+    case PAGE_PERFORM:
+      printVoiceLabel(performanceControls.voiceMode);
+      break;
+    case PAGE_FX:
+      lcd.print(F("HLD"));
+      break;
+    default:
+      printWaveLabel(synthControls.waveform);
+      break;
+  }
+}
+
+void printPageValues() {
+  switch (controlPage) {
+    case PAGE_PERFORM:
+      printScaleLabel(performanceControls.scale);
+      lcd.print(F(" W"));
+      printPadded2(performanceControls.swing);
+      lcd.print(F(" G"));
+      printPadded3(performanceControls.glide);
+      printSpaces(4);
+      break;
+    case PAGE_FX:
+      lcd.print(F("HOLD "));
+      printPadded2(fxControls.sampleHoldFrames);
+      printSpaces(9);
+      break;
+    default:
+      lcd.print('T');
+      printPadded3(synthControls.tempoMs);
+      lcd.print(F(" L"));
+      printPadded3(synthControls.length);
+      lcd.print(F(" M"));
+      printPadded3(synthControls.modulation);
+      printSpaces(2);
+      break;
+  }
 }
