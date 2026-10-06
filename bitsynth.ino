@@ -13,17 +13,21 @@ const uint8_t kPitchAnalogPin = A2;
 const uint8_t kExtraButtonPin = A3;
 
 const uint8_t kMainVoice = 0;
-const uint8_t kSecondVoice = 1;
+const uint8_t kOsc2Voice = 1;
+const uint8_t kChordVoiceA = 2;
+const uint8_t kChordVoiceB = 3;
+const uint8_t kSynthVoiceCount = 4;
 const uint8_t kStepCount = 16;
 const uint8_t kVisibleStepCount = 8;
 const uint8_t kSettingsCount = 4;
 const uint8_t kPatternCount = 4;
 const uint8_t kWaveCount = 6;
-const uint8_t kVoiceModeCount = 5;
+const uint8_t kPlayModeCount = 3;
 const uint8_t kEnvelopeCount = 4;
+const uint8_t kOsc2EnvelopeCount = kEnvelopeCount + 1;
 const uint8_t kScaleCount = 5;
-const uint8_t kLaneCount = 3;
-const uint8_t kPageCount = 6;
+const uint8_t kLaneCount = 5;
+const uint8_t kPageCount = 7;
 const uint8_t kAnalogSamples = 5;
 
 const uint8_t kButtonDebounceMs = 25;
@@ -35,6 +39,8 @@ const uint16_t kPickupHysteresis = 18;
 
 const uint8_t kDefaultBpm = 126;
 const uint8_t kDefaultProbability = 100;
+const uint8_t kDefaultRatchet = 1;
+const int8_t kDefaultVoicingLock = 0;
 const uint8_t kDefaultLength = 64;
 const uint8_t kDefaultModulation = 64;
 
@@ -42,25 +48,26 @@ const uint8_t kWaveIds[kWaveCount] = {SINE, TRIANGLE, SQUARE, SAW, RAMP, NOISE};
 
 enum ControlPage : uint8_t {
   PAGE_OSC = 0,
-  PAGE_ENV = 1,
-  PAGE_SEQ = 2,
-  PAGE_PAT = 3,
-  PAGE_FX = 4,
-  PAGE_UTL = 5
+  PAGE_OSC2 = 1,
+  PAGE_ENV = 2,
+  PAGE_SEQ = 3,
+  PAGE_PAT = 4,
+  PAGE_FX = 5,
+  PAGE_UTL = 6
 };
 
 enum StepLane : uint8_t {
   LANE_NOTE = 0,
   LANE_GATE = 1,
-  LANE_PROB = 2
+  LANE_PROB = 2,
+  LANE_RATCHET = 3,
+  LANE_LOCK = 4
 };
 
-enum VoiceMode : uint8_t {
-  VOICE_SINGLE = 0,
-  VOICE_DETUNE = 1,
-  VOICE_OCTAVE = 2,
-  VOICE_FIFTH = 3,
-  VOICE_SUB = 4
+enum PlayMode : uint8_t {
+  MODE_SCALE = 0,
+  MODE_CHORD = 1,
+  MODE_ARP = 2
 };
 
 enum ScaleMode : uint8_t {
@@ -74,12 +81,21 @@ enum ScaleMode : uint8_t {
 struct Pattern {
   uint8_t note[kStepCount];
   uint8_t probability[kStepCount];
+  uint8_t ratchet[kStepCount];
+  int8_t voicingLock[kStepCount];
   uint16_t gates;
 };
 
 struct OscControls {
   uint8_t waveform;
-  uint8_t voiceMode;
+  uint8_t playMode;
+  int8_t voicing;
+  int8_t transpose;
+};
+
+struct Osc2Controls {
+  uint8_t waveform;
+  uint8_t envelope;
   uint8_t detune;
   int8_t transpose;
 };
@@ -112,8 +128,10 @@ Pattern patterns[kPatternCount];
 Pattern clipboardPattern;
 bool clipboardHasPattern = false;
 
-OscControls oscControls = {0, VOICE_SINGLE, 8, 0};
-OscControls lastDisplayedOscControls = {255, 255, 255, 127};
+OscControls oscControls = {0, MODE_SCALE, 0, 0};
+OscControls lastDisplayedOscControls = {255, 255, 127, 127};
+Osc2Controls osc2Controls = {0, 0, 8, 0};
+Osc2Controls lastDisplayedOsc2Controls = {255, 255, 255, 127};
 EnvControls envControls = {ENVELOPE0, kDefaultLength, kDefaultModulation, 0};
 EnvControls lastDisplayedEnvControls = {255, 255, 255, 255};
 SeqControls seqControls = {kDefaultBpm, 0, SCALE_CHROMATIC};
@@ -138,18 +156,22 @@ uint8_t playingStep = 255;
 uint8_t renderedStep = 255;
 uint16_t nextStepIntervalMs = 119;
 unsigned long lastStepMs = 0;
+uint8_t ratchetStep = 255;
+uint8_t remainingRatchets = 0;
+uint16_t ratchetIntervalMs = 1;
+unsigned long lastRatchetMs = 0;
+uint8_t arpIndex = 0;
 
 uint8_t configuredWaveform = 255;
-uint8_t configuredVoiceMode = 255;
+uint8_t configuredOsc2Waveform = 255;
 uint8_t configuredEnvelope = 255;
+uint8_t configuredOsc2Envelope = 255;
 uint8_t configuredLength = 255;
 uint8_t configuredModulation = 255;
 uint8_t configuredSampleHoldFrames = 255;
 
-uint16_t currentMainPitchWord = 0;
-uint16_t targetMainPitchWord = 0;
-uint16_t currentSecondPitchWord = 0;
-uint16_t targetSecondPitchWord = 0;
+uint16_t currentPitchWord[kSynthVoiceCount] = {0, 0, 0, 0};
+uint16_t targetPitchWord[kSynthVoiceCount] = {0, 0, 0, 0};
 
 uint8_t stepButtonStableState[kVisibleStepCount] = {HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH};
 uint8_t stepButtonLastReading[kVisibleStepCount] = {HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH};
@@ -180,9 +202,10 @@ void setup() {
   clipboardPattern = patterns[0];
 
   edgar.begin(CHA);
-  edgar.setupVoice(kMainVoice, SINE, 0, ENVELOPE0, envControls.length, envControls.modulation);
-  edgar.setupVoice(kSecondVoice, SINE, 0, ENVELOPE0, envControls.length, envControls.modulation);
-  edgar.stopVoice(kSecondVoice);
+  for (uint8_t voice = 0; voice < kSynthVoiceCount; ++voice) {
+    edgar.setupVoice(voice, SINE, 0, ENVELOPE0, envControls.length, envControls.modulation);
+    edgar.stopVoice(voice);
+  }
 
   pinMode(kMuxBit0Pin, OUTPUT);
   pinMode(kMuxBit1Pin, OUTPUT);
@@ -221,6 +244,8 @@ void initPatterns() {
     for (uint8_t step = 0; step < kStepCount; ++step) {
       patterns[slot].note[step] = 48 + step;
       patterns[slot].probability[step] = kDefaultProbability;
+      patterns[slot].ratchet[step] = kDefaultRatchet;
+      patterns[slot].voicingLock[step] = kDefaultVoicingLock;
     }
   }
 }
@@ -381,6 +406,9 @@ void readControls(unsigned long now) {
 
 void readCurrentPage(const uint16_t values[], unsigned long now) {
   switch (controlPage) {
+    case PAGE_OSC2:
+      readOsc2Page(values, now);
+      break;
     case PAGE_ENV:
       readEnvPage(values, now);
       break;
@@ -412,19 +440,20 @@ void readOscPage(const uint16_t values[], unsigned long now) {
     }
   }
 
-  if (captureLivePot(1, values[1], rawForIndex(oscControls.voiceMode, kVoiceModeCount))) {
-    const uint8_t next = mapToIndex(values[1], kVoiceModeCount);
-    if (next != oscControls.voiceMode) {
-      oscControls.voiceMode = next;
-      setLastEditText("VOI", voiceLabel(oscControls.voiceMode), now);
+  if (captureLivePot(1, values[1], rawForIndex(oscControls.playMode, kPlayModeCount))) {
+    const uint8_t next = mapToIndex(values[1], kPlayModeCount);
+    if (next != oscControls.playMode) {
+      oscControls.playMode = next;
+      panicVoices();
+      setLastEditText("MOD", playModeLabel(oscControls.playMode), now);
     }
   }
 
-  if (captureLivePot(2, values[2], rawForReverseByte(oscControls.detune, 24))) {
-    const uint8_t next = mapToByte(values[2], 24, 0);
-    if (next != oscControls.detune) {
-      oscControls.detune = next;
-      setLastEditNumber("DTN", oscControls.detune, now);
+  if (captureLivePot(2, values[2], rawForReverseRange((uint8_t)(oscControls.voicing + 12), 0, 24))) {
+    const int8_t next = mapToSigned(values[2], 12, -12);
+    if (next != oscControls.voicing) {
+      oscControls.voicing = next;
+      setLastEditNumber("VOI", oscControls.voicing, now);
     }
   }
 
@@ -433,6 +462,40 @@ void readOscPage(const uint16_t values[], unsigned long now) {
     if (next != oscControls.transpose) {
       oscControls.transpose = next;
       setLastEditNumber("TRN", oscControls.transpose, now);
+    }
+  }
+}
+
+void readOsc2Page(const uint16_t values[], unsigned long now) {
+  if (captureLivePot(0, values[0], rawForIndex(osc2Controls.waveform, kWaveCount))) {
+    const uint8_t next = mapToIndex(values[0], kWaveCount);
+    if (next != osc2Controls.waveform) {
+      osc2Controls.waveform = next;
+      setLastEditText("2WV", waveLabel(osc2Controls.waveform), now);
+    }
+  }
+
+  if (captureLivePot(1, values[1], rawForIndex(osc2Controls.envelope, kOsc2EnvelopeCount))) {
+    const uint8_t next = mapToIndex(values[1], kOsc2EnvelopeCount);
+    if (next != osc2Controls.envelope) {
+      osc2Controls.envelope = next;
+      setLastEditText("2EN", osc2EnvelopeLabel(osc2Controls.envelope), now);
+    }
+  }
+
+  if (captureLivePot(2, values[2], rawForReverseByte(osc2Controls.detune, 24))) {
+    const uint8_t next = mapToByte(values[2], 24, 0);
+    if (next != osc2Controls.detune) {
+      osc2Controls.detune = next;
+      setLastEditNumber("2DT", osc2Controls.detune, now);
+    }
+  }
+
+  if (captureLivePot(3, values[3], rawForReverseRange((uint8_t)(osc2Controls.transpose + 24), 0, 48))) {
+    const int8_t next = mapToSigned(values[3], 24, -24);
+    if (next != osc2Controls.transpose) {
+      osc2Controls.transpose = next;
+      setLastEditNumber("2TR", osc2Controls.transpose, now);
     }
   }
 }
@@ -597,11 +660,23 @@ void readStepPots(unsigned long now) {
         setStepGate(activePattern, step, enabled);
         setLastEditText("GAT", enabled ? "ON " : "OFF", now);
       }
-    } else {
+    } else if (activeLane == LANE_PROB) {
       const uint8_t next = mapToByte(raw, 100, 0);
       if (next != patterns[activePattern].probability[step]) {
         patterns[activePattern].probability[step] = next;
         setLastEditNumber("PRB", patterns[activePattern].probability[step], now);
+      }
+    } else if (activeLane == LANE_RATCHET) {
+      const uint8_t next = mapToByte(raw, 4, 1);
+      if (next != patterns[activePattern].ratchet[step]) {
+        patterns[activePattern].ratchet[step] = next;
+        setLastEditNumber("RAT", patterns[activePattern].ratchet[step], now);
+      }
+    } else {
+      const int8_t next = mapToSigned(raw, 12, -12);
+      if (next != patterns[activePattern].voicingLock[step]) {
+        patterns[activePattern].voicingLock[step] = next;
+        setLastEditNumber("LCK", patterns[activePattern].voicingLock[step], now);
       }
     }
   }
@@ -794,6 +869,8 @@ void initPattern(uint8_t slot) {
   for (uint8_t step = 0; step < kStepCount; ++step) {
     patterns[slot].note[step] = 48 + step;
     patterns[slot].probability[step] = kDefaultProbability;
+    patterns[slot].ratchet[step] = kDefaultRatchet;
+    patterns[slot].voicingLock[step] = kDefaultVoicingLock;
   }
   displayDirty = true;
 }
@@ -807,8 +884,12 @@ void clearCurrentLane() {
       patterns[activePattern].note[step] = 48;
     } else if (activeLane == LANE_GATE) {
       setStepGate(activePattern, step, false);
-    } else {
+    } else if (activeLane == LANE_PROB) {
       patterns[activePattern].probability[step] = kDefaultProbability;
+    } else if (activeLane == LANE_RATCHET) {
+      patterns[activePattern].ratchet[step] = kDefaultRatchet;
+    } else {
+      patterns[activePattern].voicingLock[step] = kDefaultVoicingLock;
     }
   }
   displayDirty = true;
@@ -817,6 +898,7 @@ void clearCurrentLane() {
 void randomizeCurrentLane() {
   const uint8_t baseStep = visibleRange ? 8 : 0;
   const int8_t noteSpread = (int8_t)(patControls.randomAmount / 8);
+  const int8_t lockSpread = (int8_t)(patControls.randomAmount / 8);
 
   for (uint8_t slot = 0; slot < kVisibleStepCount; ++slot) {
     const uint8_t step = baseStep + slot;
@@ -825,52 +907,66 @@ void randomizeCurrentLane() {
       patterns[activePattern].note[step] = constrain((int16_t)patterns[activePattern].note[step] + offset, 12, 84);
     } else if (activeLane == LANE_GATE) {
       setStepGate(activePattern, step, random(100) < patControls.randomAmount);
-    } else {
+    } else if (activeLane == LANE_PROB) {
       patterns[activePattern].probability[step] = random(101);
+    } else if (activeLane == LANE_RATCHET) {
+      patterns[activePattern].ratchet[step] = (uint8_t)random(1, 5);
+    } else {
+      patterns[activePattern].voicingLock[step] = (int8_t)random(-lockSpread, lockSpread + 1);
     }
   }
   displayDirty = true;
 }
 
 void panicVoices() {
-  edgar.stopVoice(kMainVoice);
-  edgar.stopVoice(kSecondVoice);
-  currentMainPitchWord = 0;
-  currentSecondPitchWord = 0;
-  targetMainPitchWord = 0;
-  targetSecondPitchWord = 0;
+  for (uint8_t voice = 0; voice < kSynthVoiceCount; ++voice) {
+    stopVoiceTracked(voice);
+  }
+  remainingRatchets = 0;
+  ratchetStep = 255;
 }
 
 void applySynthControls() {
   if (oscControls.waveform != configuredWaveform) {
     edgar.setWave(kMainVoice, kWaveIds[oscControls.waveform]);
-    edgar.setWave(kSecondVoice, kWaveIds[oscControls.waveform]);
+    edgar.setWave(kChordVoiceA, kWaveIds[oscControls.waveform]);
+    edgar.setWave(kChordVoiceB, kWaveIds[oscControls.waveform]);
     configuredWaveform = oscControls.waveform;
+  }
+
+  if (osc2Controls.waveform != configuredOsc2Waveform) {
+    edgar.setWave(kOsc2Voice, kWaveIds[osc2Controls.waveform]);
+    configuredOsc2Waveform = osc2Controls.waveform;
   }
 
   if (envControls.envelope != configuredEnvelope) {
     edgar.setEnvelope(kMainVoice, envControls.envelope);
-    edgar.setEnvelope(kSecondVoice, envControls.envelope);
+    edgar.setEnvelope(kChordVoiceA, envControls.envelope);
+    edgar.setEnvelope(kChordVoiceB, envControls.envelope);
     configuredEnvelope = envControls.envelope;
   }
 
+  if (osc2Controls.envelope != configuredOsc2Envelope) {
+    if (osc2Controls.envelope == 0) {
+      stopVoiceTracked(kOsc2Voice);
+    } else {
+      edgar.setEnvelope(kOsc2Voice, osc2Controls.envelope - 1);
+    }
+    configuredOsc2Envelope = osc2Controls.envelope;
+  }
+
   if (envControls.length != configuredLength) {
-    edgar.setLength(kMainVoice, envControls.length);
-    edgar.setLength(kSecondVoice, envControls.length);
+    for (uint8_t voice = 0; voice < kSynthVoiceCount; ++voice) {
+      edgar.setLength(voice, envControls.length);
+    }
     configuredLength = envControls.length;
   }
 
   if (envControls.modulation != configuredModulation) {
-    edgar.setMod(kMainVoice, envControls.modulation);
-    edgar.setMod(kSecondVoice, envControls.modulation);
-    configuredModulation = envControls.modulation;
-  }
-
-  if (oscControls.voiceMode != configuredVoiceMode) {
-    configuredVoiceMode = oscControls.voiceMode;
-    if (oscControls.voiceMode == VOICE_SINGLE) {
-      edgar.stopVoice(kSecondVoice);
+    for (uint8_t voice = 0; voice < kSynthVoiceCount; ++voice) {
+      edgar.setMod(voice, envControls.modulation);
     }
+    configuredModulation = envControls.modulation;
   }
 
   if (fxControls.sampleHoldFrames != configuredSampleHoldFrames) {
@@ -880,13 +976,20 @@ void applySynthControls() {
 }
 
 void runSequencer(unsigned long now) {
+  if (remainingRatchets > 0 && (unsigned long)(now - lastRatchetMs) >= ratchetIntervalMs) {
+    lastRatchetMs += ratchetIntervalMs;
+    --remainingRatchets;
+    triggerStepPlayback(ratchetStep);
+    return;
+  }
+
   if ((unsigned long)(now - lastStepMs) < nextStepIntervalMs) {
     return;
   }
 
   lastStepMs = now;
-  playStep(currentStep);
   nextStepIntervalMs = intervalAfterStep(currentStep);
+  playStep(currentStep, nextStepIntervalMs);
   playingStep = currentStep;
   currentStep = (currentStep + 1) & 0x0F;
   displayDirty = true;
@@ -911,38 +1014,128 @@ uint16_t intervalAfterStep(uint8_t step) {
   return tempo > offset + 5 ? tempo - offset : 5;
 }
 
-void playStep(uint8_t step) {
+void playStep(uint8_t step, uint16_t stepIntervalMs) {
+  remainingRatchets = 0;
+  ratchetStep = 255;
+
   if (!stepGate(activePattern, step)) {
+    stopVoicesForRest();
     return;
   }
 
   const uint8_t probability = patterns[activePattern].probability[step];
   if (probability < 100 && random(100) >= probability) {
+    stopVoicesForRest();
     return;
   }
 
+  triggerStepPlayback(step);
+
+  const uint8_t ratchets = constrain(patterns[activePattern].ratchet[step], 1, 4);
+  if (ratchets > 1) {
+    remainingRatchets = ratchets - 1;
+    ratchetStep = step;
+    ratchetIntervalMs = max((uint16_t)1, (uint16_t)(stepIntervalMs / ratchets));
+    lastRatchetMs = lastStepMs;
+  }
+}
+
+void triggerStepPlayback(uint8_t step) {
+  if (oscControls.playMode == MODE_CHORD) {
+    triggerChordStep(step);
+  } else if (oscControls.playMode == MODE_ARP) {
+    triggerArpStep(step);
+  } else {
+    triggerScaleStep(step);
+  }
+}
+
+void triggerScaleStep(uint8_t step) {
   const uint8_t note = quantizeNoteWithTranspose(patterns[activePattern].note[step]);
-  targetMainPitchWord = pitchWordForNote(note);
-  targetSecondPitchWord = secondVoicePitchWord(note, targetMainPitchWord);
+  uint8_t usedMask = 0;
 
-  if (envControls.glide == 0 || currentMainPitchWord == 0) {
-    currentMainPitchWord = targetMainPitchWord;
-    edgar.setPitchWord(kMainVoice, currentMainPitchWord);
+  triggerVoiceWithPitch(kMainVoice, pitchWordForNote(note));
+  usedMask |= (1 << kMainVoice);
+
+  if (osc2Enabled()) {
+    triggerVoiceWithPitch(kOsc2Voice, osc2PitchWordForNote(note));
+    usedMask |= (1 << kOsc2Voice);
   }
 
-  edgar.trigger(kMainVoice);
+  stopUnusedVoices(usedMask);
+}
 
-  if (oscControls.voiceMode == VOICE_SINGLE) {
-    edgar.stopVoice(kSecondVoice);
-    return;
+void triggerChordStep(uint8_t step) {
+  uint8_t chordNotes[3];
+  buildChordNotes(quantizeNoteWithTranspose(patterns[activePattern].note[step]), chordNotes);
+  applyVoicing(chordNotes, constrain((int8_t)(oscControls.voicing + patterns[activePattern].voicingLock[step]), -12, 12));
+
+  uint8_t usedMask = 0;
+  triggerVoiceWithPitch(kMainVoice, pitchWordForNote(chordNotes[0]));
+  usedMask |= (1 << kMainVoice);
+
+  if (osc2Enabled()) {
+    triggerVoiceWithPitch(kOsc2Voice, osc2PitchWordForNote(chordNotes[1]));
+    triggerVoiceWithPitch(kChordVoiceA, pitchWordForNote(chordNotes[2]));
+    usedMask |= (1 << kOsc2Voice) | (1 << kChordVoiceA);
+  } else {
+    triggerVoiceWithPitch(kChordVoiceA, pitchWordForNote(chordNotes[1]));
+    triggerVoiceWithPitch(kChordVoiceB, pitchWordForNote(chordNotes[2]));
+    usedMask |= (1 << kChordVoiceA) | (1 << kChordVoiceB);
   }
 
-  if (envControls.glide == 0 || currentSecondPitchWord == 0) {
-    currentSecondPitchWord = targetSecondPitchWord;
-    edgar.setPitchWord(kSecondVoice, currentSecondPitchWord);
+  stopUnusedVoices(usedMask);
+}
+
+void triggerArpStep(uint8_t step) {
+  uint8_t chordNotes[3];
+  buildChordNotes(quantizeNoteWithTranspose(patterns[activePattern].note[step]), chordNotes);
+  applyVoicing(chordNotes, constrain((int8_t)(oscControls.voicing + patterns[activePattern].voicingLock[step]), -12, 12));
+
+  const uint8_t note = chordNotes[arpIndex % 3];
+  ++arpIndex;
+
+  uint8_t usedMask = 0;
+  triggerVoiceWithPitch(kMainVoice, pitchWordForNote(note));
+  usedMask |= (1 << kMainVoice);
+
+  if (osc2Enabled()) {
+    triggerVoiceWithPitch(kOsc2Voice, osc2PitchWordForNote(note));
+    usedMask |= (1 << kOsc2Voice);
   }
 
-  edgar.trigger(kSecondVoice);
+  stopUnusedVoices(usedMask);
+}
+
+void triggerVoiceWithPitch(uint8_t voice, uint16_t pitch) {
+  targetPitchWord[voice] = pitch;
+
+  if (envControls.glide == 0 || currentPitchWord[voice] == 0) {
+    currentPitchWord[voice] = targetPitchWord[voice];
+    edgar.setPitchWord(voice, currentPitchWord[voice]);
+  }
+
+  edgar.trigger(voice);
+}
+
+void stopVoiceTracked(uint8_t voice) {
+  edgar.stopVoice(voice);
+  currentPitchWord[voice] = 0;
+  targetPitchWord[voice] = 0;
+}
+
+void stopUnusedVoices(uint8_t usedMask) {
+  for (uint8_t voice = 0; voice < kSynthVoiceCount; ++voice) {
+    if ((usedMask & (1 << voice)) == 0) {
+      stopVoiceTracked(voice);
+    }
+  }
+}
+
+void stopVoicesForRest() {
+  if (envControls.glide == 0) {
+    stopUnusedVoices(0);
+  }
 }
 
 void updateGlide() {
@@ -950,14 +1143,11 @@ void updateGlide() {
     return;
   }
 
-  if (currentMainPitchWord != targetMainPitchWord) {
-    currentMainPitchWord = glidePitch(currentMainPitchWord, targetMainPitchWord);
-    edgar.setPitchWord(kMainVoice, currentMainPitchWord);
-  }
-
-  if (oscControls.voiceMode != VOICE_SINGLE && currentSecondPitchWord != targetSecondPitchWord) {
-    currentSecondPitchWord = glidePitch(currentSecondPitchWord, targetSecondPitchWord);
-    edgar.setPitchWord(kSecondVoice, currentSecondPitchWord);
+  for (uint8_t voice = 0; voice < kSynthVoiceCount; ++voice) {
+    if (targetPitchWord[voice] != 0 && currentPitchWord[voice] != targetPitchWord[voice]) {
+      currentPitchWord[voice] = glidePitch(currentPitchWord[voice], targetPitchWord[voice]);
+      edgar.setPitchWord(voice, currentPitchWord[voice]);
+    }
   }
 }
 
@@ -975,6 +1165,10 @@ uint16_t glidePitch(uint16_t current, uint16_t target) {
   }
 
   return (uint16_t)(current + step);
+}
+
+bool osc2Enabled() {
+  return osc2Controls.envelope > 0;
 }
 
 uint8_t quantizeNoteWithTranspose(uint8_t note) {
@@ -995,19 +1189,68 @@ uint16_t pitchWordForNote(uint8_t note) {
   return pgm_read_word(&PITCHS[note]);
 }
 
-uint16_t secondVoicePitchWord(uint8_t note, uint16_t mainPitchWord) {
-  switch (oscControls.voiceMode) {
-    case VOICE_DETUNE:
-      return mainPitchWord + (((uint32_t)mainPitchWord * oscControls.detune) / 512);
-    case VOICE_OCTAVE:
-      return pitchWordForNote(transposeNote(note, 12));
-    case VOICE_FIFTH:
-      return pitchWordForNote(transposeNote(note, 7));
-    case VOICE_SUB:
-      return pitchWordForNote(transposeNote(note, -12));
-    default:
-      return mainPitchWord;
+uint16_t osc2PitchWordForNote(uint8_t note) {
+  const uint8_t transposed = transposeNote(note, osc2Controls.transpose);
+  const uint16_t pitchWord = pitchWordForNote(transposed);
+  return pitchWord + (((uint32_t)pitchWord * osc2Controls.detune) / 512);
+}
+
+void buildChordNotes(uint8_t root, uint8_t notes[3]) {
+  int8_t third = 4;
+  int8_t fifth = 7;
+
+  if (seqControls.scale == SCALE_MINOR || seqControls.scale == SCALE_BLUES) {
+    third = 3;
+  } else if (seqControls.scale == SCALE_PENTATONIC) {
+    third = 5;
   }
+
+  notes[0] = root;
+  notes[1] = transposeNote(root, third);
+  notes[2] = transposeNote(root, fifth);
+}
+
+void sortChordNotes(int16_t notes[3]) {
+  for (uint8_t i = 0; i < 2; ++i) {
+    for (uint8_t j = i + 1; j < 3; ++j) {
+      if (notes[j] < notes[i]) {
+        const int16_t temp = notes[i];
+        notes[i] = notes[j];
+        notes[j] = temp;
+      }
+    }
+  }
+}
+
+uint8_t clampMidiNote(int16_t note) {
+  if (note < 0) {
+    return 0;
+  }
+  if (note > SYNTH_MIDI_NOTE_MAX) {
+    return SYNTH_MIDI_NOTE_MAX;
+  }
+  return (uint8_t)note;
+}
+
+void applyVoicing(uint8_t notes[3], int8_t voicing) {
+  int16_t voiced[3] = {notes[0], notes[1], notes[2]};
+
+  while (voicing > 0) {
+    sortChordNotes(voiced);
+    voiced[0] += 12;
+    --voicing;
+  }
+
+  while (voicing < 0) {
+    sortChordNotes(voiced);
+    voiced[2] -= 12;
+    ++voicing;
+  }
+
+  sortChordNotes(voiced);
+  notes[0] = clampMidiNote(voiced[0]);
+  notes[1] = clampMidiNote(voiced[1]);
+  notes[2] = clampMidiNote(voiced[2]);
 }
 
 uint8_t transposeNote(uint8_t note, int8_t semitones) {
@@ -1075,23 +1318,36 @@ const char *waveLabel(uint8_t waveform) {
       return "SAW";
     case 4:
       return "RMP";
+    case 5:
+      return "NOI";
     default:
       return "WAV";
   }
 }
 
-const char *voiceLabel(uint8_t mode) {
+const char *playModeLabel(uint8_t mode) {
   switch (mode) {
-    case VOICE_DETUNE:
-      return "DTN";
-    case VOICE_OCTAVE:
-      return "OCT";
-    case VOICE_FIFTH:
-      return "FIF";
-    case VOICE_SUB:
-      return "SUB";
+    case MODE_CHORD:
+      return "CHD";
+    case MODE_ARP:
+      return "ARP";
     default:
-      return "ONE";
+      return "SCL";
+  }
+}
+
+const char *osc2EnvelopeLabel(uint8_t envelope) {
+  switch (envelope) {
+    case 1:
+      return "E0 ";
+    case 2:
+      return "E1 ";
+    case 3:
+      return "E2 ";
+    case 4:
+      return "E3 ";
+    default:
+      return "OFF";
   }
 }
 
@@ -1116,6 +1372,10 @@ const char *laneLabel(uint8_t lane) {
       return "G  ";
     case LANE_PROB:
       return "P  ";
+    case LANE_RATCHET:
+      return "R  ";
+    case LANE_LOCK:
+      return "L  ";
     default:
       return "N  ";
   }
@@ -1159,6 +1419,9 @@ void printSpaces(uint8_t count) {
 
 void printPageLabel() {
   switch (controlPage) {
+    case PAGE_OSC2:
+      lcd.print(F("O2 "));
+      break;
     case PAGE_ENV:
       lcd.print(F("ENV"));
       break;
@@ -1187,9 +1450,13 @@ bool controlsChangedForDisplay() {
          activeLane != lastDisplayedLane ||
          visibleRange != lastDisplayedRange ||
          oscControls.waveform != lastDisplayedOscControls.waveform ||
-         oscControls.voiceMode != lastDisplayedOscControls.voiceMode ||
-         oscControls.detune != lastDisplayedOscControls.detune ||
+         oscControls.playMode != lastDisplayedOscControls.playMode ||
+         oscControls.voicing != lastDisplayedOscControls.voicing ||
          oscControls.transpose != lastDisplayedOscControls.transpose ||
+         osc2Controls.waveform != lastDisplayedOsc2Controls.waveform ||
+         osc2Controls.envelope != lastDisplayedOsc2Controls.envelope ||
+         osc2Controls.detune != lastDisplayedOsc2Controls.detune ||
+         osc2Controls.transpose != lastDisplayedOsc2Controls.transpose ||
          envControls.envelope != lastDisplayedEnvControls.envelope ||
          envControls.length != lastDisplayedEnvControls.length ||
          envControls.modulation != lastDisplayedEnvControls.modulation ||
@@ -1223,6 +1490,7 @@ void renderDisplay(unsigned long now) {
   lastDisplayedLane = activeLane;
   lastDisplayedRange = visibleRange;
   lastDisplayedOscControls = oscControls;
+  lastDisplayedOsc2Controls = osc2Controls;
   lastDisplayedEnvControls = envControls;
   lastDisplayedSeqControls = seqControls;
   lastDisplayedPatControls = patControls;
@@ -1318,6 +1586,11 @@ void renderPageView(unsigned long now) {
   }
 
   switch (controlPage) {
+    case PAGE_OSC2:
+      lcd.print(F(" W E D T     "));
+      lcd.setCursor(0, 1);
+      printPickupOrOsc2Values();
+      break;
     case PAGE_ENV:
       lcd.print(F(" E L M G     "));
       lcd.setCursor(0, 1);
@@ -1348,7 +1621,7 @@ void renderPageView(unsigned long now) {
       break;
     case PAGE_OSC:
     default:
-      lcd.print(F(" W V D T     "));
+      lcd.print(F(" W M V T     "));
       lcd.setCursor(0, 1);
       printPickupOrOscValues();
       break;
@@ -1358,11 +1631,22 @@ void renderPageView(unsigned long now) {
 void printPickupOrOscValues() {
   printText3OrHint(0, waveLabel(oscControls.waveform));
   lcd.print(' ');
-  printText3OrHint(1, voiceLabel(oscControls.voiceMode));
+  printText3OrHint(1, playModeLabel(oscControls.playMode));
   lcd.print(' ');
-  printNumber2OrHint(2, oscControls.detune);
+  printSigned3OrHint(2, oscControls.voicing);
   lcd.print(' ');
   printSigned3OrHint(3, oscControls.transpose);
+  printSpaces(1);
+}
+
+void printPickupOrOsc2Values() {
+  printText3OrHint(0, waveLabel(osc2Controls.waveform));
+  lcd.print(' ');
+  printText3OrHint(1, osc2EnvelopeLabel(osc2Controls.envelope));
+  lcd.print(' ');
+  printNumber2OrHint(2, osc2Controls.detune);
+  lcd.print(' ');
+  printSigned3OrHint(3, osc2Controls.transpose);
   printSpaces(2);
 }
 

@@ -33,7 +33,7 @@ QuickStats is not required; analog median filtering is handled inside the sketch
 
 ## Performance Controls
 
-The 8 step pots edit the current lane for the visible 8-step range. The 8 step buttons toggle gates for the visible steps. The extra button controls pages and Shift functions:
+The 8 step pots edit the current lane for the visible 8-step range. The 8 step buttons toggle gates for the visible steps. The extra button controls pages and Shift functions. Page order is `OSC`, `O2`, `ENV`, `SEQ`, `PAT`, `FX`, `UTL`.
 
 - Short press: next page
 - Double press: previous page
@@ -63,7 +63,7 @@ x-xOxx-- WAVSIN
 Top row:
 
 - `P1`: active RAM pattern slot
-- `N`, `G`, `P`: active lane
+- `N`, `G`, `P`, `R`, `L`: active lane
 - `1-8` / `9-16`: visible step range
 - `126B`: tempo in BPM
 
@@ -83,10 +83,23 @@ The 4 live control pots edit the active page. Soft-takeover applies to these pot
 
 ### `OSC`
 
-- Pot 1: waveform `SIN`, `TRI`, `SQR`, `SAW`, `RMP`, `WAV`
-- Pot 2: voice mode `ONE`, `DTN`, `OCT`, `FIF`, `SUB`
-- Pot 3: detune amount for `DTN`
+- Pot 1: waveform `SIN`, `TRI`, `SQR`, `SAW`, `RMP`, `NOI`
+- Pot 2: play mode `SCL`, `CHD`, `ARP`
+- Pot 3: voicing dial, `-12` to `+12`
 - Pot 4: global transpose, `-24` to `+24` semitones
+
+`SCL` is the classic one-note scale sequencer. `CHD` builds a three-note chord from the step note and selected scale. `ARP` uses the same chord notes but plays one note per step or ratchet.
+
+The voicing dial shifts chord inversions by moving the lowest note up an octave for positive values, or the highest note down an octave for negative values. The `L` lane adds a per-step voicing offset on top of this global value.
+
+### `O2`
+
+- Pot 1: OSC2 waveform `SIN`, `TRI`, `SQR`, `SAW`, `RMP`, `NOI`
+- Pot 2: OSC2 envelope/off `OFF`, `E0`-`E3`
+- Pot 3: OSC2 detune amount, `0`-`24`
+- Pot 4: OSC2 transpose, `-24` to `+24` semitones
+
+OSC2 is silent when its envelope is `OFF`. When enabled, it uses its own waveform, envelope table, detune, and transpose while sharing the global length, pitch modulation, and glide controls.
 
 ### `ENV`
 
@@ -100,7 +113,9 @@ The 4 live control pots edit the active page. Soft-takeover applies to these pot
 - Pot 1: tempo, `40`-`240` BPM
 - Pot 2: swing amount
 - Pot 3: scale `CHR`, `MAJ`, `MIN`, `PEN`, `BLU`
-- Pot 4: active lane `N`, `G`, `P`
+- Pot 4: active lane `N`, `G`, `P`, `R`, `L`
+
+Chord quality follows the scale: `CHR` and `MAJ` make major triads, `MIN` and `BLU` make minor triads, and `PEN` makes a suspended/power-style triad.
 
 ### `PAT`
 
@@ -132,14 +147,16 @@ Long-hold the extra button to enter `UTL` and panic the voices. In `UTL`, normal
 - `N` note lane: step pots set notes for the visible range.
 - `G` gate lane: step pots set gate on/off by midpoint; step buttons also toggle gates.
 - `P` probability lane: step pots set trigger probability from `0`-`100`.
+- `R` ratchet lane: step pots set `1`-`4` retriggers inside the step.
+- `L` lock lane: step pots set a per-step voicing offset from `-12` to `+12`.
 
-Playback always runs through all 16 steps. The visible range only chooses which 8 steps the pots and buttons are editing.
+Playback always runs through all 16 steps. The visible range only chooses which 8 steps the pots and buttons are editing. Gate and probability are checked once at the start of a step; ratchets only happen when that first trigger fires.
 
 ## Current Limitations
 
 - Pattern slots and clipboard are RAM-only; there is no EEPROM persistence yet.
 - There is no `FIL` page because the current synth engine has no real filter stage. `synth.h` keeps a legacy `setFilter()` stub, but it does not affect audio.
-- There is no LFO, mixer page, accent lane, ratchet lane, modulation lane, or parameter-lock lane yet.
+- There is no LFO, mixer page, accent lane, modulation lane, or general-purpose parameter-lock lane yet. The `L` lane is intentionally limited to voicing locks to keep RAM and UI pressure low.
 - Step pots are direct controls. Soft-takeover is only used on the 4 live page pots.
 - In gate lane, step pots continuously represent gate state, so a button toggle may be overwritten if the matching pot remains on the other side of the midpoint.
 
