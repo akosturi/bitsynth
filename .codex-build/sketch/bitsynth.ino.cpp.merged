@@ -1,3 +1,5 @@
+#include <Arduino.h>
+#line 1 "C:\\Users\\tuako\\Documents\\bitsynth\\bitsynth.ino"
 #include <LiquidCrystal.h>
 #include "synth.h"
 
@@ -686,3 +688,4 @@ void printPageValues() {
       break;
   }
 }
+

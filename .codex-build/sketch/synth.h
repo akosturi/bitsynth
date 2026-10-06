@@ -1,3 +1,4 @@
+#line 1 "C:\\Users\\tuako\\Documents\\bitsynth\\synth.h"
 #ifndef _SYNTH
 #define _SYNTH
 //*************************************************************************************

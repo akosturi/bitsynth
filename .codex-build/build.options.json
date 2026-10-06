@@ -1,0 +1,9 @@
+{
+  "additionalFiles": "..\\..,..\\..,..\\..",
+  "compiler.optimization_flags": "",
+  "customBuildProperties": "",
+  "fqbn": "arduino:avr:uno",
+  "hardwareFolders": "C:\\Users\\tuako\\AppData\\Local\\Arduino15\\packages\\arduino\\hardware\\avr\\1.8.7,C:\\Users\\tuako\\AppData\\Local\\Arduino15\\packages\\arduino\\hardware\\avr\\1.8.7",
+  "otherLibrariesFolders": "C:\\Users\\tuako\\Documents\\Arduino\\libraries",
+  "sketchLocation": "C:\\Users\\tuako\\Documents\\bitsynth"
+}

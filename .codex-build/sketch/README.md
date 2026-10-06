@@ -1,3 +1,4 @@
+#line 1 "C:\\Users\\tuako\\Documents\\bitsynth\\README.md"
 # bitsynth
 
 An Arduino Pro Mini based wavetable synth and 8-step sequencer.
