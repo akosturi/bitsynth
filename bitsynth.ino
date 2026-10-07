@@ -28,9 +28,9 @@ const uint8_t kOsc2EnvelopeCount = kEnvelopeCount + 1;
 const uint8_t kScaleCount = 5;
 const uint8_t kLaneCount = 5;
 const uint8_t kPageCount = 7;
-const uint8_t kAnalogSamples = 5;
+const uint8_t kAnalogSamples = 3;
 const uint8_t kAnalogFilterFractionBits = 4;
-const uint8_t kAnalogFilterAlphaNumerator = 1;
+const uint8_t kAnalogFilterAlphaNumerator = 5;
 const uint8_t kAnalogFilterAlphaDenominator = 16;
 const uint8_t kMuxSettleUs = 50;
 
@@ -40,7 +40,7 @@ const uint16_t kShiftHoldMs = 260;
 const uint16_t kUtilityLongPressMs = 1000;
 const uint16_t kEditViewMs = 1200;
 const uint16_t kPickupHysteresis = 18;
-const uint8_t kAnalogValueHysteresis = 12;
+const uint8_t kAnalogValueHysteresis = 4;
 const uint8_t kGateHysteresis = 18;
 
 const uint8_t kDefaultBpm = 126;
