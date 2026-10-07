@@ -29,6 +29,10 @@ const uint8_t kScaleCount = 5;
 const uint8_t kLaneCount = 5;
 const uint8_t kPageCount = 7;
 const uint8_t kAnalogSamples = 3;
+const uint8_t kAnalogFilterFractionBits = 4;
+const uint8_t kAnalogFilterAlphaNumerator = 3;
+const uint8_t kAnalogFilterAlphaDenominator = 16;
+const uint8_t kMuxSettleUs = 50;
 
 const uint8_t kButtonDebounceMs = 25;
 const uint16_t kDoublePressMs = 320;
@@ -191,7 +195,11 @@ bool shiftActionUsed = false;
 bool lastDisplayedShift = false;
 
 uint16_t lastLivePotRaw[kSettingsCount] = {0, 0, 0, 0};
+uint16_t filteredSettingRaw[kSettingsCount] = {0, 0, 0, 0};
+uint16_t filteredStepRaw[kVisibleStepCount] = {0, 0, 0, 0, 0, 0, 0, 0};
 bool livePotCaptured[kSettingsCount] = {true, true, true, true};
+bool settingFilterReady[kSettingsCount] = {false, false, false, false};
+bool stepFilterReady[kVisibleStepCount] = {false, false, false, false, false, false, false, false};
 char pickupHint[kSettingsCount] = {' ', ' ', ' ', ' '};
 
 char lastEditLabel[4] = {'W', 'A', 'V', '\0'};
@@ -256,11 +264,13 @@ void selectMuxChannel(uint8_t channel) {
   digitalWrite(kMuxBit0Pin, bitRead(channel, 0));
   digitalWrite(kMuxBit1Pin, bitRead(channel, 1));
   digitalWrite(kMuxBit2Pin, bitRead(channel, 2));
-  delayMicroseconds(5);
+  delayMicroseconds(kMuxSettleUs);
 }
 
 uint16_t readMedianAnalog(uint8_t pin) {
   uint16_t samples[kAnalogSamples];
+
+  analogRead(pin);
 
   for (uint8_t i = 0; i < kAnalogSamples; ++i) {
     const uint16_t value = analogRead(pin);
@@ -275,6 +285,20 @@ uint16_t readMedianAnalog(uint8_t pin) {
   }
 
   return samples[kAnalogSamples / 2];
+}
+
+uint16_t filterAnalog(uint16_t raw, uint16_t &filteredRaw, bool &ready) {
+  const uint16_t rawFixed = raw << kAnalogFilterFractionBits;
+
+  if (!ready) {
+    filteredRaw = rawFixed;
+    ready = true;
+    return raw;
+  }
+
+  const int32_t delta = (int32_t)rawFixed - filteredRaw;
+  filteredRaw += (delta * kAnalogFilterAlphaNumerator) / kAnalogFilterAlphaDenominator;
+  return (filteredRaw + (1 << (kAnalogFilterFractionBits - 1))) >> kAnalogFilterFractionBits;
 }
 
 uint8_t mapToByte(uint16_t value, int16_t outMin, int16_t outMax) {
@@ -454,7 +478,8 @@ void readControls(unsigned long now) {
 
   for (uint8_t channel = 0; channel < kSettingsCount; ++channel) {
     selectMuxChannel(channel);
-    settingValues[channel] = readMedianAnalog(kSettingsAnalogPin);
+    const uint16_t raw = readMedianAnalog(kSettingsAnalogPin);
+    settingValues[channel] = filterAnalog(raw, filteredSettingRaw[channel], settingFilterReady[channel]);
   }
 
   readCurrentPage(settingValues, now);
@@ -707,7 +732,7 @@ void readStepPots(unsigned long now) {
   for (uint8_t slot = 0; slot < kVisibleStepCount; ++slot) {
     const uint8_t step = baseStep + slot;
     selectMuxChannel(slot);
-    const uint16_t raw = readMedianAnalog(kPitchAnalogPin);
+    const uint16_t raw = filterAnalog(readMedianAnalog(kPitchAnalogPin), filteredStepRaw[slot], stepFilterReady[slot]);
 
     if (activeLane == LANE_NOTE) {
       const uint8_t next = mapToByteHysteresis(raw, patterns[activePattern].note[step], 84, 12);
