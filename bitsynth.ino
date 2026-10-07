@@ -28,7 +28,7 @@ const uint8_t kOsc2EnvelopeCount = kEnvelopeCount + 1;
 const uint8_t kScaleCount = 5;
 const uint8_t kLaneCount = 5;
 const uint8_t kPageCount = 7;
-const uint8_t kAnalogSamples = 5;
+const uint8_t kAnalogSamples = 3;
 
 const uint8_t kButtonDebounceMs = 25;
 const uint16_t kDoublePressMs = 320;
@@ -36,6 +36,8 @@ const uint16_t kShiftHoldMs = 260;
 const uint16_t kUtilityLongPressMs = 1000;
 const uint16_t kEditViewMs = 1200;
 const uint16_t kPickupHysteresis = 18;
+const uint8_t kAnalogValueHysteresis = 4;
+const uint8_t kGateHysteresis = 18;
 
 const uint8_t kDefaultBpm = 126;
 const uint8_t kDefaultProbability = 100;
@@ -288,6 +290,65 @@ uint8_t mapToIndex(uint16_t value, uint8_t count) {
   return index >= count ? count - 1 : index;
 }
 
+uint16_t rawForMappedValue(int16_t value, int16_t outMin, int16_t outMax) {
+  if (outMin == outMax) {
+    return 0;
+  }
+  return (uint16_t)constrain(map(value, outMin, outMax, 0, 1023), 0, 1023);
+}
+
+bool rawPastHysteresisBoundary(uint16_t raw, uint16_t currentRaw, uint16_t nextRaw) {
+  const uint16_t boundary = (currentRaw + nextRaw) / 2;
+
+  if (nextRaw > currentRaw) {
+    return raw > boundary + kAnalogValueHysteresis;
+  }
+
+  return raw + kAnalogValueHysteresis < boundary;
+}
+
+int16_t mapWithHysteresis(uint16_t raw, int16_t current, int16_t outMin, int16_t outMax) {
+  const int16_t lowest = min(outMin, outMax);
+  const int16_t highest = max(outMin, outMax);
+  const int16_t candidate = constrain(map(raw, 0, 1023, outMin, outMax), lowest, highest);
+
+  if (candidate == current) {
+    return current;
+  }
+
+  const int16_t next = current + (candidate > current ? 1 : -1);
+  if (next < lowest || next > highest) {
+    return candidate;
+  }
+
+  if (rawPastHysteresisBoundary(raw, rawForMappedValue(current, outMin, outMax), rawForMappedValue(next, outMin, outMax))) {
+    return candidate;
+  }
+
+  return current;
+}
+
+uint8_t mapToByteHysteresis(uint16_t raw, uint8_t current, int16_t outMin, int16_t outMax) {
+  return (uint8_t)mapWithHysteresis(raw, current, outMin, outMax);
+}
+
+int8_t mapToSignedHysteresis(uint16_t raw, int8_t current, int8_t outMin, int8_t outMax) {
+  return (int8_t)mapWithHysteresis(raw, current, outMin, outMax);
+}
+
+uint8_t mapToIndexHysteresis(uint16_t raw, uint8_t current, uint8_t count) {
+  uint8_t index = mapToByteHysteresis(raw, current, count - 1, 0);
+  return index >= count ? count - 1 : index;
+}
+
+bool mapToGateHysteresis(uint16_t raw, bool current) {
+  if (current) {
+    return raw < 512 + kGateHysteresis;
+  }
+
+  return raw < 512 - kGateHysteresis;
+}
+
 uint16_t rawForIndex(uint8_t index, uint8_t count) {
   if (count <= 1) {
     return 0;
@@ -433,7 +494,7 @@ void readCurrentPage(const uint16_t values[], unsigned long now) {
 
 void readOscPage(const uint16_t values[], unsigned long now) {
   if (captureLivePot(0, values[0], rawForIndex(oscControls.waveform, kWaveCount))) {
-    const uint8_t next = mapToIndex(values[0], kWaveCount);
+    const uint8_t next = mapToIndexHysteresis(values[0], oscControls.waveform, kWaveCount);
     if (next != oscControls.waveform) {
       oscControls.waveform = next;
       setLastEditText("WAV", waveLabel(oscControls.waveform), now);
@@ -441,7 +502,7 @@ void readOscPage(const uint16_t values[], unsigned long now) {
   }
 
   if (captureLivePot(1, values[1], rawForIndex(oscControls.playMode, kPlayModeCount))) {
-    const uint8_t next = mapToIndex(values[1], kPlayModeCount);
+    const uint8_t next = mapToIndexHysteresis(values[1], oscControls.playMode, kPlayModeCount);
     if (next != oscControls.playMode) {
       oscControls.playMode = next;
       panicVoices();
@@ -450,7 +511,7 @@ void readOscPage(const uint16_t values[], unsigned long now) {
   }
 
   if (captureLivePot(2, values[2], rawForReverseRange((uint8_t)(oscControls.voicing + 12), 0, 24))) {
-    const int8_t next = mapToSigned(values[2], 12, -12);
+    const int8_t next = mapToSignedHysteresis(values[2], oscControls.voicing, 12, -12);
     if (next != oscControls.voicing) {
       oscControls.voicing = next;
       setLastEditNumber("VOI", oscControls.voicing, now);
@@ -458,7 +519,7 @@ void readOscPage(const uint16_t values[], unsigned long now) {
   }
 
   if (captureLivePot(3, values[3], rawForReverseRange((uint8_t)(oscControls.transpose + 24), 0, 48))) {
-    const int8_t next = mapToSigned(values[3], 24, -24);
+    const int8_t next = mapToSignedHysteresis(values[3], oscControls.transpose, 24, -24);
     if (next != oscControls.transpose) {
       oscControls.transpose = next;
       setLastEditNumber("TRN", oscControls.transpose, now);
@@ -468,7 +529,7 @@ void readOscPage(const uint16_t values[], unsigned long now) {
 
 void readOsc2Page(const uint16_t values[], unsigned long now) {
   if (captureLivePot(0, values[0], rawForIndex(osc2Controls.waveform, kWaveCount))) {
-    const uint8_t next = mapToIndex(values[0], kWaveCount);
+    const uint8_t next = mapToIndexHysteresis(values[0], osc2Controls.waveform, kWaveCount);
     if (next != osc2Controls.waveform) {
       osc2Controls.waveform = next;
       setLastEditText("2WV", waveLabel(osc2Controls.waveform), now);
@@ -476,7 +537,7 @@ void readOsc2Page(const uint16_t values[], unsigned long now) {
   }
 
   if (captureLivePot(1, values[1], rawForIndex(osc2Controls.envelope, kOsc2EnvelopeCount))) {
-    const uint8_t next = mapToIndex(values[1], kOsc2EnvelopeCount);
+    const uint8_t next = mapToIndexHysteresis(values[1], osc2Controls.envelope, kOsc2EnvelopeCount);
     if (next != osc2Controls.envelope) {
       osc2Controls.envelope = next;
       setLastEditText("2EN", osc2EnvelopeLabel(osc2Controls.envelope), now);
@@ -484,7 +545,7 @@ void readOsc2Page(const uint16_t values[], unsigned long now) {
   }
 
   if (captureLivePot(2, values[2], rawForReverseByte(osc2Controls.detune, 24))) {
-    const uint8_t next = mapToByte(values[2], 24, 0);
+    const uint8_t next = mapToByteHysteresis(values[2], osc2Controls.detune, 24, 0);
     if (next != osc2Controls.detune) {
       osc2Controls.detune = next;
       setLastEditNumber("2DT", osc2Controls.detune, now);
@@ -492,7 +553,7 @@ void readOsc2Page(const uint16_t values[], unsigned long now) {
   }
 
   if (captureLivePot(3, values[3], rawForReverseRange((uint8_t)(osc2Controls.transpose + 24), 0, 48))) {
-    const int8_t next = mapToSigned(values[3], 24, -24);
+    const int8_t next = mapToSignedHysteresis(values[3], osc2Controls.transpose, 24, -24);
     if (next != osc2Controls.transpose) {
       osc2Controls.transpose = next;
       setLastEditNumber("2TR", osc2Controls.transpose, now);
@@ -502,7 +563,7 @@ void readOsc2Page(const uint16_t values[], unsigned long now) {
 
 void readEnvPage(const uint16_t values[], unsigned long now) {
   if (captureLivePot(0, values[0], rawForIndex(envControls.envelope, kEnvelopeCount))) {
-    const uint8_t next = mapToIndex(values[0], kEnvelopeCount);
+    const uint8_t next = mapToIndexHysteresis(values[0], envControls.envelope, kEnvelopeCount);
     if (next != envControls.envelope) {
       envControls.envelope = next;
       setLastEditNumber("ENV", envControls.envelope, now);
@@ -510,7 +571,7 @@ void readEnvPage(const uint16_t values[], unsigned long now) {
   }
 
   if (captureLivePot(1, values[1], rawForReverseByte(envControls.length, 127))) {
-    const uint8_t next = mapToByte(values[1], 127, 0);
+    const uint8_t next = mapToByteHysteresis(values[1], envControls.length, 127, 0);
     if (next != envControls.length) {
       envControls.length = next;
       setLastEditNumber("LEN", envControls.length, now);
@@ -518,7 +579,7 @@ void readEnvPage(const uint16_t values[], unsigned long now) {
   }
 
   if (captureLivePot(2, values[2], rawForReverseByte(envControls.modulation, 127))) {
-    const uint8_t next = mapToByte(values[2], 127, 0);
+    const uint8_t next = mapToByteHysteresis(values[2], envControls.modulation, 127, 0);
     if (next != envControls.modulation) {
       envControls.modulation = next;
       setLastEditNumber("MOD", envControls.modulation, now);
@@ -526,7 +587,7 @@ void readEnvPage(const uint16_t values[], unsigned long now) {
   }
 
   if (captureLivePot(3, values[3], rawForReverseByte(envControls.glide, 127))) {
-    const uint8_t next = mapToByte(values[3], 127, 0);
+    const uint8_t next = mapToByteHysteresis(values[3], envControls.glide, 127, 0);
     if (next != envControls.glide) {
       envControls.glide = next;
       setLastEditNumber("GLD", envControls.glide, now);
@@ -536,7 +597,7 @@ void readEnvPage(const uint16_t values[], unsigned long now) {
 
 void readSeqPage(const uint16_t values[], unsigned long now) {
   if (captureLivePot(0, values[0], rawForRange(seqControls.bpm, 40, 240))) {
-    const uint8_t next = mapToByte(values[0], 40, 240);
+    const uint8_t next = mapToByteHysteresis(values[0], seqControls.bpm, 40, 240);
     if (next != seqControls.bpm) {
       seqControls.bpm = next;
       setLastEditNumber("BPM", seqControls.bpm, now);
@@ -544,7 +605,7 @@ void readSeqPage(const uint16_t values[], unsigned long now) {
   }
 
   if (captureLivePot(1, values[1], rawForReverseByte(seqControls.swing, 75))) {
-    const uint8_t next = mapToByte(values[1], 75, 0);
+    const uint8_t next = mapToByteHysteresis(values[1], seqControls.swing, 75, 0);
     if (next != seqControls.swing) {
       seqControls.swing = next;
       setLastEditNumber("SWG", seqControls.swing, now);
@@ -552,7 +613,7 @@ void readSeqPage(const uint16_t values[], unsigned long now) {
   }
 
   if (captureLivePot(2, values[2], rawForIndex(seqControls.scale, kScaleCount))) {
-    const uint8_t next = mapToIndex(values[2], kScaleCount);
+    const uint8_t next = mapToIndexHysteresis(values[2], seqControls.scale, kScaleCount);
     if (next != seqControls.scale) {
       seqControls.scale = next;
       setLastEditText("SCL", scaleLabel(seqControls.scale), now);
@@ -560,7 +621,7 @@ void readSeqPage(const uint16_t values[], unsigned long now) {
   }
 
   if (captureLivePot(3, values[3], rawForIndex(activeLane, kLaneCount))) {
-    const uint8_t next = mapToIndex(values[3], kLaneCount);
+    const uint8_t next = mapToIndexHysteresis(values[3], activeLane, kLaneCount);
     if (next != activeLane) {
       activeLane = next;
       setLastEditText("LAN", laneLabel(activeLane), now);
@@ -570,7 +631,7 @@ void readSeqPage(const uint16_t values[], unsigned long now) {
 
 void readPatPage(const uint16_t values[], unsigned long now) {
   if (captureLivePot(0, values[0], rawForIndex(activePattern, kPatternCount))) {
-    const uint8_t next = mapToIndex(values[0], kPatternCount);
+    const uint8_t next = mapToIndexHysteresis(values[0], activePattern, kPatternCount);
     if (next != activePattern) {
       activePattern = next;
       patControls.targetSlot = next;
@@ -580,7 +641,7 @@ void readPatPage(const uint16_t values[], unsigned long now) {
   }
 
   if (captureLivePot(1, values[1], rawForIndex(patControls.targetSlot, kPatternCount))) {
-    const uint8_t next = mapToIndex(values[1], kPatternCount);
+    const uint8_t next = mapToIndexHysteresis(values[1], patControls.targetSlot, kPatternCount);
     if (next != patControls.targetSlot) {
       patControls.targetSlot = next;
       setLastEditNumber("DST", patControls.targetSlot + 1, now);
@@ -588,7 +649,7 @@ void readPatPage(const uint16_t values[], unsigned long now) {
   }
 
   if (captureLivePot(2, values[2], rawForReverseByte(patControls.randomAmount, 100))) {
-    const uint8_t next = mapToByte(values[2], 100, 0);
+    const uint8_t next = mapToByteHysteresis(values[2], patControls.randomAmount, 100, 0);
     if (next != patControls.randomAmount) {
       patControls.randomAmount = next;
       setLastEditNumber("RND", patControls.randomAmount, now);
@@ -596,7 +657,7 @@ void readPatPage(const uint16_t values[], unsigned long now) {
   }
 
   if (captureLivePot(3, values[3], rawForIndex(visibleRange, 2))) {
-    const uint8_t next = mapToIndex(values[3], 2);
+    const uint8_t next = mapToIndexHysteresis(values[3], visibleRange, 2);
     if (next != visibleRange) {
       visibleRange = next;
       setLastEditText("RNG", visibleRange ? "916" : "1-8", now);
@@ -606,7 +667,7 @@ void readPatPage(const uint16_t values[], unsigned long now) {
 
 void readFxPage(const uint16_t values[], unsigned long now) {
   if (captureLivePot(0, values[0], rawForReverseRange(fxControls.sampleHoldFrames, 1, 16))) {
-    const uint8_t next = mapToByte(values[0], 16, 1);
+    const uint8_t next = mapToByteHysteresis(values[0], fxControls.sampleHoldFrames, 16, 1);
     if (next != fxControls.sampleHoldFrames) {
       fxControls.sampleHoldFrames = next;
       setLastEditNumber("HLD", fxControls.sampleHoldFrames, now);
@@ -620,7 +681,7 @@ void readFxPage(const uint16_t values[], unsigned long now) {
 
 void readUtilityPage(const uint16_t values[], unsigned long now) {
   if (captureLivePot(0, values[0], 1023)) {
-    const uint8_t next = mapToIndex(values[0], 4);
+    const uint8_t next = mapToIndexHysteresis(values[0], utilityAction, 4);
     if (next != utilityAction) {
       utilityAction = next;
       if (utilityAction == 0) {
@@ -649,31 +710,31 @@ void readStepPots(unsigned long now) {
     const uint16_t raw = readMedianAnalog(kPitchAnalogPin);
 
     if (activeLane == LANE_NOTE) {
-      const uint8_t next = mapToByte(raw, 84, 12);
+      const uint8_t next = mapToByteHysteresis(raw, patterns[activePattern].note[step], 84, 12);
       if (next != patterns[activePattern].note[step]) {
         patterns[activePattern].note[step] = next;
         setLastEditNumber("NOT", quantizeNoteWithTranspose(next), now);
       }
     } else if (activeLane == LANE_GATE) {
-      const bool enabled = raw < 512;
+      const bool enabled = mapToGateHysteresis(raw, stepGate(activePattern, step));
       if (enabled != stepGate(activePattern, step)) {
         setStepGate(activePattern, step, enabled);
         setLastEditText("GAT", enabled ? "ON " : "OFF", now);
       }
     } else if (activeLane == LANE_PROB) {
-      const uint8_t next = mapToByte(raw, 100, 0);
+      const uint8_t next = mapToByteHysteresis(raw, patterns[activePattern].probability[step], 100, 0);
       if (next != patterns[activePattern].probability[step]) {
         patterns[activePattern].probability[step] = next;
         setLastEditNumber("PRB", patterns[activePattern].probability[step], now);
       }
     } else if (activeLane == LANE_RATCHET) {
-      const uint8_t next = mapToByte(raw, 4, 1);
+      const uint8_t next = mapToByteHysteresis(raw, patterns[activePattern].ratchet[step], 4, 1);
       if (next != patterns[activePattern].ratchet[step]) {
         patterns[activePattern].ratchet[step] = next;
         setLastEditNumber("RAT", patterns[activePattern].ratchet[step], now);
       }
     } else {
-      const int8_t next = mapToSigned(raw, 12, -12);
+      const int8_t next = mapToSignedHysteresis(raw, patterns[activePattern].voicingLock[step], 12, -12);
       if (next != patterns[activePattern].voicingLock[step]) {
         patterns[activePattern].voicingLock[step] = next;
         setLastEditNumber("LCK", patterns[activePattern].voicingLock[step], now);
