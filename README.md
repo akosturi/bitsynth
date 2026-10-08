@@ -1,6 +1,6 @@
 # bitsynth
 
-An Arduino Pro Mini based 8-bit wavetable synth with a 16-step performance sequencer.
+An Arduino Pro Mini based 9-bit wavetable synth with a 16-step performance sequencer.
 
 ## Credits
 
@@ -11,7 +11,7 @@ https://github.com/dzlonline/the_synth
 
 The sketch is designed for a 16 MHz AVR Arduino with Timer1 9-bit PWM support, such as a Pro Mini, Nano, or Uno.
 
-Audio is generated with high-speed 9-bit PWM on Timer1. The default output mode is `CHA`, which uses Arduino pin 9. Timer2 provides the 20 kHz audio interrupt. Use an external analog low-pass/output filter after the PWM pin.
+Audio is generated with high-speed 9-bit PWM on Timer1 from 512-sample oscillator wavetables. The default output mode is `CHA`, which uses Arduino pin 9. Timer2 provides the 20 kHz audio interrupt. Use an external analog low-pass/output filter after the PWM pin.
 
 The UI expects four control groups selected by the three mux address pins:
 
@@ -29,7 +29,6 @@ Copy the files into a folder and open `bitsynth.ino` with the Arduino IDE.
 
 Install the official `LiquidCrystal` library from Library Manager if your IDE or CLI setup does not already provide it. The synth engine and wavetable data are included locally as `synth.h` and `tables.h`.
 
-QuickStats is not required; analog median filtering is handled inside the sketch with integer samples.
 
 ## Performance Controls
 

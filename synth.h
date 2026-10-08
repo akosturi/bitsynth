@@ -43,6 +43,8 @@
 const uint8_t SYNTH_VOICE_COUNT = 4;
 const uint8_t SYNTH_MIDI_NOTE_MAX = 127;
 const uint8_t SYNTH_LENGTH_MAX = 127;
+const uint8_t SYNTH_WAVETABLE_INDEX_BITS = 9;
+const uint8_t SYNTH_WAVETABLE_SHIFT = 16 - SYNTH_WAVETABLE_INDEX_BITS;
 
 volatile uint16_t PCW[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
 volatile uint16_t FTW[SYNTH_VOICE_COUNT] = {1000, 200, 300, 400};
@@ -99,10 +101,10 @@ ISR(TIMER2_COMPA_vect)
   //-------------------------------
 
   int16_t mixQ7 =
-    (((int8_t)pgm_read_byte(wavs[0] + ((uint8_t*)&(PCW[0] += FTW[0]))[1]) * AMP[0]) >> 2) +
-    (((int8_t)pgm_read_byte(wavs[1] + ((uint8_t*)&(PCW[1] += FTW[1]))[1]) * AMP[1]) >> 2) +
-    (((int8_t)pgm_read_byte(wavs[2] + ((uint8_t*)&(PCW[2] += FTW[2]))[1]) * AMP[2]) >> 2) +
-    (((int8_t)pgm_read_byte(wavs[3] + ((uint8_t*)&(PCW[3] += FTW[3]))[1]) * AMP[3]) >> 2);
+    (((int8_t)pgm_read_byte(wavs[0] + ((PCW[0] += FTW[0]) >> SYNTH_WAVETABLE_SHIFT)) * AMP[0]) >> 2) +
+    (((int8_t)pgm_read_byte(wavs[1] + ((PCW[1] += FTW[1]) >> SYNTH_WAVETABLE_SHIFT)) * AMP[1]) >> 2) +
+    (((int8_t)pgm_read_byte(wavs[2] + ((PCW[2] += FTW[2]) >> SYNTH_WAVETABLE_SHIFT)) * AMP[2]) >> 2) +
+    (((int8_t)pgm_read_byte(wavs[3] + ((PCW[3] += FTW[3]) >> SYNTH_WAVETABLE_SHIFT)) * AMP[3]) >> 2);
 
   bool updateOutput = true;
   if (sampleHoldFrames > 1) {
