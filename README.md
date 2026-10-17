@@ -1,6 +1,6 @@
 # bitsynth
 
-An Arduino Pro Mini based 9-bit wavetable synth with a 16-step performance sequencer.
+An Arduino Pro Mini based 9-bit wavetable synth with a simplified 8-step performance UI.
 
 ## Credits
 
@@ -32,14 +32,60 @@ Install the official `LiquidCrystal` library from Library Manager if your IDE or
 
 ## Performance Controls
 
-The 8 step pots edit the current lane for the visible 8-step range. The 8 step buttons toggle gates for the visible steps. The extra button controls pages and Shift functions. Page order is `OSC`, `O2`, `ENV`, `SEQ`, `PAT`, `FX`, `UTL`.
+The current UI is intentionally reduced to the controls that fit the small display and panel:
+
+- Live pot 1: oscillator waveform `SIN`, `TRI`, `SQR`, `SAW`, `RMP`, `NOI`
+- Live pot 2: speed, `40`-`240` BPM
+- Live pot 3: envelope length, `0`-`127`
+- Live pot 4: pitch modulation, `0`-`127`, with `64` near neutral
+- Step buttons 1-8: toggle the matching sequencer step on/off
+- Step pots 1-8: set the matching step pitch in semitone increments across four octaves
+
+When a step pot changes, the LCD briefly shows the edited step's note name, for example `C2` or `E1`. If the pitch does not change again, the display returns to the main screen after 500 ms.
+
+The extra button, page switching, Shift shortcuts, utility actions, pattern selection, and alternate sequencer lanes are currently not exposed on the panel.
+
+## LCD Dashboard
+
+The main screen is a compact performance dashboard:
+
+```text
+SIN 126  64  64
+x-xOxx--
+```
+
+Top row:
+
+- Oscillator waveform
+- Speed in BPM
+- Envelope length
+- Pitch modulation
+
+Bottom row:
+
+- `x`: gated step
+- `-`: empty/off step
+- `O`: currently playing gated step
+- `o`: currently playing empty/off step
+
+The active playback loop is currently 8 steps. The pattern data structure still stores 16 steps internally, but steps 9-16 and the range switch are not exposed by the simplified UI.
+
+## Implemented But Not Currently Exposed
+
+The firmware still contains several features that were added before the UI was simplified. They are intentionally kept in the code for later UI work, but they are not reachable from the current panel controls.
+
+### Page System And Shift Shortcuts
+
+The previous page order was `OSC`, `O2`, `ENV`, `SEQ`, `PAT`, `FX`, `UTL`.
+
+Previously, the extra button handled:
 
 - Short press: next page
 - Double press: previous page
 - Hold: Shift mode
 - Long hold: panic voices and jump to `UTL`
 
-Shift + step buttons:
+Previously, Shift + step buttons handled:
 
 - `Shift+B1`: note lane `N`
 - `Shift+B2`: gate lane `G`
@@ -50,39 +96,8 @@ Shift + step buttons:
 - `Shift+B7`: clear current lane in the visible range
 - `Shift+B8`: randomize current lane in the visible range
 
-## LCD Dashboard
+### `OSC` Page Features
 
-The default screen is a compact performance dashboard:
-
-```text
-P1 N 1-8  126B
-x-xOxx-- WAVSIN
-```
-
-Top row:
-
-- `P1`: active RAM pattern slot
-- `N`, `G`, `P`, `R`, `L`: active lane
-- `1-8` / `9-16`: visible step range
-- `126B`: tempo in BPM
-
-Bottom row:
-
-- `x`: gated step
-- `-`: empty/off step
-- `O`: currently playing gated step
-- `o`: currently playing empty/off step
-- Last six characters: last edited parameter and value
-
-After page or pot edits, the LCD briefly shows a page view and then returns to the dashboard. Pickup hints use `<` or `>` when a live pot has not yet crossed the stored value.
-
-## Pages
-
-The 4 live control pots edit the active page. Soft-takeover applies to these pots after page changes and pattern loads.
-
-### `OSC`
-
-- Pot 1: waveform `SIN`, `TRI`, `SQR`, `SAW`, `RMP`, `NOI`
 - Pot 2: play mode `SCL`, `CHD`, `ARP`
 - Pot 3: voicing dial, `-12` to `+12`
 - Pot 4: global transpose, `-24` to `+24` semitones
@@ -91,7 +106,9 @@ The 4 live control pots edit the active page. Soft-takeover applies to these pot
 
 The voicing dial shifts chord inversions by moving the lowest note up an octave for positive values, or the highest note down an octave for negative values. The `L` lane adds a per-step voicing offset on top of this global value.
 
-### `O2`
+The waveform part of this page is still exposed as live pot 1.
+
+### `O2` Page Features
 
 - Pot 1: OSC2 waveform `SIN`, `TRI`, `SQR`, `SAW`, `RMP`, `NOI`
 - Pot 2: OSC2 envelope/off `OFF`, `E0`-`E3`
@@ -100,23 +117,24 @@ The voicing dial shifts chord inversions by moving the lowest note up an octave 
 
 OSC2 is silent when its envelope is `OFF`. When enabled, it uses its own waveform, envelope table, detune, and transpose while sharing the global length, pitch modulation, and glide controls.
 
-### `ENV`
+### `ENV` Page Features
 
 - Pot 1: envelope table `E0`-`E3`
-- Pot 2: envelope length, `0`-`127`
-- Pot 3: pitch modulation, `0`-`127`, with `64` near neutral
 - Pot 4: glide amount, `0`-`127`
 
-### `SEQ`
+Envelope length and pitch modulation are still exposed as live pots 3 and 4.
 
-- Pot 1: tempo, `40`-`240` BPM
+### `SEQ` Page Features
+
 - Pot 2: swing amount
 - Pot 3: scale `CHR`, `MAJ`, `MIN`, `PEN`, `BLU`
 - Pot 4: active lane `N`, `G`, `P`, `R`, `L`
 
 Chord quality follows the scale: `CHR` and `MAJ` make major triads, `MIN` and `BLU` make minor triads, and `PEN` makes a suspended/power-style triad.
 
-### `PAT`
+Tempo is still exposed as live pot 2.
+
+### `PAT` Page Features
 
 - Pot 1: active RAM pattern slot `P1`-`P4`
 - Pot 2: destination/status slot display
@@ -125,14 +143,14 @@ Chord quality follows the scale: `CHR` and `MAJ` make major triads, `MIN` and `B
 
 Pattern slots are RAM-only and do not survive power-off. Copy/paste uses the RAM clipboard from the Shift shortcuts.
 
-### `FX`
+### `FX` Page Features
 
 - Pot 1: sample-hold/bitcrush amount, `H01`-`H16`
 - Pots 2-4: unused
 
 `H01` is clean output. Higher values hold the PWM sample longer for a rougher digital sound.
 
-### `UTL`
+### `UTL` Page Features
 
 Long-hold the extra button to enter `UTL` and panic the voices. In `UTL`, normal step buttons trigger utility actions:
 
@@ -143,21 +161,23 @@ Long-hold the extra button to enter `UTL` and panic the voices. In `UTL`, normal
 
 ## Sequencer Lanes
 
-- `N` note lane: step pots set notes for the visible range.
-- `G` gate lane: step pots set gate on/off by midpoint; step buttons also toggle gates.
-- `P` probability lane: step pots set trigger probability from `0`-`100`.
-- `R` ratchet lane: step pots set `1`-`4` retriggers inside the step.
-- `L` lock lane: step pots set a per-step voicing offset from `-12` to `+12`.
+Only direct note editing and gate toggles are currently exposed.
 
-Playback always runs through all 16 steps. The visible range only chooses which 8 steps the pots and buttons are editing. Gate and probability are checked once at the start of a step; ratchets only happen when that first trigger fires.
+- `N` note lane: step pots set notes for steps 1-8.
+- `G` gate lane: step buttons toggle gates for steps 1-8.
+- `P` probability lane: still implemented internally; not currently exposed.
+- `R` ratchet lane: still implemented internally; not currently exposed.
+- `L` lock lane: still implemented internally; not currently exposed.
+
+Gate and probability are checked once at the start of a step; ratchets only happen when that first trigger fires.
 
 ## Current Limitations
 
 - Pattern slots and clipboard are RAM-only; there is no EEPROM persistence yet.
 - There is no `FIL` page because the current synth engine has no real filter stage. `synth.h` keeps a legacy `setFilter()` stub, but it does not affect audio.
 - There is no LFO, mixer page, accent lane, modulation lane, or general-purpose parameter-lock lane yet. The `L` lane is intentionally limited to voicing locks to keep RAM and UI pressure low.
-- Step pots are direct controls. Soft-takeover is only used on the 4 live page pots.
-- In gate lane, step pots continuously represent gate state, so a button toggle may be overwritten if the matching pot remains on the other side of the midpoint.
+- The current panel UI exposes only one 8-step loop even though the pattern structure still has 16 step slots.
+- Step pots and live pots are direct controls in the simplified UI; soft-takeover is currently not used.
 
 ## Notes
 

@@ -33,12 +33,16 @@ const uint8_t kAnalogFilterFractionBits = 4;
 const uint8_t kAnalogFilterAlphaNumerator = 5;
 const uint8_t kAnalogFilterAlphaDenominator = 16;
 const uint8_t kMuxSettleUs = 50;
+const uint8_t kPlaybackStepCount = kVisibleStepCount;
+const uint8_t kStepNoteMin = 24;
+const uint8_t kStepNoteMax = kStepNoteMin + 47;
 
 const uint8_t kButtonDebounceMs = 25;
 const uint16_t kDoublePressMs = 320;
 const uint16_t kShiftHoldMs = 260;
 const uint16_t kUtilityLongPressMs = 1000;
 const uint16_t kEditViewMs = 1200;
+const uint16_t kNoteEditViewMs = 500;
 const uint16_t kPickupHysteresis = 18;
 const uint8_t kAnalogValueHysteresis = 4;
 const uint8_t kGateHysteresis = 18;
@@ -206,6 +210,8 @@ char lastEditLabel[4] = {'W', 'A', 'V', '\0'};
 char lastEditValue[4] = {'S', 'I', 'N', '\0'};
 unsigned long editViewUntilMs = 0;
 bool displayDirty = true;
+uint8_t editedNoteStep = 0;
+bool noteEditVisible = false;
 
 void setup() {
   initPatterns();
@@ -480,11 +486,39 @@ void readControls(unsigned long now) {
     settingValues[channel] = filterAnalog(raw, filteredSettingRaw[channel], settingFilterReady[channel]);
   }
 
-  readCurrentPage(settingValues, now);
+  readPerformanceControls(settingValues, now);
   readStepPots(now);
 
   for (uint8_t channel = 0; channel < kSettingsCount; ++channel) {
     lastLivePotRaw[channel] = settingValues[channel];
+  }
+}
+
+void readPerformanceControls(const uint16_t values[], unsigned long now) {
+  (void)now;
+
+  const uint8_t nextWaveform = mapToIndexHysteresis(values[0], oscControls.waveform, kWaveCount);
+  if (nextWaveform != oscControls.waveform) {
+    oscControls.waveform = nextWaveform;
+    displayDirty = true;
+  }
+
+  const uint8_t nextBpm = mapToByteHysteresis(values[1], seqControls.bpm, 40, 240);
+  if (nextBpm != seqControls.bpm) {
+    seqControls.bpm = nextBpm;
+    displayDirty = true;
+  }
+
+  const uint8_t nextLength = mapToByteHysteresis(values[2], envControls.length, 127, 0);
+  if (nextLength != envControls.length) {
+    envControls.length = nextLength;
+    displayDirty = true;
+  }
+
+  const uint8_t nextModulation = mapToByteHysteresis(values[3], envControls.modulation, 127, 0);
+  if (nextModulation != envControls.modulation) {
+    envControls.modulation = nextModulation;
+    displayDirty = true;
   }
 }
 
@@ -725,89 +759,23 @@ void readUtilityPage(const uint16_t values[], unsigned long now) {
 }
 
 void readStepPots(unsigned long now) {
-  const uint8_t baseStep = visibleRange ? 8 : 0;
-
   for (uint8_t slot = 0; slot < kVisibleStepCount; ++slot) {
-    const uint8_t step = baseStep + slot;
+    const uint8_t step = slot;
     selectMuxChannel(slot);
     const uint16_t raw = filterAnalog(readMedianAnalog(kPitchAnalogPin), filteredStepRaw[slot], stepFilterReady[slot]);
 
-    if (activeLane == LANE_NOTE) {
-      const uint8_t next = mapToByteHysteresis(raw, patterns[activePattern].note[step], 84, 12);
-      if (next != patterns[activePattern].note[step]) {
-        patterns[activePattern].note[step] = next;
-        setLastEditNumber("NOT", quantizeNoteWithTranspose(next), now);
-      }
-    } else if (activeLane == LANE_GATE) {
-      const bool enabled = mapToGateHysteresis(raw, stepGate(activePattern, step));
-      if (enabled != stepGate(activePattern, step)) {
-        setStepGate(activePattern, step, enabled);
-        setLastEditText("GAT", enabled ? "ON " : "OFF", now);
-      }
-    } else if (activeLane == LANE_PROB) {
-      const uint8_t next = mapToByteHysteresis(raw, patterns[activePattern].probability[step], 100, 0);
-      if (next != patterns[activePattern].probability[step]) {
-        patterns[activePattern].probability[step] = next;
-        setLastEditNumber("PRB", patterns[activePattern].probability[step], now);
-      }
-    } else if (activeLane == LANE_RATCHET) {
-      const uint8_t next = mapToByteHysteresis(raw, patterns[activePattern].ratchet[step], 4, 1);
-      if (next != patterns[activePattern].ratchet[step]) {
-        patterns[activePattern].ratchet[step] = next;
-        setLastEditNumber("RAT", patterns[activePattern].ratchet[step], now);
-      }
-    } else {
-      const int8_t next = mapToSignedHysteresis(raw, patterns[activePattern].voicingLock[step], 12, -12);
-      if (next != patterns[activePattern].voicingLock[step]) {
-        patterns[activePattern].voicingLock[step] = next;
-        setLastEditNumber("LCK", patterns[activePattern].voicingLock[step], now);
-      }
+    const uint8_t next = mapToByteHysteresis(raw, patterns[activePattern].note[step], kStepNoteMax, kStepNoteMin);
+    if (next != patterns[activePattern].note[step]) {
+      patterns[activePattern].note[step] = next;
+      editedNoteStep = step;
+      editViewUntilMs = now + kNoteEditViewMs;
+      displayDirty = true;
     }
   }
 }
 
 void scanExtraButton(unsigned long now) {
-  selectMuxChannel(0);
-  const uint8_t reading = digitalRead(kExtraButtonPin);
-
-  if (reading != extraButtonLastReading) {
-    extraButtonLastChangeMs = now;
-    extraButtonLastReading = reading;
-  }
-
-  if ((now - extraButtonLastChangeMs) >= kButtonDebounceMs && reading != extraButtonStableState) {
-    extraButtonStableState = reading;
-
-    if (reading == LOW) {
-      extraButtonHeld = true;
-      extraButtonPressedAtMs = now;
-      extraButtonLongHandled = false;
-      shiftActionUsed = false;
-      displayDirty = true;
-    } else {
-      const unsigned long heldFor = now - extraButtonPressedAtMs;
-      extraButtonHeld = false;
-
-      if (!extraButtonLongHandled && !shiftActionUsed && heldFor < kShiftHoldMs) {
-        handleExtraButtonClick(now);
-      }
-
-      displayDirty = true;
-    }
-  }
-
-  if (extraButtonHeld && !extraButtonLongHandled &&
-      (now - extraButtonPressedAtMs) >= kUtilityLongPressMs && !shiftActionUsed) {
-    panicVoices();
-    changePage(PAGE_UTL, now);
-    setLastEditText("UTL", "PNC", now);
-    extraButtonLongHandled = true;
-  }
-
-  if (pendingSingleClick && (now - pendingClickMs) > kDoublePressMs) {
-    changePage((uint8_t)((controlPage + 1) % kPageCount), now);
-    pendingSingleClick = false;
-  }
+  (void)now;
 }
 
 bool shiftActive(unsigned long now) {
@@ -835,8 +803,6 @@ void changePage(uint8_t nextPage, unsigned long now) {
 }
 
 void scanStepButtons(unsigned long now) {
-  const bool shifted = shiftActive(now);
-
   for (uint8_t slot = 0; slot < kVisibleStepCount; ++slot) {
     selectMuxChannel(slot);
     const uint8_t reading = digitalRead(kStepButtonPin);
@@ -851,26 +817,17 @@ void scanStepButtons(unsigned long now) {
       stepButtonStableState[slot] = reading;
 
       if (reading == LOW) {
-        if (shifted) {
-          handleShiftStepButton(slot, now);
-        } else {
-          handleStepButton(slot, now);
-        }
+        handleStepButton(slot, now);
       }
     }
   }
 }
 
 void handleStepButton(uint8_t slot, unsigned long now) {
-  if (controlPage == PAGE_UTL) {
-    handleUtilityButton(slot, now);
-    return;
-  }
-
-  const uint8_t step = (visibleRange ? 8 : 0) + slot;
+  (void)now;
+  const uint8_t step = slot;
   const bool enabled = !stepGate(activePattern, step);
   setStepGate(activePattern, step, enabled);
-  setLastEditText("GAT", enabled ? "ON " : "OFF", now);
 }
 
 void handleUtilityButton(uint8_t slot, unsigned long now) {
@@ -1075,7 +1032,7 @@ void runSequencer(unsigned long now) {
   nextStepIntervalMs = intervalAfterStep(currentStep);
   playStep(currentStep, nextStepIntervalMs);
   playingStep = currentStep;
-  currentStep = (currentStep + 1) & 0x0F;
+  currentStep = (currentStep + 1) % kPlaybackStepCount;
   displayDirty = true;
 }
 
@@ -1557,13 +1514,15 @@ void renderDisplay(unsigned long now) {
   const bool controlsChanged = controlsChangedForDisplay();
   const bool stepChanged = renderedStep != playingStep;
   const bool shiftChanged = shiftActive(now) != lastDisplayedShift;
+  const bool showNoteEdit = now < editViewUntilMs;
+  const bool displayModeChanged = showNoteEdit != noteEditVisible;
 
-  if (!displayDirty && !controlsChanged && !stepChanged && !shiftChanged) {
+  if (!displayDirty && !controlsChanged && !stepChanged && !shiftChanged && !displayModeChanged) {
     return;
   }
 
-  if (now < editViewUntilMs) {
-    renderPageView(now);
+  if (showNoteEdit) {
+    renderNoteEditView();
   } else {
     renderDashboard(now);
   }
@@ -1580,31 +1539,38 @@ void renderDisplay(unsigned long now) {
   lastDisplayedPatControls = patControls;
   lastDisplayedFxControls = fxControls;
   lastDisplayedShift = shiftActive(now);
+  noteEditVisible = showNoteEdit;
   displayDirty = false;
 }
 
 void renderDashboard(unsigned long now) {
+  (void)now;
   lcd.setCursor(0, 0);
-  lcd.print('P');
-  lcd.print(activePattern + 1);
+  lcd.print(waveLabel(oscControls.waveform));
   lcd.print(' ');
-  lcd.print(laneLabel(activeLane)[0]);
-  lcd.print(' ');
-  if (visibleRange) {
-    lcd.print(F("9-16 "));
-  } else {
-    lcd.print(F("1-8  "));
-  }
   printPadded3(seqControls.bpm);
-  lcd.print('B');
-  printSpaces(2);
+  lcd.print(' ');
+  printPadded3(envControls.length);
+  lcd.print(' ');
+  printPadded3(envControls.modulation);
+  printSpaces(1);
 
   lcd.setCursor(0, 1);
   printStepMask();
-  lcd.print(' ');
-  lcd.print(lastEditLabel);
-  lcd.print(lastEditValue);
-  printSpaces(1);
+  printSpaces(8);
+}
+
+void renderNoteEditView() {
+  lcd.setCursor(0, 0);
+  lcd.print(F("                "));
+  lcd.setCursor(0, 0);
+  lcd.print(F("STEP "));
+  lcd.print(editedNoteStep + 1);
+
+  lcd.setCursor(0, 1);
+  lcd.print(F("                "));
+  lcd.setCursor(0, 1);
+  printNoteName(patterns[activePattern].note[editedNoteStep]);
 }
 
 void printText3OrHint(uint8_t pot, const char *text) {
@@ -1644,10 +1610,8 @@ void printSigned3OrHint(uint8_t pot, int8_t value) {
 }
 
 void printStepMask() {
-  const uint8_t baseStep = visibleRange ? 8 : 0;
-
   for (uint8_t slot = 0; slot < kVisibleStepCount; ++slot) {
-    const uint8_t step = baseStep + slot;
+    const uint8_t step = slot;
     const bool enabled = stepGate(activePattern, step);
 
     if (step == playingStep) {
@@ -1656,6 +1620,49 @@ void printStepMask() {
       lcd.print(enabled ? 'x' : '-');
     }
   }
+}
+
+void printNoteName(uint8_t note) {
+  switch (note % 12) {
+    case 0:
+      lcd.print('C');
+      break;
+    case 1:
+      lcd.print(F("C#"));
+      break;
+    case 2:
+      lcd.print('D');
+      break;
+    case 3:
+      lcd.print(F("D#"));
+      break;
+    case 4:
+      lcd.print('E');
+      break;
+    case 5:
+      lcd.print('F');
+      break;
+    case 6:
+      lcd.print(F("F#"));
+      break;
+    case 7:
+      lcd.print('G');
+      break;
+    case 8:
+      lcd.print(F("G#"));
+      break;
+    case 9:
+      lcd.print('A');
+      break;
+    case 10:
+      lcd.print(F("A#"));
+      break;
+    default:
+      lcd.print('B');
+      break;
+  }
+
+  lcd.print((int8_t)(note / 12) - 1);
 }
 
 void renderPageView(unsigned long now) {
