@@ -16,6 +16,8 @@ const uint8_t kStepCount = 8;
 const uint8_t kSettingCount = 4;
 const uint8_t kStepPotsPerLoop = 2;
 const uint8_t kDroneWaveCount = 4;
+const uint8_t kPlayMorphWaveCount = 4;
+const uint8_t kPlayMorphOff = 255;
 const uint8_t kSeqPresetCount = 9;
 const uint8_t kLivePresetCount = 8;
 const uint8_t kDrumCount = 4;
@@ -127,6 +129,10 @@ uint16_t droneLfoRateTenths[kSettingCount] = {0, 0, 0, 0};
 uint16_t droneLfoShiftRaw[kSettingCount] = {0, 0, 0, 0};
 bool droneWaveLocked[kSettingCount] = {false, false, false, false};
 uint16_t dronePitchWord[kStepCount] = {0};
+uint8_t playMorphWave = kPlayMorphOff;
+uint16_t playMorphLfoRateTenths = 0;
+uint16_t playMorphShiftRaw[2] = {0, 0};
+bool playMorphControlLocked[2] = {false, false};
 
 uint8_t currentStep = 0;
 uint8_t playingStep = 255;
@@ -182,6 +188,7 @@ uint8_t editedDrone = 255;
 uint16_t editedDroneHz = 0;
 uint8_t editedDroneLfo = 255;
 uint16_t editedDroneLfoRateTenths = 0;
+uint8_t editedPlayMorph = 0;
 unsigned long inlineEditUntilMs = 0;
 char displayFrame[2][17];
 char renderedFrame[2][16];
@@ -353,6 +360,19 @@ uint8_t mapIndexHysteresis(uint16_t raw, uint8_t current, uint8_t count) {
   return current;
 }
 
+uint8_t playMorphWaveForRaw(uint16_t raw) {
+  const uint16_t offBoundary = 1023 - kAnalogEndpointMargin;
+  if (playMorphWave == kPlayMorphOff) {
+    if (raw + kAnalogHysteresis >= offBoundary) return kPlayMorphOff;
+  } else if (raw >= offBoundary) {
+    return kPlayMorphOff;
+  }
+
+  const uint16_t scaled = ((uint32_t)min(raw, offBoundary) * 1023UL) / offBoundary;
+  const uint8_t current = playMorphWave == kPlayMorphOff ? 0 : playMorphWave;
+  return mapIndexHysteresis(scaled, current, kPlayMorphWaveCount);
+}
+
 void setEditText(const char *title, const char *value, unsigned long now) {
   copyText(editTitle, title, sizeof(editTitle)); copyText(editValue, value, sizeof(editValue));
   editUntilMs = now + kEditViewMs; displayDirty = true;
@@ -409,17 +429,75 @@ void readSequencerControls(const uint16_t values[], unsigned long now) {
 void revoiceHeldButtons();
 
 void readPlayControls(const uint16_t values[], unsigned long now) {
-  (void)now;
-  uint8_t next = mapIndexHysteresis(values[0], playControls.preset, kLivePresetCount);
-  if (next != playControls.preset) {
-    playControls.preset = next; applyLiveConfiguration(); revoiceHeldButtons();
-    displayDirty = true;
+  if (modeButtonStable == LOW) {
+    if (values[1] != playMorphShiftRaw[1]) {
+      playMorphShiftRaw[1] = values[1];
+      playMorphControlLocked[1] = true;
+      modeButtonChordUsed = true;
+      const uint8_t nextWave = playMorphWaveForRaw(values[1]);
+      if (nextWave != playMorphWave) {
+        playMorphWave = nextWave;
+        applyLiveConfiguration();
+        editedPlayMorph = 1;
+        editedStep = 255;
+        editedDrone = 255;
+        editedDroneLfo = 255;
+        inlineEditUntilMs = now + kEditViewMs;
+        displayDirty = true;
+      }
+    }
+
+    if (values[0] != playMorphShiftRaw[0]) {
+      playMorphShiftRaw[0] = values[0];
+      playMorphControlLocked[0] = true;
+      modeButtonChordUsed = true;
+      if (playMorphWave == kPlayMorphOff) {
+        editedPlayMorph = 1;
+        inlineEditUntilMs = now + kEditViewMs;
+        displayDirty = true;
+      } else {
+        const uint16_t nextRate = droneLfoRateForRaw(values[0]);
+        if (nextRate != playMorphLfoRateTenths) {
+          playMorphLfoRateTenths = nextRate;
+          applyLiveConfiguration();
+          editedPlayMorph = 2;
+          editedStep = 255;
+          editedDrone = 255;
+          editedDroneLfo = 255;
+          inlineEditUntilMs = now + kEditViewMs;
+          displayDirty = true;
+        }
+      }
+    }
+    return;
   }
-  next = mapIndexHysteresis(values[1], playControls.root, 12);
-  if (next != playControls.root) {
-    playControls.root = next; revoiceHeldButtons(); displayDirty = true;
+
+  if (playMorphControlLocked[0]) {
+    if (abs((int16_t)values[0] - (int16_t)playMorphShiftRaw[0]) >= kSettingMovementThreshold) {
+      playMorphControlLocked[0] = false;
+    }
   }
-  next = mapIndexHysteresis(values[2], playControls.scale, kScaleCount);
+  if (!playMorphControlLocked[0]) {
+    const uint8_t next = mapIndexHysteresis(values[0], playControls.preset, kLivePresetCount);
+    if (next != playControls.preset) {
+      playControls.preset = next; applyLiveConfiguration(); revoiceHeldButtons();
+      displayDirty = true;
+    }
+  }
+
+  if (playMorphControlLocked[1]) {
+    if (abs((int16_t)values[1] - (int16_t)playMorphShiftRaw[1]) >= kSettingMovementThreshold) {
+      playMorphControlLocked[1] = false;
+    }
+  }
+  if (!playMorphControlLocked[1]) {
+    const uint8_t next = mapIndexHysteresis(values[1], playControls.root, 12);
+    if (next != playControls.root) {
+      playControls.root = next; revoiceHeldButtons(); displayDirty = true;
+    }
+  }
+
+  uint8_t next = mapIndexHysteresis(values[2], playControls.scale, kScaleCount);
   if (next != playControls.scale) {
     playControls.scale = next; revoiceHeldButtons(); displayDirty = true;
   }
@@ -527,7 +605,10 @@ void scanModeButton(unsigned long now) {
       modeButtonPressedAt = now;
       modeButtonLongHandled = false;
       modeButtonChordUsed = false;
-      if (instrumentMode == MODE_DRONE) {
+      if (instrumentMode == MODE_PLAY) {
+        playMorphShiftRaw[0] = settingValues[0];
+        playMorphShiftRaw[1] = settingValues[1];
+      } else if (instrumentMode == MODE_DRONE) {
         for (uint8_t pair = 0; pair < kSettingCount; ++pair) {
           droneLfoShiftRaw[pair] = settingValues[pair];
         }
@@ -588,7 +669,10 @@ void changeMode(InstrumentMode nextMode, unsigned long now) {
   if (nextMode == instrumentMode) return;
   const InstrumentMode previous = instrumentMode;
   if (previous == MODE_DRONE) { edgar.stopAllDrones(); edgar.setDroneMode(false); }
-  if (previous == MODE_PLAY) clearHeldNotes();
+  if (previous == MODE_PLAY) {
+    clearHeldNotes();
+    edgar.disablePlayMorph();
+  }
   edgar.stopDrum();
   stopNormalVoices();
   instrumentMode = nextMode;
@@ -761,8 +845,12 @@ void runSequencer(unsigned long now) {
 
 void applyLiveConfiguration() {
   LivePreset preset; readLivePreset(playControls.preset, preset);
+  const bool secondaryEnabled = playMorphWave != kPlayMorphOff;
+  const uint8_t secondaryWave = secondaryEnabled ? playMorphWave : SINE;
+  edgar.configurePlayMorph(
+    preset.wave, secondaryWave, playMorphLfoRateTenths, secondaryEnabled);
   for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) {
-    edgar.setWave(voice, preset.wave); edgar.setEnvelope(voice, preset.envelope);
+    edgar.setEnvelope(voice, preset.envelope);
     edgar.setLength(voice, preset.length); edgar.setMod(voice, preset.modulation);
   }
   edgar.setSampleHold(effectiveSampleHold());
@@ -955,6 +1043,7 @@ void renderDisplay(unsigned long now) {
   const bool editVisible = (long)(editUntilMs - now) > 0;
   const bool inlineEditVisible = !editVisible && (long)(inlineEditUntilMs - now) > 0 &&
     ((instrumentMode == MODE_SEQ && editedStep < kStepCount) ||
+     (instrumentMode == MODE_PLAY && editedPlayMorph != 0) ||
      (instrumentMode == MODE_DRONE &&
       (editedDrone < kStepCount || editedDroneLfo < kSettingCount)));
   const bool displayedStepChanged = instrumentMode == MODE_SEQ && renderedStep != playingStep;
@@ -965,7 +1054,7 @@ void renderDisplay(unsigned long now) {
   if (editVisible) {
     frameText(0, 0, editTitle); frameText(1, 0, editValue);
   } else if (instrumentMode == MODE_SEQ) renderSequencerDashboard(inlineEditVisible);
-  else if (instrumentMode == MODE_PLAY) renderPlayDashboard();
+  else if (instrumentMode == MODE_PLAY) renderPlayDashboard(inlineEditVisible);
   else renderDroneDashboard(inlineEditVisible);
   flushDisplayFrame();
 
@@ -999,7 +1088,7 @@ void renderSequencerDashboard(bool inlineEditVisible) {
   }
 }
 
-void renderPlayDashboard() {
+void renderPlayDashboard(bool inlineEditVisible) {
   LivePreset preset; readLivePreset(playControls.preset, preset);
   char root[3], scale[4], style[5];
   copyProgmemLabel(root, kRootLabels[playControls.root], sizeof(root));
@@ -1007,7 +1096,20 @@ void renderPlayDashboard() {
   copyProgmemLabel(style, kStyleLabels[playControls.style], sizeof(style));
   frameText(0, 0, "PLY "); frameText(0, 4, preset.label); frameText(0, 9, root); frameText(0, 12, scale);
   frameText(1, 0, style); frameChar(1, 5, 'O'); frameChar(1, 6, '2' + playControls.octave);
-  frameText(1, 9, playSequencerEnabled ? "SEQ+" : "SEQ-");
+  if (!inlineEditVisible) {
+    frameText(1, 9, playSequencerEnabled ? "SEQ+" : "SEQ-");
+  } else if (editedPlayMorph == 1) {
+    frameText(1, 9, "B:");
+    if (playMorphWave == kPlayMorphOff) frameText(1, 11, "OFF");
+    else {
+      char label[4]; copyProgmemLabel(label, kDroneWaveLabels[playMorphWave], sizeof(label));
+      frameText(1, 11, label);
+    }
+  } else {
+    frameText(1, 9, "L:");
+    if (playMorphLfoRateTenths == 0) frameText(1, 11, "OFF");
+    else frameTenths(1, 11, playMorphLfoRateTenths);
+  }
 }
 
 void renderDroneDashboard(bool inlineEditVisible) {

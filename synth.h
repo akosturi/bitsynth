@@ -70,6 +70,11 @@ volatile uint8_t pwmDitherLfsr = 0xA5;
 volatile uint8_t sampleHoldFrames = 1;
 volatile uint8_t sampleHoldCounter = 0;
 volatile uint16_t heldPwmSample = 256;
+volatile bool playMorphActive = false;
+volatile uint16_t playMorphWavPtr = (uint16_t)SinTable;
+volatile uint32_t playMorphLfoPCW = 0x80000000UL;
+volatile uint32_t playMorphLfoFTW = 0;
+volatile uint8_t playMorphAmount = 128;
 volatile bool droneMode = false;
 volatile uint16_t dronePCW[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
 volatile uint16_t droneFTW[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
@@ -103,6 +108,25 @@ volatile uint16_t drumFtwD = 0;
 volatile uint16_t drumFtwTarget = 0;
 volatile uint16_t drumNoiseLfsr = 0xACE1;
 volatile int16_t drumNoiseLow = 0;
+
+static inline __attribute__((always_inline)) int8_t nextVoiceSample(uint8_t voice)
+{
+  const uint16_t phase = PCW[voice] + FTW[voice];
+  PCW[voice] = phase;
+  return (int8_t)pgm_read_byte(wavs[voice] + (phase >> SYNTH_WAVETABLE_SHIFT));
+}
+
+static inline __attribute__((always_inline)) int8_t nextMorphedVoiceSample(
+  uint8_t voice, uint16_t secondaryWave, uint8_t morphAmount)
+{
+  const uint16_t phase = PCW[voice] + FTW[voice];
+  PCW[voice] = phase;
+  const uint16_t index = phase >> SYNTH_WAVETABLE_SHIFT;
+  const int8_t sampleA = (int8_t)pgm_read_byte(wavs[voice] + index);
+  const int8_t sampleB = (int8_t)pgm_read_byte(secondaryWave + index);
+  const int16_t difference = (int16_t)sampleB - sampleA;
+  return sampleA + (((int16_t)(difference * morphAmount)) >> 7);
+}
 
 //*********************************************************************************************
 //  Audio driver interrupt
@@ -171,6 +195,7 @@ ISR(TIMER2_COMPA_vect)
     //  Synthesizer/audio mixer
     //-------------------------------
 
+    int16_t sourceZeroQ7 = 0;
     if (drumActive) {
       int16_t drumSample = 0;
       if (drumEnvelope <= drumEnvelopeStep) {
@@ -220,16 +245,29 @@ ISR(TIMER2_COMPA_vect)
         drumSample = (drumSample * gain) >> 2;
       }
 
-      mixQ7 = drumSample +
-        (((int8_t)pgm_read_byte(wavs[1] + ((PCW[1] += FTW[1]) >> SYNTH_WAVETABLE_SHIFT)) * AMP[1]) >> 2) +
-        (((int8_t)pgm_read_byte(wavs[2] + ((PCW[2] += FTW[2]) >> SYNTH_WAVETABLE_SHIFT)) * AMP[2]) >> 2) +
-        (((int8_t)pgm_read_byte(wavs[3] + ((PCW[3] += FTW[3]) >> SYNTH_WAVETABLE_SHIFT)) * AMP[3]) >> 2);
+      sourceZeroQ7 = drumSample;
     } else {
-      mixQ7 =
-        (((int8_t)pgm_read_byte(wavs[0] + ((PCW[0] += FTW[0]) >> SYNTH_WAVETABLE_SHIFT)) * AMP[0]) >> 2) +
-        (((int8_t)pgm_read_byte(wavs[1] + ((PCW[1] += FTW[1]) >> SYNTH_WAVETABLE_SHIFT)) * AMP[1]) >> 2) +
-        (((int8_t)pgm_read_byte(wavs[2] + ((PCW[2] += FTW[2]) >> SYNTH_WAVETABLE_SHIFT)) * AMP[2]) >> 2) +
-        (((int8_t)pgm_read_byte(wavs[3] + ((PCW[3] += FTW[3]) >> SYNTH_WAVETABLE_SHIFT)) * AMP[3]) >> 2);
+      sourceZeroQ7 = ((int16_t)nextVoiceSample(0) * AMP[0]) >> 2;
+    }
+
+    if (playMorphActive) {
+      if (divider == 0) {
+        playMorphLfoPCW += playMorphLfoFTW;
+        const uint8_t trianglePhase = ((uint8_t*)&playMorphLfoPCW)[3];
+        playMorphAmount = (trianglePhase & 0x80) ?
+          (uint8_t)(256U - trianglePhase) : trianglePhase;
+      }
+      const uint16_t secondaryWave = playMorphWavPtr;
+      const uint8_t morphAmount = playMorphAmount;
+      mixQ7 = sourceZeroQ7 +
+        (((int16_t)nextMorphedVoiceSample(1, secondaryWave, morphAmount) * AMP[1]) >> 2) +
+        (((int16_t)nextMorphedVoiceSample(2, secondaryWave, morphAmount) * AMP[2]) >> 2) +
+        (((int16_t)nextMorphedVoiceSample(3, secondaryWave, morphAmount) * AMP[3]) >> 2);
+    } else {
+      mixQ7 = sourceZeroQ7 +
+        (((int16_t)nextVoiceSample(1) * AMP[1]) >> 2) +
+        (((int16_t)nextVoiceSample(2) * AMP[2]) >> 2) +
+        (((int16_t)nextVoiceSample(3) * AMP[3]) >> 2);
     }
   }
 
@@ -476,6 +514,46 @@ class synth
         } else {
           noiseVoiceMask &= ~(1 << voice);
         }
+      }
+    }
+
+    void configurePlayMorph(
+      uint8_t primaryWave, uint8_t secondaryWave, uint16_t frequencyTenths, bool secondaryEnabled)
+    {
+      const uint16_t primaryPointer = wavePointer(primaryWave);
+      const uint16_t secondaryPointer = wavePointer(secondaryWave);
+      const uint32_t lfoStep = frequencyTenths == 0 ? 0 :
+        (uint32_t)frequencyTenths * 85899UL;
+      const bool active = secondaryEnabled && lfoStep != 0;
+      const uint16_t outputPointer = secondaryEnabled && !active ? secondaryPointer : primaryPointer;
+      const bool noisy = active ?
+        (primaryWave == NOISE || secondaryWave == NOISE) :
+        ((secondaryEnabled ? secondaryWave : primaryWave) == NOISE);
+
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        const bool wasActive = playMorphActive;
+        for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) {
+          wavs[voice] = outputPointer;
+        }
+        noiseVoiceMask = (noiseVoiceMask & 0x01) | (noisy ? 0x0E : 0x00);
+        playMorphWavPtr = secondaryPointer;
+        playMorphLfoFTW = lfoStep;
+        if (active && !wasActive) {
+          playMorphLfoPCW = 0x80000000UL;
+          playMorphAmount = 128;
+        } else if (!active) {
+          playMorphAmount = 128;
+        }
+        playMorphActive = active;
+      }
+    }
+
+    void disablePlayMorph()
+    {
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        playMorphActive = false;
+        playMorphLfoFTW = 0;
+        playMorphAmount = 128;
       }
     }
 

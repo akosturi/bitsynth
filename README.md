@@ -76,6 +76,15 @@ A gombok lenyomásra indítják, felengedésre leállítják a hangot. `POLY` m�
 
 PLAY módban a MODE gomb nyomva tartása közben az első step gomb kapcsolja be vagy ki a háttérszekvenszert. A kijelzőn `SEQ+` jelzi a bekapcsolt, `SEQ-` a némított állapotot. A szekvenszer órája és pozíciója kikapcsolt háttérhang mellett is tovább fut, ezért az arpeggiók tempója nem áll meg.
 
+MODE nyomva tartása közben az első két paraméterpoti a három élő voice közös hullámtábla-morphját vezérli:
+
+- Paraméterpoti 1: háromszög LFO `OFF`, illetve `0,1–5,0 Hz` között, `0,1 Hz`-es lépésekben
+- Paraméterpoti 2: második hullámforma; teljesen letekerve `OFF`, fölötte `SIN`, `TRI`, `SQR`, `SAW`
+
+Kikapcsolt második hullámformánál az LFO nem állítható. Második hullámforma és kikapcsolt LFO esetén csak a második hullám szól; aktív LFO-nál a hang folyamatosan halad az eredeti preset-hullám és a második hullám között. A két táblát minden voice ugyanannál a fázispozíciónál olvassa, ezért a morph nem használ további oszcillátort, és nem változtatja meg a hangmagasságot. A háttérszekvenszer számára fenntartott voice 0 nem kap morphot.
+
+SHIFT-szerkesztés után az első két poti soft takeoverrel tér vissza a preset és a gyökérhang vezérléséhez: egyik érték sem ugrik el a MODE felengedésekor, csak a poti következő szándékos elmozdításakor.
+
 Live presetek: `PURE`, `SOFT`, `KEYS`, `PLUK`, `BASS`, `LEAD`, `ORGN`, `LOFI`.
 
 ## DRONE — nyolc folyamatos oszcillátor
@@ -101,7 +110,7 @@ A PWM kimenet továbbra is 20 kHz-en frissül. A processzorterhelés kordában t
 - PLAY: preset, gyökér, skála, játékmód, oktáv és a háttérszekvenszer állapota
 - DRONE: a négy oszcillátorpár hullámformája és a nyolc gate
 
-A paraméterpotik értékei közvetlenül a főképernyőn változnak, nincs külön szerkesztési képernyő. Sequencer pitch szerkesztésekor a hangnév, drone pitch szerkesztésekor a frekvencia, VCA-LFO szerkesztésekor pedig az `L1`–`L4` csoport és annak `OFF`/Hz értéke jelenik meg röviden a főképernyő jobb oldalán. Az LCD csak a ténylegesen megváltozott karaktereket írja újra, így nem villog minden sequencer-lépésnél.
+A paraméterpotik értékei közvetlenül a főképernyőn változnak, nincs külön szerkesztési képernyő. Sequencer pitch szerkesztésekor a hangnév, PLAY morph szerkesztésekor a `B:` hullámforma vagy az `L:` LFO-érték, drone pitch szerkesztésekor a frekvencia, VCA-LFO szerkesztésekor pedig az `L1`–`L4` csoport és annak `OFF`/Hz értéke jelenik meg röviden a főképernyő jobb oldalán. Az LCD csak a ténylegesen megváltozott karaktereket írja újra, így nem villog minden sequencer-lépésnél.
 
 ## Fordítás
 
