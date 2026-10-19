@@ -47,18 +47,18 @@ A lépések tizenhatodok. Az LCD alsó sorában `x` jelöli a bekapcsolt, `-` a 
 | `CHRD` | négyrétegű akkord | minor/major/sus2/sus4 | decay |
 | `CHIP` | két square oktávban | sample-hold/crush | decay |
 | `PERC` | noise + mély sine | zajhang/pitch sweep | decay |
-| `DRUM` | monofonikus TR/CR jellegű dobmotor | tone/tuning | decay |
+| `DRUM` | monofonikus 8 bites PCM dobmotor | lejátszási hangolás | decay |
 
 ### DRUM preset
 
 A `DRUM` nem hoz létre további sequencer-sávokat: minden lépés pontosan egy dobhangot tárol. A következő aktív lépés az előző dobhangot azonnal megszakítja, ezért nincs dobhang-átfedés vagy drum voice stealing.
 
-- Step potik: `KICK`, `SNAR`, `TOM`, `CHH`
+- Step potik: `KICK`, `SNAR`, `CHH`
 - Step gombok: az adott dobütés be/ki
 - Paraméterpoti 3 / `T`: az aktuális dobok közös tone/tuning makrója
 - Paraméterpoti 4 / `D`: hangszerfüggő decay
 
-A dobok külön monofonikus, procedurális motorból szólnak. A kick rövid zajos clicket, sine testet és gyors pitch-zuhanást; a snare két tonális rezonanciát, valódi LFSR-zajt és high-pass szűrést; a tom sine testet és enyhébb pitch-zuhanást; a zárt hi-hat pedig négy egymáshoz nem harmonikusan hangolt square komponenst, LFSR-zajt és high-pass szűrést használ. PLAY módban a DRUM sequencer ugyanazon a fenntartott monó háttérhelyen fut tovább, így a három live voice megmarad.
+A dobok külön monofonikus PCM-lejátszóból szólnak. A minták unsigned 8 bites, monó, 20 kHz-es adatokként a `tables.h` fájlban találhatók. A lejátszó közvetlenül a flashből olvas, RAM-másolat nélkül. A `T` poti 0,75×–1,25× között változtatja a lejátszási sebességet, a `D` poti pedig a minta hosszának 25–100%-ára állítja a lecsengő amplitúdóburkolót. Új ütés az előző mintát azonnal újraindítja. PLAY módban a DRUM sequencer ugyanazon a fenntartott monó háttérhelyen fut tovább, így a három live voice megmarad.
 
 ## PLAY — skálabiztos élő játék
 

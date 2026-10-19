@@ -20,7 +20,7 @@ const uint8_t kPlayMorphWaveCount = 4;
 const uint8_t kPlayMorphOff = 255;
 const uint8_t kSeqPresetCount = 9;
 const uint8_t kLivePresetCount = 8;
-const uint8_t kDrumCount = 4;
+const uint8_t kDrumCount = DRUM_SAMPLE_COUNT;
 const uint8_t kScaleCount = 4;
 const uint8_t kPlayStyleCount = 5;
 const uint8_t kAnalogSamples = 5;
@@ -49,7 +49,7 @@ enum InstrumentMode : uint8_t { MODE_SEQ = 0, MODE_PLAY = 1, MODE_DRONE = 2 };
 enum ScaleMode : uint8_t { SCALE_MAJOR = 0, SCALE_MINOR = 1, SCALE_PENTATONIC = 2, SCALE_BLUES = 3 };
 enum PlayStyle : uint8_t { STYLE_POLY = 0, STYLE_CHORD = 1, STYLE_ARP_UP = 2, STYLE_ARP_DOWN = 3, STYLE_ARP_UPDOWN = 4 };
 enum SeqPresetId : uint8_t { PRESET_SUB = 0, PRESET_BASS, PRESET_PLUCK, PRESET_BELL, PRESET_LEAD, PRESET_CHORD, PRESET_CHIP, PRESET_PERC, PRESET_DRUM };
-enum DrumId : uint8_t { DRUM_KICK = 0, DRUM_SNARE, DRUM_TOM, DRUM_CLOSED_HAT };
+enum DrumId : uint8_t { DRUM_KICK = 0, DRUM_SNARE, DRUM_CLOSED_HAT };
 
 struct VoiceRecipe {
   uint8_t wave;
@@ -103,7 +103,7 @@ const LivePreset kLivePresets[kLivePresetCount] PROGMEM = {
   {"ORGN", SQUARE, ENVELOPE3, 116, 64, 1}, {"LOFI", RAMP, ENVELOPE2, 88, 60, 3}
 };
 
-const char kDrumLabels[kDrumCount][5] PROGMEM = {"KICK", "SNAR", "TOM", "CHH"};
+const char kDrumLabels[kDrumCount][5] PROGMEM = {"KICK", "SNAR", "CHH"};
 
 const int8_t kScaleOffsets[kScaleCount][kStepCount] PROGMEM = {
   {0, 2, 4, 5, 7, 9, 11, 12}, {0, 2, 3, 5, 7, 8, 10, 12},
@@ -121,7 +121,7 @@ SeqControls seqControls = {PRESET_SUB, 126, 64, 64};
 PlayControls playControls = {0, 0, SCALE_MAJOR, STYLE_POLY, 0};
 uint8_t stepNotes[kStepCount] = {36, 38, 40, 41, 43, 45, 47, 48};
 uint8_t stepDrums[kStepCount] = {DRUM_KICK, DRUM_CLOSED_HAT, DRUM_SNARE, DRUM_CLOSED_HAT,
-                                 DRUM_KICK, DRUM_CLOSED_HAT, DRUM_TOM, DRUM_CLOSED_HAT};
+                                 DRUM_KICK, DRUM_CLOSED_HAT, DRUM_SNARE, DRUM_CLOSED_HAT};
 uint8_t seqGateMask = 0xFF;
 uint8_t droneGateMask = 0;
 uint8_t dronePairWave[kSettingCount] = {SINE, TRIANGLE, SQUARE, SAW};
