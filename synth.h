@@ -41,6 +41,7 @@
 #define TOG(x,y) (x ^= (1 << y))
 
 const uint8_t SYNTH_VOICE_COUNT = 4;
+const uint8_t SYNTH_DRONE_COUNT = 8;
 const uint8_t SYNTH_MIDI_NOTE_MAX = 127;
 const uint8_t SYNTH_LENGTH_MAX = 127;
 const uint8_t SYNTH_WAVETABLE_INDEX_BITS = 9;
@@ -69,6 +70,39 @@ volatile uint8_t pwmDitherLfsr = 0xA5;
 volatile uint8_t sampleHoldFrames = 1;
 volatile uint8_t sampleHoldCounter = 0;
 volatile uint16_t heldPwmSample = 256;
+volatile bool droneMode = false;
+volatile uint16_t dronePCW[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
+volatile uint16_t droneFTW[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
+volatile uint16_t droneWavs[SYNTH_DRONE_COUNT] = {
+  (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable,
+  (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable
+};
+volatile uint8_t droneAmp[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
+volatile uint8_t droneTargetAmp[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
+volatile uint8_t droneNoiseMask = 0;
+volatile uint8_t droneRampVoice = 0;
+volatile uint8_t droneMixPair = 0;
+volatile int16_t dronePairMixQ7[SYNTH_DRONE_COUNT / 2] = {0, 0, 0, 0};
+volatile uint32_t droneLfoPCW[SYNTH_DRONE_COUNT / 2] = {0, 0, 0, 0};
+volatile uint32_t droneLfoFTW[SYNTH_DRONE_COUNT / 2] = {0, 0, 0, 0};
+volatile bool drumActive = false;
+volatile bool drumNoiseOutput = false;
+volatile uint8_t drumType = 0;
+volatile uint8_t drumFilterShift = 2;
+volatile uint16_t drumEnvelope = 0;
+volatile uint16_t drumEnvelopeStep = 1;
+volatile uint16_t drumAge = 0;
+volatile uint16_t drumPhaseA = 0;
+volatile uint16_t drumPhaseB = 0;
+volatile uint16_t drumPhaseC = 0;
+volatile uint16_t drumPhaseD = 0;
+volatile uint16_t drumFtwA = 0;
+volatile uint16_t drumFtwB = 0;
+volatile uint16_t drumFtwC = 0;
+volatile uint16_t drumFtwD = 0;
+volatile uint16_t drumFtwTarget = 0;
+volatile uint16_t drumNoiseLfsr = 0xACE1;
+volatile int16_t drumNoiseLow = 0;
 
 //*********************************************************************************************
 //  Audio driver interrupt
@@ -84,27 +118,120 @@ ISR(TIMER2_COMPA_vect)
     tik = 1;
   }
 
-  //-------------------------------
-  // Volume envelope generator
-  //-------------------------------
+  int16_t mixQ7;
 
-  if (((uint8_t*)&EPCW[divider])[1] & 0x80) {
-    AMP[divider] = 0;
+  if (droneMode) {
+    droneRampVoice = (droneRampVoice + 1) & 0x07;
+    uint8_t amplitude = droneAmp[droneRampVoice];
+    const uint8_t target = droneTargetAmp[droneRampVoice];
+    if (amplitude < target) {
+      amplitude = (target - amplitude > 15) ? amplitude + 15 : target;
+    } else if (amplitude > target) {
+      amplitude = (amplitude - target > 15) ? amplitude - 15 : target;
+    }
+    droneAmp[droneRampVoice] = amplitude;
+
+    droneMixPair = (droneMixPair + 1) & 0x03;
+    const uint8_t pair = droneMixPair;
+    int16_t pairMixQ7 = 0;
+    const uint8_t firstVoice = pair << 1;
+    for (uint8_t voice = firstVoice; voice < firstVoice + 2; ++voice) {
+      amplitude = droneAmp[voice];
+      if (amplitude != 0) {
+        const int8_t sample = (int8_t)pgm_read_byte(
+          droneWavs[voice] + ((dronePCW[voice] += droneFTW[voice] << 2) >> SYNTH_WAVETABLE_SHIFT));
+        pairMixQ7 += ((int16_t)sample * amplitude) >> 3;
+      }
+    }
+
+    const uint32_t lfoStep = droneLfoFTW[pair];
+    if (lfoStep != 0) {
+      droneLfoPCW[pair] += lfoStep;
+      const uint8_t trianglePhase = droneLfoPCW[pair] >> 25;
+      const uint8_t gain = (trianglePhase & 0x40) ? 127 - trianglePhase : trianglePhase;
+      pairMixQ7 = (((pairMixQ7 >> 4) * gain) >> 2);
+    }
+    dronePairMixQ7[pair] = pairMixQ7;
+    mixQ7 = dronePairMixQ7[0] + dronePairMixQ7[1] +
+      dronePairMixQ7[2] + dronePairMixQ7[3];
   } else {
-    EPCW[divider] += EFTW[divider];
-    const uint8_t envelopeIndex = ((uint8_t*)&EPCW[divider])[1];
-    AMP[divider] = (envelopeIndex & 0x80) ? 0 : pgm_read_byte(envs[divider] + envelopeIndex);
+    //-------------------------------
+    // Volume envelope generator
+    //-------------------------------
+
+    if (((uint8_t*)&EPCW[divider])[1] & 0x80) {
+      AMP[divider] = 0;
+    } else {
+      EPCW[divider] += EFTW[divider];
+      const uint8_t envelopeIndex = ((uint8_t*)&EPCW[divider])[1];
+      AMP[divider] = (envelopeIndex & 0x80) ? 0 : pgm_read_byte(envs[divider] + envelopeIndex);
+    }
+
+    //-------------------------------
+    //  Synthesizer/audio mixer
+    //-------------------------------
+
+    if (drumActive) {
+      int16_t drumSample = 0;
+      if (drumEnvelope <= drumEnvelopeStep) {
+        drumEnvelope = 0;
+        drumActive = false;
+        drumNoiseOutput = false;
+      } else {
+        drumEnvelope -= drumEnvelopeStep;
+        ++drumAge;
+        const uint16_t lfsr = drumNoiseLfsr;
+        drumNoiseLfsr = (lfsr >> 1) ^
+          (((uint16_t)-(int16_t)(lfsr & 1)) & 0xB400);
+        const int8_t noiseSample = (int8_t)drumNoiseLfsr;
+
+        if (drumType == 0 || drumType == 2) {
+          if (drumFtwA > drumFtwTarget) {
+            const uint16_t difference = drumFtwA - drumFtwTarget;
+            uint16_t drop = difference >> (drumType == 0 ? 6 : 7);
+            if (drop == 0) drop = 1;
+            drumFtwA -= drop;
+          }
+          const int8_t body = (int8_t)pgm_read_byte(
+            SinTable + ((drumPhaseA += drumFtwA) >> SYNTH_WAVETABLE_SHIFT));
+          if (drumType == 0 && drumAge < 48) drumSample = ((int16_t)body * 3 >> 2) + (noiseSample >> 2);
+          else drumSample = body;
+        } else if (drumType == 1) {
+          const int8_t bodyA = (int8_t)pgm_read_byte(
+            SinTable + ((drumPhaseA += drumFtwA) >> SYNTH_WAVETABLE_SHIFT));
+          const int8_t bodyB = (int8_t)pgm_read_byte(
+            SinTable + ((drumPhaseB += drumFtwB) >> SYNTH_WAVETABLE_SHIFT));
+          drumNoiseLow += ((int16_t)noiseSample - drumNoiseLow) >> drumFilterShift;
+          const int16_t highNoise = (int16_t)noiseSample - drumNoiseLow;
+          drumSample = ((int16_t)bodyA + bodyB) >> 2;
+          drumSample += highNoise >> 2;
+        } else {
+          int16_t metal = ((drumPhaseA += drumFtwA) & 0x8000) ? 20 : -20;
+          metal += ((drumPhaseB += drumFtwB) & 0x8000) ? 20 : -20;
+          metal += ((drumPhaseC += drumFtwC) & 0x8000) ? 20 : -20;
+          metal += ((drumPhaseD += drumFtwD) & 0x8000) ? 20 : -20;
+          metal += noiseSample >> 2;
+          drumNoiseLow += (metal - drumNoiseLow) >> drumFilterShift;
+          drumSample = (metal - drumNoiseLow) >> 1;
+        }
+
+        const uint8_t linearGain = drumEnvelope >> 8;
+        const uint8_t gain = ((uint16_t)linearGain * linearGain) >> 8;
+        drumSample = (drumSample * gain) >> 2;
+      }
+
+      mixQ7 = drumSample +
+        (((int8_t)pgm_read_byte(wavs[1] + ((PCW[1] += FTW[1]) >> SYNTH_WAVETABLE_SHIFT)) * AMP[1]) >> 2) +
+        (((int8_t)pgm_read_byte(wavs[2] + ((PCW[2] += FTW[2]) >> SYNTH_WAVETABLE_SHIFT)) * AMP[2]) >> 2) +
+        (((int8_t)pgm_read_byte(wavs[3] + ((PCW[3] += FTW[3]) >> SYNTH_WAVETABLE_SHIFT)) * AMP[3]) >> 2);
+    } else {
+      mixQ7 =
+        (((int8_t)pgm_read_byte(wavs[0] + ((PCW[0] += FTW[0]) >> SYNTH_WAVETABLE_SHIFT)) * AMP[0]) >> 2) +
+        (((int8_t)pgm_read_byte(wavs[1] + ((PCW[1] += FTW[1]) >> SYNTH_WAVETABLE_SHIFT)) * AMP[1]) >> 2) +
+        (((int8_t)pgm_read_byte(wavs[2] + ((PCW[2] += FTW[2]) >> SYNTH_WAVETABLE_SHIFT)) * AMP[2]) >> 2) +
+        (((int8_t)pgm_read_byte(wavs[3] + ((PCW[3] += FTW[3]) >> SYNTH_WAVETABLE_SHIFT)) * AMP[3]) >> 2);
+    }
   }
-
-  //-------------------------------
-  //  Synthesizer/audio mixer
-  //-------------------------------
-
-  int16_t mixQ7 =
-    (((int8_t)pgm_read_byte(wavs[0] + ((PCW[0] += FTW[0]) >> SYNTH_WAVETABLE_SHIFT)) * AMP[0]) >> 2) +
-    (((int8_t)pgm_read_byte(wavs[1] + ((PCW[1] += FTW[1]) >> SYNTH_WAVETABLE_SHIFT)) * AMP[1]) >> 2) +
-    (((int8_t)pgm_read_byte(wavs[2] + ((PCW[2] += FTW[2]) >> SYNTH_WAVETABLE_SHIFT)) * AMP[2]) >> 2) +
-    (((int8_t)pgm_read_byte(wavs[3] + ((PCW[3] += FTW[3]) >> SYNTH_WAVETABLE_SHIFT)) * AMP[3]) >> 2);
 
   bool updateOutput = true;
   if (sampleHoldFrames > 1) {
@@ -117,7 +244,7 @@ ISR(TIMER2_COMPA_vect)
   }
 
   uint16_t pwmSample = heldPwmSample;
-  const bool shapeOutput = !noiseVoiceMask;
+  const bool shapeOutput = droneMode ? !droneNoiseMask : !(noiseVoiceMask || (drumActive && drumNoiseOutput));
 
   if (updateOutput) {
     if (shapeOutput) {
@@ -151,16 +278,43 @@ ISR(TIMER2_COMPA_vect)
   //************************************************
   //  Modulation engine
   //************************************************
-  FTW[divider] = PITCH[divider] + (int16_t)((((PITCH[divider] >> 6) * (EPCW[divider] >> 6)) / 128) * MOD[divider]);
+  if (!droneMode && (!drumActive || divider != 0)) {
+    FTW[divider] = PITCH[divider] + (int16_t)((((PITCH[divider] >> 6) * (EPCW[divider] >> 6)) / 128) * MOD[divider]);
+  }
   tim++;
 }
 
 class synth
 {
   private:
+    uint16_t wavePointer(uint8_t wave) const
+    {
+      switch (wave)
+      {
+        case TRIANGLE:
+          return (uint16_t)TriangleTable;
+        case SQUARE:
+          return (uint16_t)SquareTable;
+        case SAW:
+          return (uint16_t)SawTable;
+        case RAMP:
+          return (uint16_t)RampTable;
+        case NOISE:
+          return (uint16_t)NoiseTable;
+        case SINE:
+        default:
+          return (uint16_t)SinTable;
+      }
+    }
+
     bool validVoice(uint8_t voice) const
     {
       return voice < SYNTH_VOICE_COUNT;
+    }
+
+    uint16_t frequencyWord(uint16_t frequency) const
+    {
+      return ((uint32_t)frequency * 65535UL + FS / 2) / FS;
     }
 
     void configureTimer2()
@@ -313,25 +467,7 @@ class synth
         return;
       }
 
-      uint16_t selectedWave = (uint16_t)SinTable;
-      switch (wave)
-      {
-        case TRIANGLE:
-          selectedWave = (uint16_t)TriangleTable;
-          break;
-        case SQUARE:
-          selectedWave = (uint16_t)SquareTable;
-          break;
-        case SAW:
-          selectedWave = (uint16_t)SawTable;
-          break;
-        case RAMP:
-          selectedWave = (uint16_t)RampTable;
-          break;
-        case NOISE:
-          selectedWave = (uint16_t)NoiseTable;
-          break;
-      }
+      const uint16_t selectedWave = wavePointer(wave);
 
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         wavs[voice] = selectedWave;
@@ -544,6 +680,182 @@ class synth
         EPCW[voice] = 0x8000;
         AMP[voice] = 0;
         FTW[voice] = 0;
+      }
+    }
+
+    void triggerDrum(uint8_t type, uint8_t tone, uint8_t decay)
+    {
+      if (type > 3) type = 3;
+      if (tone > 127) tone = 127;
+      if (decay > 127) decay = 127;
+
+      uint16_t frequencyA = 0;
+      uint16_t frequencyB = 0;
+      uint16_t frequencyC = 0;
+      uint16_t frequencyD = 0;
+      uint16_t targetFrequency = 0;
+      uint16_t durationMs = 100;
+      uint8_t filterShift = 2;
+      bool noisy = false;
+
+      if (type == 0) {
+        targetFrequency = 45 + ((uint16_t)tone * 30) / 127;
+        frequencyA = 145 + ((uint16_t)tone * 95) / 127;
+        durationMs = 90 + ((uint32_t)decay * 410) / 127;
+      } else if (type == 1) {
+        frequencyA = 165 + ((uint16_t)tone * 60) / 127;
+        frequencyB = 290 + ((uint16_t)tone * 120) / 127;
+        targetFrequency = frequencyA;
+        durationMs = 70 + ((uint32_t)decay * 330) / 127;
+        filterShift = tone < 43 ? 4 : (tone < 86 ? 3 : 2);
+        noisy = true;
+      } else if (type == 2) {
+        targetFrequency = 70 + ((uint16_t)tone * 80) / 127;
+        frequencyA = targetFrequency + 55 + ((uint16_t)tone * 40) / 127;
+        durationMs = 100 + ((uint32_t)decay * 500) / 127;
+      } else {
+        const uint16_t scale = 75 + ((uint16_t)tone * 50) / 127;
+        frequencyA = (307UL * scale) / 100;
+        frequencyB = (431UL * scale) / 100;
+        frequencyC = (619UL * scale) / 100;
+        frequencyD = (887UL * scale) / 100;
+        targetFrequency = frequencyA;
+        durationMs = 18 + ((uint32_t)decay * 142) / 127;
+        filterShift = tone < 64 ? 2 : 1;
+        noisy = true;
+      }
+
+      const uint32_t durationSamples = (uint32_t)durationMs * (FS / 1000UL);
+      uint16_t envelopeStep = 65535UL / durationSamples;
+      if (envelopeStep == 0) envelopeStep = 1;
+      const uint16_t ftwA = frequencyWord(frequencyA);
+      const uint16_t ftwB = frequencyWord(frequencyB);
+      const uint16_t ftwC = frequencyWord(frequencyC);
+      const uint16_t ftwD = frequencyWord(frequencyD);
+      const uint16_t ftwTarget = frequencyWord(targetFrequency);
+
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        drumActive = false;
+        EPCW[0] = 0x8000;
+        AMP[0] = 0;
+        FTW[0] = 0;
+        drumType = type;
+        drumFilterShift = filterShift;
+        drumEnvelope = 65535;
+        drumEnvelopeStep = envelopeStep;
+        drumAge = 0;
+        drumPhaseA = 0;
+        drumPhaseB = 0;
+        drumPhaseC = 0;
+        drumPhaseD = 0;
+        drumFtwA = ftwA;
+        drumFtwB = ftwB;
+        drumFtwC = ftwC;
+        drumFtwD = ftwD;
+        drumFtwTarget = ftwTarget;
+        drumNoiseLow = 0;
+        drumNoiseLfsr ^= tim | 1;
+        if (drumNoiseLfsr == 0) drumNoiseLfsr = 0xACE1;
+        drumNoiseOutput = noisy;
+        drumActive = true;
+      }
+    }
+
+    void stopDrum()
+    {
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        drumActive = false;
+        drumNoiseOutput = false;
+        drumEnvelope = 0;
+        drumNoiseLow = 0;
+      }
+    }
+
+    void setDroneMode(bool enabled)
+    {
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        droneMode = enabled;
+        droneMixPair = 0;
+        for (uint8_t pair = 0; pair < SYNTH_DRONE_COUNT / 2; ++pair) {
+          dronePairMixQ7[pair] = 0;
+          droneLfoPCW[pair] = 0;
+        }
+        sampleHoldCounter = 0;
+        heldPwmSample = 256;
+        pwmQuantizationError = 0;
+      }
+    }
+
+    void setDroneWave(uint8_t voice, uint8_t wave)
+    {
+      if (voice >= SYNTH_DRONE_COUNT) {
+        return;
+      }
+
+      const uint16_t selectedWave = wavePointer(wave);
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        droneWavs[voice] = selectedWave;
+        if (wave == NOISE) {
+          droneNoiseMask |= (1 << voice);
+        } else {
+          droneNoiseMask &= ~(1 << voice);
+        }
+      }
+    }
+
+    void setDronePitchWord(uint8_t voice, uint16_t pitch)
+    {
+      if (voice >= SYNTH_DRONE_COUNT) {
+        return;
+      }
+
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        droneFTW[voice] = pitch;
+      }
+    }
+
+    void setDroneLfoRate(uint8_t pair, uint16_t frequencyTenths)
+    {
+      if (pair >= SYNTH_DRONE_COUNT / 2) {
+        return;
+      }
+
+      const uint32_t step = frequencyTenths == 0 ? 0 :
+        (uint32_t)frequencyTenths * 85899UL;
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        if (step == 0 || droneLfoFTW[pair] == 0) {
+          droneLfoPCW[pair] = 0;
+        }
+        droneLfoFTW[pair] = step;
+      }
+    }
+
+    void setDroneGate(uint8_t voice, bool enabled)
+    {
+      if (voice >= SYNTH_DRONE_COUNT) {
+        return;
+      }
+
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        if (enabled && droneTargetAmp[voice] == 0) {
+          dronePCW[voice] = 0;
+        }
+        droneTargetAmp[voice] = enabled ? 255 : 0;
+      }
+    }
+
+    void stopAllDrones()
+    {
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        for (uint8_t voice = 0; voice < SYNTH_DRONE_COUNT; ++voice) {
+          droneTargetAmp[voice] = 0;
+          droneAmp[voice] = 0;
+          dronePCW[voice] = 0;
+        }
+        for (uint8_t pair = 0; pair < SYNTH_DRONE_COUNT / 2; ++pair) {
+          dronePairMixQ7[pair] = 0;
+          droneLfoPCW[pair] = 0;
+        }
       }
     }
 

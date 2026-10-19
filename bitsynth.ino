@@ -1,4 +1,5 @@
 #include <LiquidCrystal.h>
+#include <avr/pgmspace.h>
 #include "synth.h"
 
 LiquidCrystal lcd(2, 3, 4, 5, 6, 7);
@@ -6,262 +7,247 @@ LiquidCrystal lcd(2, 3, 4, 5, 6, 7);
 const uint8_t kMuxBit0Pin = 8;
 const uint8_t kMuxBit1Pin = 11;
 const uint8_t kMuxBit2Pin = 10;
-
 const uint8_t kSettingsAnalogPin = A0;
 const uint8_t kStepButtonPin = A1;
-const uint8_t kPitchAnalogPin = A2;
-const uint8_t kExtraButtonPin = A3;
+const uint8_t kStepAnalogPin = A2;
+const uint8_t kModeButtonPin = A3;
 
-const uint8_t kMainVoice = 0;
-const uint8_t kOsc2Voice = 1;
-const uint8_t kChordVoiceA = 2;
-const uint8_t kChordVoiceB = 3;
-const uint8_t kSynthVoiceCount = 4;
-const uint8_t kStepCount = 16;
-const uint8_t kVisibleStepCount = 8;
-const uint8_t kSettingsCount = 4;
-const uint8_t kPatternCount = 4;
-const uint8_t kWaveCount = 6;
-const uint8_t kPlayModeCount = 3;
-const uint8_t kEnvelopeCount = 4;
-const uint8_t kOsc2EnvelopeCount = kEnvelopeCount + 1;
-const uint8_t kScaleCount = 5;
-const uint8_t kLaneCount = 5;
-const uint8_t kPageCount = 7;
-const uint8_t kAnalogSamples = 3;
+const uint8_t kStepCount = 8;
+const uint8_t kSettingCount = 4;
+const uint8_t kStepPotsPerLoop = 2;
+const uint8_t kDroneWaveCount = 4;
+const uint8_t kSeqPresetCount = 9;
+const uint8_t kLivePresetCount = 8;
+const uint8_t kDrumCount = 4;
+const uint8_t kScaleCount = 4;
+const uint8_t kPlayStyleCount = 5;
+const uint8_t kAnalogSamples = 5;
+const uint8_t kAnalogDiscardSamples = 2;
 const uint8_t kAnalogFilterFractionBits = 4;
-const uint8_t kAnalogFilterAlphaNumerator = 5;
-const uint8_t kAnalogFilterAlphaDenominator = 16;
+const uint8_t kAnalogFilterAlphaNumerator = 2;
+const uint8_t kAnalogFilterAlphaDenominator = 8;
+const uint8_t kAnalogHysteresis = 12;
+const uint8_t kAnalogEndpointMargin = 32;
+const uint8_t kSettingMovementThreshold = 16;
+const uint8_t kStepMovementThreshold = 10;
+const uint8_t kDroneMovementThreshold = 8;
+const uint8_t kAnalogMovementConfirmations = 2;
 const uint8_t kMuxSettleUs = 50;
-const uint8_t kPlaybackStepCount = kVisibleStepCount;
-const uint8_t kStepNoteMin = 24;
-const uint8_t kStepNoteMax = kStepNoteMin + 47;
-
 const uint8_t kButtonDebounceMs = 25;
-const uint16_t kDoublePressMs = 320;
-const uint16_t kShiftHoldMs = 260;
-const uint16_t kUtilityLongPressMs = 1000;
-const uint16_t kEditViewMs = 1200;
-const uint16_t kNoteEditViewMs = 500;
-const uint16_t kPickupHysteresis = 18;
-const uint8_t kAnalogValueHysteresis = 4;
-const uint8_t kGateHysteresis = 18;
+const uint16_t kPanicHoldMs = 1000;
+const uint16_t kEditViewMs = 900;
+const uint8_t kStepNoteMin = 36;
+const uint8_t kStepNoteMax = 59;
+const uint16_t kDroneFrequencyMin = 80;
+const uint16_t kDroneFrequencyMax = 600;
+const uint16_t kDroneLfoFrequencyMinTenths = 1;
+const uint16_t kDroneLfoFrequencyMaxTenths = 50;
 
-const uint8_t kDefaultBpm = 126;
-const uint8_t kDefaultProbability = 100;
-const uint8_t kDefaultRatchet = 1;
-const int8_t kDefaultVoicingLock = 0;
-const uint8_t kDefaultLength = 64;
-const uint8_t kDefaultModulation = 64;
+enum InstrumentMode : uint8_t { MODE_SEQ = 0, MODE_PLAY = 1, MODE_DRONE = 2 };
+enum ScaleMode : uint8_t { SCALE_MAJOR = 0, SCALE_MINOR = 1, SCALE_PENTATONIC = 2, SCALE_BLUES = 3 };
+enum PlayStyle : uint8_t { STYLE_POLY = 0, STYLE_CHORD = 1, STYLE_ARP_UP = 2, STYLE_ARP_DOWN = 3, STYLE_ARP_UPDOWN = 4 };
+enum SeqPresetId : uint8_t { PRESET_SUB = 0, PRESET_BASS, PRESET_PLUCK, PRESET_BELL, PRESET_LEAD, PRESET_CHORD, PRESET_CHIP, PRESET_PERC, PRESET_DRUM };
+enum DrumId : uint8_t { DRUM_KICK = 0, DRUM_SNARE, DRUM_TOM, DRUM_CLOSED_HAT };
 
-const uint8_t kWaveIds[kWaveCount] = {SINE, TRIANGLE, SQUARE, SAW, RAMP, NOISE};
-
-enum ControlPage : uint8_t {
-  PAGE_OSC = 0,
-  PAGE_OSC2 = 1,
-  PAGE_ENV = 2,
-  PAGE_SEQ = 3,
-  PAGE_PAT = 4,
-  PAGE_FX = 5,
-  PAGE_UTL = 6
-};
-
-enum StepLane : uint8_t {
-  LANE_NOTE = 0,
-  LANE_GATE = 1,
-  LANE_PROB = 2,
-  LANE_RATCHET = 3,
-  LANE_LOCK = 4
-};
-
-enum PlayMode : uint8_t {
-  MODE_SCALE = 0,
-  MODE_CHORD = 1,
-  MODE_ARP = 2
-};
-
-enum ScaleMode : uint8_t {
-  SCALE_CHROMATIC = 0,
-  SCALE_MAJOR = 1,
-  SCALE_MINOR = 2,
-  SCALE_PENTATONIC = 3,
-  SCALE_BLUES = 4
-};
-
-struct Pattern {
-  uint8_t note[kStepCount];
-  uint8_t probability[kStepCount];
-  uint8_t ratchet[kStepCount];
-  int8_t voicingLock[kStepCount];
-  uint16_t gates;
-};
-
-struct OscControls {
-  uint8_t waveform;
-  uint8_t playMode;
-  int8_t voicing;
-  int8_t transpose;
-};
-
-struct Osc2Controls {
-  uint8_t waveform;
-  uint8_t envelope;
-  uint8_t detune;
-  int8_t transpose;
-};
-
-struct EnvControls {
+struct VoiceRecipe {
+  uint8_t wave;
+  int8_t semitone;
   uint8_t envelope;
   uint8_t length;
   uint8_t modulation;
-  uint8_t glide;
 };
 
-struct SeqControls {
-  uint8_t bpm;
-  uint8_t swing;
-  uint8_t scale;
+struct SeqPreset {
+  char label[5];
+  uint8_t voiceCount;
+  VoiceRecipe voices[4];
 };
 
-struct PatControls {
-  uint8_t targetSlot;
-  uint8_t randomAmount;
+struct LivePreset {
+  char label[5];
+  uint8_t wave;
+  uint8_t envelope;
+  uint8_t length;
+  uint8_t modulation;
+  uint8_t sampleHold;
 };
 
-struct FxControls {
-  uint8_t sampleHoldFrames;
+struct SeqControls { uint8_t preset; uint8_t bpm; uint8_t color; uint8_t shape; };
+struct PlayControls { uint8_t preset; uint8_t root; uint8_t scale; uint8_t style; uint8_t octave; };
+
+struct AnalogMotionState {
+  uint16_t accepted;
+  uint8_t confirmations;
+  int8_t direction;
+  bool ready;
 };
+
+const SeqPreset kSeqPresets[kSeqPresetCount] PROGMEM = {
+  {"SUB",  2, {{SINE, 0, ENVELOPE0, 82, 64}, {SQUARE, -12, ENVELOPE0, 82, 64}, {SINE, 0, 0, 0, 64}, {SINE, 0, 0, 0, 64}}},
+  {"BAS", 2, {{SAW, 0, ENVELOPE1, 64, 64}, {SQUARE, -12, ENVELOPE1, 64, 64}, {SINE, 0, 0, 0, 64}, {SINE, 0, 0, 0, 64}}},
+  {"PLK", 2, {{TRIANGLE, 0, ENVELOPE1, 42, 64}, {SQUARE, 12, ENVELOPE1, 42, 64}, {SINE, 0, 0, 0, 64}, {SINE, 0, 0, 0, 64}}},
+  {"BEL", 3, {{SINE, 0, ENVELOPE2, 88, 64}, {SINE, 12, ENVELOPE2, 88, 64}, {TRIANGLE, 19, ENVELOPE2, 88, 64}, {SINE, 0, 0, 0, 64}}},
+  {"LED", 2, {{SAW, 0, ENVELOPE0, 102, 64}, {RAMP, 0, ENVELOPE0, 102, 64}, {SINE, 0, 0, 0, 64}, {SINE, 0, 0, 0, 64}}},
+  {"CRD", 4, {{TRIANGLE, 0, ENVELOPE0, 78, 64}, {TRIANGLE, 4, ENVELOPE0, 78, 64}, {TRIANGLE, 7, ENVELOPE0, 78, 64}, {SINE, 12, ENVELOPE0, 78, 64}}},
+  {"CIP", 2, {{SQUARE, 0, ENVELOPE3, 72, 64}, {SQUARE, 12, ENVELOPE3, 72, 64}, {SINE, 0, 0, 0, 64}, {SINE, 0, 0, 0, 64}}},
+  {"PRC", 2, {{NOISE, 12, ENVELOPE1, 24, 64}, {SINE, -12, ENVELOPE1, 24, 42}, {SINE, 0, 0, 0, 64}, {SINE, 0, 0, 0, 64}}},
+  {"DRM", 1, {{SINE, 0, ENVELOPE1, 24, 64}, {SINE, 0, 0, 0, 64}, {SINE, 0, 0, 0, 64}, {SINE, 0, 0, 0, 64}}}
+};
+
+const LivePreset kLivePresets[kLivePresetCount] PROGMEM = {
+  {"PURE", SINE, ENVELOPE3, 116, 64, 1}, {"SOFT", SINE, ENVELOPE0, 102, 64, 1},
+  {"KEYS", TRIANGLE, ENVELOPE2, 82, 64, 1}, {"PLUK", SQUARE, ENVELOPE1, 46, 64, 1},
+  {"BASS", SAW, ENVELOPE0, 92, 58, 1}, {"LEAD", SAW, ENVELOPE3, 116, 68, 1},
+  {"ORGN", SQUARE, ENVELOPE3, 116, 64, 1}, {"LOFI", RAMP, ENVELOPE2, 88, 60, 3}
+};
+
+const char kDrumLabels[kDrumCount][5] PROGMEM = {"KICK", "SNAR", "TOM", "CHH"};
+
+const int8_t kScaleOffsets[kScaleCount][kStepCount] PROGMEM = {
+  {0, 2, 4, 5, 7, 9, 11, 12}, {0, 2, 3, 5, 7, 8, 10, 12},
+  {0, 2, 4, 7, 9, 12, 14, 16}, {0, 3, 5, 6, 7, 10, 12, 15}
+};
+const uint8_t kScaleLengths[kScaleCount] PROGMEM = {7, 7, 5, 6};
+const char kDroneWaveLabels[kDroneWaveCount][4] PROGMEM = {"SIN", "TRI", "SQR", "SAW"};
+const char kRootLabels[12][3] PROGMEM = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+const char kScaleLabels[kScaleCount][4] PROGMEM = {"MAJ", "MIN", "PEN", "BLU"};
+const char kStyleLabels[kPlayStyleCount][5] PROGMEM = {"POLY", "CHRD", "UP", "DOWN", "UPDN"};
 
 synth edgar;
-
-Pattern patterns[kPatternCount];
-Pattern clipboardPattern;
-bool clipboardHasPattern = false;
-
-OscControls oscControls = {0, MODE_SCALE, 0, 0};
-OscControls lastDisplayedOscControls = {255, 255, 127, 127};
-Osc2Controls osc2Controls = {0, 0, 8, 0};
-Osc2Controls lastDisplayedOsc2Controls = {255, 255, 255, 127};
-EnvControls envControls = {ENVELOPE0, kDefaultLength, kDefaultModulation, 0};
-EnvControls lastDisplayedEnvControls = {255, 255, 255, 255};
-SeqControls seqControls = {kDefaultBpm, 0, SCALE_CHROMATIC};
-SeqControls lastDisplayedSeqControls = {255, 255, 255};
-PatControls patControls = {0, 50};
-PatControls lastDisplayedPatControls = {255, 255};
-FxControls fxControls = {1};
-FxControls lastDisplayedFxControls = {255};
-
-uint8_t activePattern = 0;
-uint8_t lastDisplayedPattern = 255;
-uint8_t activeLane = LANE_NOTE;
-uint8_t lastDisplayedLane = 255;
-uint8_t visibleRange = 0;
-uint8_t lastDisplayedRange = 255;
-uint8_t controlPage = PAGE_OSC;
-uint8_t lastDisplayedPage = 255;
-uint8_t utilityAction = 0;
+InstrumentMode instrumentMode = MODE_SEQ;
+SeqControls seqControls = {PRESET_SUB, 126, 64, 64};
+PlayControls playControls = {0, 0, SCALE_MAJOR, STYLE_POLY, 0};
+uint8_t stepNotes[kStepCount] = {36, 38, 40, 41, 43, 45, 47, 48};
+uint8_t stepDrums[kStepCount] = {DRUM_KICK, DRUM_CLOSED_HAT, DRUM_SNARE, DRUM_CLOSED_HAT,
+                                 DRUM_KICK, DRUM_CLOSED_HAT, DRUM_TOM, DRUM_CLOSED_HAT};
+uint8_t seqGateMask = 0xFF;
+uint8_t droneGateMask = 0;
+uint8_t dronePairWave[kSettingCount] = {SINE, TRIANGLE, SQUARE, SAW};
+uint16_t droneLfoRateTenths[kSettingCount] = {0, 0, 0, 0};
+uint16_t droneLfoShiftRaw[kSettingCount] = {0, 0, 0, 0};
+bool droneWaveLocked[kSettingCount] = {false, false, false, false};
+uint16_t dronePitchWord[kStepCount] = {0};
 
 uint8_t currentStep = 0;
 uint8_t playingStep = 255;
 uint8_t renderedStep = 255;
-uint16_t nextStepIntervalMs = 119;
 unsigned long lastStepMs = 0;
-uint8_t ratchetStep = 255;
-uint8_t remainingRatchets = 0;
-uint16_t ratchetIntervalMs = 1;
-unsigned long lastRatchetMs = 0;
-uint8_t arpIndex = 0;
+uint16_t nextStepIntervalMs = 119;
+uint16_t normalCurrentPitch[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
+uint16_t normalTargetPitch[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
+uint8_t normalGlide[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
+unsigned long lastGlideMs = 0;
 
-uint8_t configuredWaveform = 255;
-uint8_t configuredOsc2Waveform = 255;
-uint8_t configuredEnvelope = 255;
-uint8_t configuredOsc2Envelope = 255;
-uint8_t configuredLength = 255;
-uint8_t configuredModulation = 255;
-uint8_t configuredSampleHoldFrames = 255;
+uint8_t heldButtonMask = 0;
+uint16_t buttonPressOrder[kStepCount] = {0};
+uint16_t pressOrderCounter = 0;
+int8_t liveVoiceForButton[kStepCount] = {-1, -1, -1, -1, -1, -1, -1, -1};
+int8_t liveButtonForVoice[3] = {-1, -1, -1};
+uint16_t liveVoiceAge[3] = {0, 0, 0};
+uint8_t arpPosition = 0;
+int8_t arpDirection = 1;
 
-uint16_t currentPitchWord[kSynthVoiceCount] = {0, 0, 0, 0};
-uint16_t targetPitchWord[kSynthVoiceCount] = {0, 0, 0, 0};
+uint8_t stepButtonStable[kStepCount] = {HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH};
+uint8_t stepButtonReading[kStepCount] = {HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH};
+unsigned long stepButtonChangedAt[kStepCount] = {0};
+uint8_t modeButtonStable = HIGH;
+uint8_t modeButtonReading = HIGH;
+unsigned long modeButtonChangedAt = 0;
+unsigned long modeButtonPressedAt = 0;
+bool modeButtonLongHandled = false;
+bool modeButtonChordUsed = false;
+bool modeChordStepHeld = false;
+bool playSequencerEnabled = true;
 
-uint8_t stepButtonStableState[kVisibleStepCount] = {HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH};
-uint8_t stepButtonLastReading[kVisibleStepCount] = {HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH};
-unsigned long stepButtonLastChangeMs[kVisibleStepCount] = {0};
-
-uint8_t extraButtonStableState = HIGH;
-uint8_t extraButtonLastReading = HIGH;
-unsigned long extraButtonLastChangeMs = 0;
-unsigned long extraButtonPressedAtMs = 0;
-unsigned long pendingClickMs = 0;
-bool pendingSingleClick = false;
-bool extraButtonHeld = false;
-bool extraButtonLongHandled = false;
-bool shiftActionUsed = false;
-bool lastDisplayedShift = false;
-
-uint16_t lastLivePotRaw[kSettingsCount] = {0, 0, 0, 0};
-uint16_t filteredSettingRaw[kSettingsCount] = {0, 0, 0, 0};
-uint16_t filteredStepRaw[kVisibleStepCount] = {0, 0, 0, 0, 0, 0, 0, 0};
-bool livePotCaptured[kSettingsCount] = {true, true, true, true};
-bool settingFilterReady[kSettingsCount] = {false, false, false, false};
-bool stepFilterReady[kVisibleStepCount] = {false, false, false, false, false, false, false, false};
-char pickupHint[kSettingsCount] = {' ', ' ', ' ', ' '};
-
-char lastEditLabel[4] = {'W', 'A', 'V', '\0'};
-char lastEditValue[4] = {'S', 'I', 'N', '\0'};
-unsigned long editViewUntilMs = 0;
+uint16_t filteredSettingRaw[kSettingCount] = {0};
+uint16_t filteredStepRaw[kStepCount] = {0};
+uint16_t settingValues[kSettingCount] = {0};
+bool settingFilterReady[kSettingCount] = {false, false, false, false};
+bool stepFilterReady[kStepCount] = {false, false, false, false, false, false, false, false};
+AnalogMotionState settingMotion[kSettingCount] = {};
+AnalogMotionState stepMotion[kStepCount] = {};
+uint8_t settingScanChannel = 0;
+uint8_t stepScanChannel = 0;
+uint8_t settingReadyMask = 0;
+uint16_t lastDroneRaw[kStepCount] = {0};
+bool droneRawReady[kStepCount] = {false, false, false, false, false, false, false, false};
 bool displayDirty = true;
-uint8_t editedNoteStep = 0;
-bool noteEditVisible = false;
+bool renderedEditVisible = false;
+bool renderedInlineEditVisible = false;
+char editTitle[10] = "";
+char editValue[10] = "";
+unsigned long editUntilMs = 0;
+uint8_t editedStep = 255;
+uint8_t editedDrone = 255;
+uint16_t editedDroneHz = 0;
+uint8_t editedDroneLfo = 255;
+uint16_t editedDroneLfoRateTenths = 0;
+unsigned long inlineEditUntilMs = 0;
+char displayFrame[2][17];
+char renderedFrame[2][16];
+bool renderedFrameReady = false;
+
+void copyText(char *destination, const char *source, uint8_t size) {
+  strncpy(destination, source, size - 1);
+  destination[size - 1] = '\0';
+}
+
+void copyProgmemLabel(char *destination, const char *source, uint8_t size) {
+  strncpy_P(destination, source, size - 1);
+  destination[size - 1] = '\0';
+}
+
+void readSeqPreset(uint8_t index, SeqPreset &preset) { memcpy_P(&preset, &kSeqPresets[index], sizeof(SeqPreset)); }
+void readLivePreset(uint8_t index, LivePreset &preset) { memcpy_P(&preset, &kLivePresets[index], sizeof(LivePreset)); }
+
+uint16_t pitchWordForFrequency(uint16_t frequency) {
+  return ((uint32_t)frequency * 65535UL + FS / 2) / FS;
+}
+
+uint16_t droneLfoRateForRaw(uint16_t raw) {
+  if (raw >= 1023 - kAnalogEndpointMargin) return 0;
+  const uint16_t travel = 1023 - kAnalogEndpointMargin;
+  const uint16_t position = 1023 - raw - kAnalogEndpointMargin;
+  return kDroneLfoFrequencyMinTenths +
+    ((uint32_t)position * (kDroneLfoFrequencyMaxTenths - kDroneLfoFrequencyMinTenths)) / travel;
+}
 
 void setup() {
-  initPatterns();
-  clipboardPattern = patterns[0];
+  pinMode(kMuxBit0Pin, OUTPUT); pinMode(kMuxBit1Pin, OUTPUT); pinMode(kMuxBit2Pin, OUTPUT);
+  pinMode(kSettingsAnalogPin, INPUT); pinMode(kStepButtonPin, INPUT_PULLUP);
+  pinMode(kStepAnalogPin, INPUT); pinMode(kModeButtonPin, INPUT_PULLUP);
 
   edgar.begin(CHA);
-  for (uint8_t voice = 0; voice < kSynthVoiceCount; ++voice) {
-    edgar.setupVoice(voice, SINE, 0, ENVELOPE0, envControls.length, envControls.modulation);
+  for (uint8_t voice = 0; voice < SYNTH_VOICE_COUNT; ++voice) {
+    edgar.setupVoice(voice, SINE, 0, ENVELOPE0, 64, 64);
     edgar.stopVoice(voice);
   }
+  edgar.stopAllDrones();
+  edgar.setDroneMode(false);
 
-  pinMode(kMuxBit0Pin, OUTPUT);
-  pinMode(kMuxBit1Pin, OUTPUT);
-  pinMode(kMuxBit2Pin, OUTPUT);
-  pinMode(kSettingsAnalogPin, INPUT);
-  pinMode(kStepButtonPin, INPUT_PULLUP);
-  pinMode(kPitchAnalogPin, INPUT);
-  pinMode(kExtraButtonPin, INPUT_PULLUP);
-
-  randomSeed(analogRead(kPitchAnalogPin));
+  const uint16_t lowPitch = pitchWordForFrequency(kDroneFrequencyMin);
+  const uint16_t highPitch = pitchWordForFrequency(kDroneFrequencyMax);
+  for (uint8_t i = 0; i < kStepCount; ++i) {
+    dronePitchWord[i] = lowPitch + ((uint32_t)(highPitch - lowPitch) * i) / (kStepCount - 1);
+  }
 
   lcd.begin(16, 2);
-  lcd.clear();
-  lcd.print(F("BitSynth v2"));
-  delay(600);
-  lcd.clear();
+  lcd.clear(); lcd.print(F("BitSynth 3-mode")); delay(500); lcd.clear();
+  nextStepIntervalMs = 15000UL / seqControls.bpm;
+  lastStepMs = millis();
 }
 
 void loop() {
-  const unsigned long now = millis();
-
-  readControls(now);
-  scanExtraButton(now);
-  scanStepButtons(now);
-  applySynthControls();
-  updateGlide();
+  unsigned long now = millis();
   runSequencer(now);
+  updateGlide(now);
+  scanModeButton(now);
+  scanStepButtons(now);
+  readControls(now);
+  now = millis();
+  runSequencer(now);
+  updateGlide(now);
   renderDisplay(now);
-}
-
-void initPatterns() {
-  for (uint8_t slot = 0; slot < kPatternCount; ++slot) {
-    patterns[slot].gates = 0xFFFF;
-    for (uint8_t step = 0; step < kStepCount; ++step) {
-      patterns[slot].note[step] = 48 + step;
-      patterns[slot].probability[step] = kDefaultProbability;
-      patterns[slot].ratchet[step] = kDefaultRatchet;
-      patterns[slot].voicingLock[step] = kDefaultVoicingLock;
-    }
-  }
 }
 
 void selectMuxChannel(uint8_t channel) {
@@ -273,1536 +259,774 @@ void selectMuxChannel(uint8_t channel) {
 
 uint16_t readMedianAnalog(uint8_t pin) {
   uint16_t samples[kAnalogSamples];
-
-  analogRead(pin);
-
+  for (uint8_t i = 0; i < kAnalogDiscardSamples; ++i) analogRead(pin);
   for (uint8_t i = 0; i < kAnalogSamples; ++i) {
     const uint16_t value = analogRead(pin);
-    uint8_t insertAt = i;
-
-    while (insertAt > 0 && samples[insertAt - 1] > value) {
-      samples[insertAt] = samples[insertAt - 1];
-      --insertAt;
-    }
-
-    samples[insertAt] = value;
+    uint8_t at = i;
+    while (at > 0 && samples[at - 1] > value) { samples[at] = samples[at - 1]; --at; }
+    samples[at] = value;
   }
-
   return samples[kAnalogSamples / 2];
 }
 
-uint16_t filterAnalog(uint16_t raw, uint16_t &filteredRaw, bool &ready) {
-  const uint16_t rawFixed = raw << kAnalogFilterFractionBits;
+uint16_t filterAnalog(uint16_t raw, uint16_t &filtered, bool &ready) {
+  const uint16_t fixed = raw << kAnalogFilterFractionBits;
+  if (!ready) { filtered = fixed; ready = true; return raw; }
+  const int32_t delta = (int32_t)fixed - filtered;
+  filtered += (delta * kAnalogFilterAlphaNumerator) / kAnalogFilterAlphaDenominator;
+  return (filtered + (1 << (kAnalogFilterFractionBits - 1))) >> kAnalogFilterFractionBits;
+}
 
-  if (!ready) {
-    filteredRaw = rawFixed;
-    ready = true;
+uint16_t acceptAnalogMovement(uint16_t raw, AnalogMotionState &state, uint8_t threshold) {
+  if (!state.ready) {
+    state.accepted = raw;
+    state.confirmations = 0;
+    state.direction = 0;
+    state.ready = true;
     return raw;
   }
 
-  const int32_t delta = (int32_t)rawFixed - filteredRaw;
-  filteredRaw += (delta * kAnalogFilterAlphaNumerator) / kAnalogFilterAlphaDenominator;
-  return (filteredRaw + (1 << (kAnalogFilterFractionBits - 1))) >> kAnalogFilterFractionBits;
-}
+  const int16_t delta = (int16_t)raw - (int16_t)state.accepted;
+  if (abs(delta) < threshold) {
+    state.confirmations = 0;
+    state.direction = 0;
+    return state.accepted;
+  }
 
-uint8_t mapToByte(uint16_t value, int16_t outMin, int16_t outMax) {
-  return (uint8_t)constrain(map(value, 0, 1023, outMin, outMax), min(outMin, outMax), max(outMin, outMax));
-}
+  const int8_t direction = delta > 0 ? 1 : -1;
+  if (direction != state.direction) {
+    state.direction = direction;
+    state.confirmations = 1;
+  } else if (state.confirmations < kAnalogMovementConfirmations) {
+    ++state.confirmations;
+  }
 
-int8_t mapToSigned(uint16_t value, int8_t outMin, int8_t outMax) {
-  return (int8_t)constrain(map(value, 0, 1023, outMin, outMax), min(outMin, outMax), max(outMin, outMax));
-}
-
-uint8_t mapToIndex(uint16_t value, uint8_t count) {
-  uint8_t index = mapToByte(value, count - 1, 0);
-  return index >= count ? count - 1 : index;
+  if (state.confirmations >= kAnalogMovementConfirmations) {
+    state.accepted = raw;
+    state.confirmations = 0;
+    state.direction = 0;
+  }
+  return state.accepted;
 }
 
 uint16_t rawForMappedValue(int16_t value, int16_t outMin, int16_t outMax) {
-  if (outMin == outMax) {
-    return 0;
-  }
-  return (uint16_t)constrain(map(value, outMin, outMax, 0, 1023), 0, 1023);
-}
-
-bool rawPastHysteresisBoundary(uint16_t raw, uint16_t currentRaw, uint16_t nextRaw) {
-  const uint16_t boundary = (currentRaw + nextRaw) / 2;
-
-  if (nextRaw > currentRaw) {
-    return raw > boundary + kAnalogValueHysteresis;
-  }
-
-  return raw + kAnalogValueHysteresis < boundary;
+  if (outMin == outMax) return 0;
+  return constrain(map(value, outMin, outMax, 0, 1023), 0, 1023);
 }
 
 int16_t mapWithHysteresis(uint16_t raw, int16_t current, int16_t outMin, int16_t outMax) {
-  const int16_t lowest = min(outMin, outMax);
-  const int16_t highest = max(outMin, outMax);
-  const int16_t candidate = constrain(map(raw, 0, 1023, outMin, outMax), lowest, highest);
-
-  if (candidate == current) {
-    return current;
-  }
-
+  const int16_t low = min(outMin, outMax);
+  const int16_t high = max(outMin, outMax);
+  if (raw <= kAnalogEndpointMargin) return outMin;
+  if (raw >= 1023 - kAnalogEndpointMargin) return outMax;
+  const int16_t candidate = constrain(map(raw, 0, 1023, outMin, outMax), low, high);
+  if (candidate == current) return current;
   const int16_t next = current + (candidate > current ? 1 : -1);
-  if (next < lowest || next > highest) {
-    return candidate;
-  }
-
-  if (rawPastHysteresisBoundary(raw, rawForMappedValue(current, outMin, outMax), rawForMappedValue(next, outMin, outMax))) {
-    return candidate;
-  }
-
+  const uint16_t currentRaw = rawForMappedValue(current, outMin, outMax);
+  const uint16_t nextRaw = rawForMappedValue(next, outMin, outMax);
+  const uint16_t boundary = (currentRaw + nextRaw) / 2;
+  if ((nextRaw > currentRaw && raw > boundary + kAnalogHysteresis) ||
+      (nextRaw < currentRaw && raw + kAnalogHysteresis < boundary)) return candidate;
   return current;
 }
 
-uint8_t mapToByteHysteresis(uint16_t raw, uint8_t current, int16_t outMin, int16_t outMax) {
+uint8_t mapByteHysteresis(uint16_t raw, uint8_t current, int16_t outMin, int16_t outMax) {
   return (uint8_t)mapWithHysteresis(raw, current, outMin, outMax);
 }
 
-int8_t mapToSignedHysteresis(uint16_t raw, int8_t current, int8_t outMin, int8_t outMax) {
-  return (int8_t)mapWithHysteresis(raw, current, outMin, outMax);
-}
+uint8_t mapIndexHysteresis(uint16_t raw, uint8_t current, uint8_t count) {
+  if (count <= 1) return 0;
+  if (raw <= kAnalogEndpointMargin) return count - 1;
+  if (raw >= 1023 - kAnalogEndpointMargin) return 0;
 
-uint8_t mapToIndexHysteresis(uint16_t raw, uint8_t current, uint8_t count) {
-  uint8_t index = mapToByteHysteresis(raw, current, count - 1, 0);
-  return index >= count ? count - 1 : index;
-}
+  const uint8_t forwardBin = min((uint8_t)(((uint32_t)raw * count) >> 10), (uint8_t)(count - 1));
+  const uint8_t candidate = count - 1 - forwardBin;
+  if (current >= count || candidate == current) return candidate;
 
-bool mapToGateHysteresis(uint16_t raw, bool current) {
-  if (current) {
-    return raw < 512 + kGateHysteresis;
-  }
-
-  return raw < 512 - kGateHysteresis;
-}
-
-uint16_t rawForIndex(uint8_t index, uint8_t count) {
-  if (count <= 1) {
-    return 0;
-  }
-  return (uint16_t)map(index, 0, count - 1, 1023, 0);
-}
-
-uint16_t rawForReverseByte(uint8_t value, uint8_t maxValue) {
-  if (maxValue == 0) {
-    return 0;
-  }
-  return (uint16_t)map(value, 0, maxValue, 1023, 0);
-}
-
-uint16_t rawForRange(uint16_t value, uint16_t inMin, uint16_t inMax) {
-  if (inMax <= inMin) {
-    return 0;
-  }
-  return (uint16_t)map(value, inMin, inMax, 0, 1023);
-}
-
-uint16_t rawForReverseRange(uint16_t value, uint16_t inMin, uint16_t inMax) {
-  if (inMax <= inMin) {
-    return 0;
-  }
-  return (uint16_t)map(value, inMin, inMax, 1023, 0);
-}
-
-bool crossedTarget(uint16_t previous, uint16_t current, uint16_t target) {
-  return (previous <= target && current >= target) || (previous >= target && current <= target);
-}
-
-bool captureLivePot(uint8_t pot, uint16_t raw, uint16_t targetRaw) {
-  if (livePotCaptured[pot]) {
-    pickupHint[pot] = ' ';
-    return true;
-  }
-
-  const int16_t distance = (int16_t)raw - (int16_t)targetRaw;
-  if (abs(distance) <= kPickupHysteresis || crossedTarget(lastLivePotRaw[pot], raw, targetRaw)) {
-    livePotCaptured[pot] = true;
-    pickupHint[pot] = ' ';
-    displayDirty = true;
-    return true;
-  }
-
-  pickupHint[pot] = raw < targetRaw ? '>' : '<';
-  displayDirty = true;
-  return false;
-}
-
-void resetLivePotPickup() {
-  for (uint8_t i = 0; i < kSettingsCount; ++i) {
-    livePotCaptured[i] = false;
-    pickupHint[i] = ' ';
-  }
-}
-
-void showEditView(unsigned long now) {
-  editViewUntilMs = now + kEditViewMs;
-  displayDirty = true;
-}
-
-void setLastEditText(const char label[4], const char value[4], unsigned long now) {
-  for (uint8_t i = 0; i < 4; ++i) {
-    lastEditLabel[i] = label[i];
-    lastEditValue[i] = value[i];
-  }
-  showEditView(now);
-}
-
-void setLastEditNumber(const char label[4], int16_t value, unsigned long now) {
-  for (uint8_t i = 0; i < 4; ++i) {
-    lastEditLabel[i] = label[i];
-  }
-
-  if (value < 0) {
-    lastEditValue[0] = '-';
-    value = -value;
-  } else if (value > 99) {
-    lastEditValue[0] = (char)('0' + ((value / 100) % 10));
+  if (candidate < current) {
+    const uint16_t boundary = ((uint32_t)(count - current) << 10) / count;
+    if (raw > boundary + kAnalogHysteresis) return candidate;
   } else {
-    lastEditValue[0] = value > 9 ? (char)('0' + ((value / 10) % 10)) : '0';
+    const uint16_t boundary = ((uint32_t)(count - 1 - current) << 10) / count;
+    if (raw + kAnalogHysteresis < boundary) return candidate;
   }
+  return current;
+}
 
-  if (value > 99) {
-    lastEditValue[1] = (char)('0' + ((value / 10) % 10));
-    lastEditValue[2] = (char)('0' + (value % 10));
-  } else if (lastEditValue[0] == '-') {
-    lastEditValue[1] = value > 9 ? (char)('0' + ((value / 10) % 10)) : '0';
-    lastEditValue[2] = (char)('0' + (value % 10));
-  } else {
-    lastEditValue[1] = (char)('0' + (value % 10));
-    lastEditValue[2] = ' ';
-  }
-
-  lastEditValue[3] = '\0';
-  showEditView(now);
+void setEditText(const char *title, const char *value, unsigned long now) {
+  copyText(editTitle, title, sizeof(editTitle)); copyText(editValue, value, sizeof(editValue));
+  editUntilMs = now + kEditViewMs; displayDirty = true;
 }
 
 void readControls(unsigned long now) {
-  uint16_t settingValues[kSettingsCount];
+  const uint8_t setting = settingScanChannel;
+  selectMuxChannel(setting);
+  const uint16_t settingFiltered = filterAnalog(
+    readMedianAnalog(kSettingsAnalogPin), filteredSettingRaw[setting], settingFilterReady[setting]);
+  settingValues[setting] = acceptAnalogMovement(
+    settingFiltered, settingMotion[setting], kSettingMovementThreshold);
+  settingReadyMask |= 1 << setting;
+  settingScanChannel = (settingScanChannel + 1) % kSettingCount;
 
-  for (uint8_t channel = 0; channel < kSettingsCount; ++channel) {
-    selectMuxChannel(channel);
-    const uint16_t raw = readMedianAnalog(kSettingsAnalogPin);
-    settingValues[channel] = filterAnalog(raw, filteredSettingRaw[channel], settingFilterReady[channel]);
+  if (settingReadyMask == ((1 << kSettingCount) - 1)) {
+    if (instrumentMode == MODE_SEQ) readSequencerControls(settingValues, now);
+    else if (instrumentMode == MODE_PLAY) readPlayControls(settingValues, now);
+    else readDroneControls(settingValues, now);
   }
 
-  readPerformanceControls(settingValues, now);
-  readStepPots(now);
+  if (instrumentMode == MODE_PLAY) {
+    readPlayOctavePot(now);
+    return;
+  }
 
-  for (uint8_t channel = 0; channel < kSettingsCount; ++channel) {
-    lastLivePotRaw[channel] = settingValues[channel];
+  for (uint8_t i = 0; i < kStepPotsPerLoop; ++i) {
+    const uint8_t step = stepScanChannel;
+    if (instrumentMode == MODE_SEQ) readSequencerStepPot(step, now);
+    else readDronePitchPot(step, now);
+    stepScanChannel = (stepScanChannel + 1) % kStepCount;
   }
 }
 
-void readPerformanceControls(const uint16_t values[], unsigned long now) {
+void readSequencerControls(const uint16_t values[], unsigned long now) {
   (void)now;
-
-  const uint8_t nextWaveform = mapToIndexHysteresis(values[0], oscControls.waveform, kWaveCount);
-  if (nextWaveform != oscControls.waveform) {
-    oscControls.waveform = nextWaveform;
+  uint8_t next = mapIndexHysteresis(values[0], seqControls.preset, kSeqPresetCount);
+  if (next != seqControls.preset) {
+    if (seqControls.preset == PRESET_DRUM || next == PRESET_DRUM) {
+      edgar.stopDrum();
+      stopNormalVoices();
+    }
+    seqControls.preset = next;
     displayDirty = true;
   }
+  next = mapByteHysteresis(values[1], seqControls.bpm, 60, 220);
+  if (next != seqControls.bpm) { seqControls.bpm = next; displayDirty = true; }
+  next = mapByteHysteresis(values[2], seqControls.color, 127, 0);
+  if (next != seqControls.color) { seqControls.color = next; displayDirty = true; }
+  next = mapByteHysteresis(values[3], seqControls.shape, 127, 0);
+  if (next != seqControls.shape) { seqControls.shape = next; displayDirty = true; }
+}
 
-  const uint8_t nextBpm = mapToByteHysteresis(values[1], seqControls.bpm, 40, 240);
-  if (nextBpm != seqControls.bpm) {
-    seqControls.bpm = nextBpm;
+void revoiceHeldButtons();
+
+void readPlayControls(const uint16_t values[], unsigned long now) {
+  (void)now;
+  uint8_t next = mapIndexHysteresis(values[0], playControls.preset, kLivePresetCount);
+  if (next != playControls.preset) {
+    playControls.preset = next; applyLiveConfiguration(); revoiceHeldButtons();
     displayDirty = true;
   }
-
-  const uint8_t nextLength = mapToByteHysteresis(values[2], envControls.length, 127, 0);
-  if (nextLength != envControls.length) {
-    envControls.length = nextLength;
+  next = mapIndexHysteresis(values[1], playControls.root, 12);
+  if (next != playControls.root) {
+    playControls.root = next; revoiceHeldButtons(); displayDirty = true;
+  }
+  next = mapIndexHysteresis(values[2], playControls.scale, kScaleCount);
+  if (next != playControls.scale) {
+    playControls.scale = next; revoiceHeldButtons(); displayDirty = true;
+  }
+  next = mapIndexHysteresis(values[3], playControls.style, kPlayStyleCount);
+  if (next != playControls.style) {
+    playControls.style = next; arpPosition = 0; arpDirection = 1; revoiceHeldButtons();
     displayDirty = true;
   }
-
-  const uint8_t nextModulation = mapToByteHysteresis(values[3], envControls.modulation, 127, 0);
-  if (nextModulation != envControls.modulation) {
-    envControls.modulation = nextModulation;
-    displayDirty = true;
-  }
 }
 
-void readCurrentPage(const uint16_t values[], unsigned long now) {
-  switch (controlPage) {
-    case PAGE_OSC2:
-      readOsc2Page(values, now);
-      break;
-    case PAGE_ENV:
-      readEnvPage(values, now);
-      break;
-    case PAGE_SEQ:
-      readSeqPage(values, now);
-      break;
-    case PAGE_PAT:
-      readPatPage(values, now);
-      break;
-    case PAGE_FX:
-      readFxPage(values, now);
-      break;
-    case PAGE_UTL:
-      readUtilityPage(values, now);
-      break;
-    case PAGE_OSC:
-    default:
-      readOscPage(values, now);
-      break;
-  }
-}
-
-void readOscPage(const uint16_t values[], unsigned long now) {
-  if (captureLivePot(0, values[0], rawForIndex(oscControls.waveform, kWaveCount))) {
-    const uint8_t next = mapToIndexHysteresis(values[0], oscControls.waveform, kWaveCount);
-    if (next != oscControls.waveform) {
-      oscControls.waveform = next;
-      setLastEditText("WAV", waveLabel(oscControls.waveform), now);
+void readDroneControls(const uint16_t values[], unsigned long now) {
+  if (modeButtonStable == LOW) {
+    for (uint8_t pair = 0; pair < kSettingCount; ++pair) {
+      if (values[pair] == droneLfoShiftRaw[pair]) continue;
+      droneLfoShiftRaw[pair] = values[pair];
+      droneWaveLocked[pair] = true;
+      modeButtonChordUsed = true;
+      const uint16_t rate = droneLfoRateForRaw(values[pair]);
+      if (rate == droneLfoRateTenths[pair]) continue;
+      droneLfoRateTenths[pair] = rate;
+      edgar.setDroneLfoRate(pair, rate);
+      editedDroneLfo = pair;
+      editedDroneLfoRateTenths = rate;
+      editedDrone = 255;
+      editedStep = 255;
+      inlineEditUntilMs = now + kEditViewMs;
+      displayDirty = true;
     }
+    return;
   }
 
-  if (captureLivePot(1, values[1], rawForIndex(oscControls.playMode, kPlayModeCount))) {
-    const uint8_t next = mapToIndexHysteresis(values[1], oscControls.playMode, kPlayModeCount);
-    if (next != oscControls.playMode) {
-      oscControls.playMode = next;
-      panicVoices();
-      setLastEditText("MOD", playModeLabel(oscControls.playMode), now);
+  for (uint8_t pair = 0; pair < kSettingCount; ++pair) {
+    if (droneWaveLocked[pair]) {
+      if (abs((int16_t)values[pair] - (int16_t)droneLfoShiftRaw[pair]) < kSettingMovementThreshold) continue;
+      droneWaveLocked[pair] = false;
     }
-  }
-
-  if (captureLivePot(2, values[2], rawForReverseRange((uint8_t)(oscControls.voicing + 12), 0, 24))) {
-    const int8_t next = mapToSignedHysteresis(values[2], oscControls.voicing, 12, -12);
-    if (next != oscControls.voicing) {
-      oscControls.voicing = next;
-      setLastEditNumber("VOI", oscControls.voicing, now);
-    }
-  }
-
-  if (captureLivePot(3, values[3], rawForReverseRange((uint8_t)(oscControls.transpose + 24), 0, 48))) {
-    const int8_t next = mapToSignedHysteresis(values[3], oscControls.transpose, 24, -24);
-    if (next != oscControls.transpose) {
-      oscControls.transpose = next;
-      setLastEditNumber("TRN", oscControls.transpose, now);
-    }
-  }
-}
-
-void readOsc2Page(const uint16_t values[], unsigned long now) {
-  if (captureLivePot(0, values[0], rawForIndex(osc2Controls.waveform, kWaveCount))) {
-    const uint8_t next = mapToIndexHysteresis(values[0], osc2Controls.waveform, kWaveCount);
-    if (next != osc2Controls.waveform) {
-      osc2Controls.waveform = next;
-      setLastEditText("2WV", waveLabel(osc2Controls.waveform), now);
-    }
-  }
-
-  if (captureLivePot(1, values[1], rawForIndex(osc2Controls.envelope, kOsc2EnvelopeCount))) {
-    const uint8_t next = mapToIndexHysteresis(values[1], osc2Controls.envelope, kOsc2EnvelopeCount);
-    if (next != osc2Controls.envelope) {
-      osc2Controls.envelope = next;
-      setLastEditText("2EN", osc2EnvelopeLabel(osc2Controls.envelope), now);
-    }
-  }
-
-  if (captureLivePot(2, values[2], rawForReverseByte(osc2Controls.detune, 24))) {
-    const uint8_t next = mapToByteHysteresis(values[2], osc2Controls.detune, 24, 0);
-    if (next != osc2Controls.detune) {
-      osc2Controls.detune = next;
-      setLastEditNumber("2DT", osc2Controls.detune, now);
-    }
-  }
-
-  if (captureLivePot(3, values[3], rawForReverseRange((uint8_t)(osc2Controls.transpose + 24), 0, 48))) {
-    const int8_t next = mapToSignedHysteresis(values[3], osc2Controls.transpose, 24, -24);
-    if (next != osc2Controls.transpose) {
-      osc2Controls.transpose = next;
-      setLastEditNumber("2TR", osc2Controls.transpose, now);
-    }
-  }
-}
-
-void readEnvPage(const uint16_t values[], unsigned long now) {
-  if (captureLivePot(0, values[0], rawForIndex(envControls.envelope, kEnvelopeCount))) {
-    const uint8_t next = mapToIndexHysteresis(values[0], envControls.envelope, kEnvelopeCount);
-    if (next != envControls.envelope) {
-      envControls.envelope = next;
-      setLastEditNumber("ENV", envControls.envelope, now);
-    }
-  }
-
-  if (captureLivePot(1, values[1], rawForReverseByte(envControls.length, 127))) {
-    const uint8_t next = mapToByteHysteresis(values[1], envControls.length, 127, 0);
-    if (next != envControls.length) {
-      envControls.length = next;
-      setLastEditNumber("LEN", envControls.length, now);
-    }
-  }
-
-  if (captureLivePot(2, values[2], rawForReverseByte(envControls.modulation, 127))) {
-    const uint8_t next = mapToByteHysteresis(values[2], envControls.modulation, 127, 0);
-    if (next != envControls.modulation) {
-      envControls.modulation = next;
-      setLastEditNumber("MOD", envControls.modulation, now);
-    }
-  }
-
-  if (captureLivePot(3, values[3], rawForReverseByte(envControls.glide, 127))) {
-    const uint8_t next = mapToByteHysteresis(values[3], envControls.glide, 127, 0);
-    if (next != envControls.glide) {
-      envControls.glide = next;
-      setLastEditNumber("GLD", envControls.glide, now);
-    }
-  }
-}
-
-void readSeqPage(const uint16_t values[], unsigned long now) {
-  if (captureLivePot(0, values[0], rawForRange(seqControls.bpm, 40, 240))) {
-    const uint8_t next = mapToByteHysteresis(values[0], seqControls.bpm, 40, 240);
-    if (next != seqControls.bpm) {
-      seqControls.bpm = next;
-      setLastEditNumber("BPM", seqControls.bpm, now);
-    }
-  }
-
-  if (captureLivePot(1, values[1], rawForReverseByte(seqControls.swing, 75))) {
-    const uint8_t next = mapToByteHysteresis(values[1], seqControls.swing, 75, 0);
-    if (next != seqControls.swing) {
-      seqControls.swing = next;
-      setLastEditNumber("SWG", seqControls.swing, now);
-    }
-  }
-
-  if (captureLivePot(2, values[2], rawForIndex(seqControls.scale, kScaleCount))) {
-    const uint8_t next = mapToIndexHysteresis(values[2], seqControls.scale, kScaleCount);
-    if (next != seqControls.scale) {
-      seqControls.scale = next;
-      setLastEditText("SCL", scaleLabel(seqControls.scale), now);
-    }
-  }
-
-  if (captureLivePot(3, values[3], rawForIndex(activeLane, kLaneCount))) {
-    const uint8_t next = mapToIndexHysteresis(values[3], activeLane, kLaneCount);
-    if (next != activeLane) {
-      activeLane = next;
-      setLastEditText("LAN", laneLabel(activeLane), now);
-    }
-  }
-}
-
-void readPatPage(const uint16_t values[], unsigned long now) {
-  if (captureLivePot(0, values[0], rawForIndex(activePattern, kPatternCount))) {
-    const uint8_t next = mapToIndexHysteresis(values[0], activePattern, kPatternCount);
-    if (next != activePattern) {
-      activePattern = next;
-      patControls.targetSlot = next;
-      resetLivePotPickup();
-      setLastEditNumber("PAT", activePattern + 1, now);
-    }
-  }
-
-  if (captureLivePot(1, values[1], rawForIndex(patControls.targetSlot, kPatternCount))) {
-    const uint8_t next = mapToIndexHysteresis(values[1], patControls.targetSlot, kPatternCount);
-    if (next != patControls.targetSlot) {
-      patControls.targetSlot = next;
-      setLastEditNumber("DST", patControls.targetSlot + 1, now);
-    }
-  }
-
-  if (captureLivePot(2, values[2], rawForReverseByte(patControls.randomAmount, 100))) {
-    const uint8_t next = mapToByteHysteresis(values[2], patControls.randomAmount, 100, 0);
-    if (next != patControls.randomAmount) {
-      patControls.randomAmount = next;
-      setLastEditNumber("RND", patControls.randomAmount, now);
-    }
-  }
-
-  if (captureLivePot(3, values[3], rawForIndex(visibleRange, 2))) {
-    const uint8_t next = mapToIndexHysteresis(values[3], visibleRange, 2);
-    if (next != visibleRange) {
-      visibleRange = next;
-      setLastEditText("RNG", visibleRange ? "916" : "1-8", now);
-    }
-  }
-}
-
-void readFxPage(const uint16_t values[], unsigned long now) {
-  if (captureLivePot(0, values[0], rawForReverseRange(fxControls.sampleHoldFrames, 1, 16))) {
-    const uint8_t next = mapToByteHysteresis(values[0], fxControls.sampleHoldFrames, 16, 1);
-    if (next != fxControls.sampleHoldFrames) {
-      fxControls.sampleHoldFrames = next;
-      setLastEditNumber("HLD", fxControls.sampleHoldFrames, now);
-    }
-  }
-
-  for (uint8_t pot = 1; pot < kSettingsCount; ++pot) {
-    captureLivePot(pot, values[pot], 512);
-  }
-}
-
-void readUtilityPage(const uint16_t values[], unsigned long now) {
-  if (captureLivePot(0, values[0], 1023)) {
-    const uint8_t next = mapToIndexHysteresis(values[0], utilityAction, 4);
-    if (next != utilityAction) {
-      utilityAction = next;
-      if (utilityAction == 0) {
-        setLastEditText("UTL", "PNC", now);
-      } else if (utilityAction == 1) {
-        setLastEditText("UTL", "INI", now);
-      } else if (utilityAction == 2) {
-        setLastEditText("UTL", "GAT", now);
-      } else {
-        setLastEditText("UTL", "VER", now);
-      }
-    }
-  }
-
-  for (uint8_t pot = 1; pot < kSettingsCount; ++pot) {
-    captureLivePot(pot, values[pot], 512);
-  }
-}
-
-void readStepPots(unsigned long now) {
-  for (uint8_t slot = 0; slot < kVisibleStepCount; ++slot) {
-    const uint8_t step = slot;
-    selectMuxChannel(slot);
-    const uint16_t raw = filterAnalog(readMedianAnalog(kPitchAnalogPin), filteredStepRaw[slot], stepFilterReady[slot]);
-
-    const uint8_t next = mapToByteHysteresis(raw, patterns[activePattern].note[step], kStepNoteMax, kStepNoteMin);
-    if (next != patterns[activePattern].note[step]) {
-      patterns[activePattern].note[step] = next;
-      editedNoteStep = step;
-      editViewUntilMs = now + kNoteEditViewMs;
+    const uint8_t next = mapIndexHysteresis(values[pair], dronePairWave[pair], kDroneWaveCount);
+    if (next != dronePairWave[pair]) {
+      dronePairWave[pair] = next; edgar.setDroneWave(pair * 2, next); edgar.setDroneWave(pair * 2 + 1, next);
       displayDirty = true;
     }
   }
 }
 
-void scanExtraButton(unsigned long now) {
+void readSequencerStepPot(uint8_t step, unsigned long now) {
+  selectMuxChannel(step);
+  const uint16_t filtered = filterAnalog(readMedianAnalog(kStepAnalogPin), filteredStepRaw[step], stepFilterReady[step]);
+  const uint16_t raw = acceptAnalogMovement(filtered, stepMotion[step], kStepMovementThreshold);
+  const bool drumMode = seqControls.preset == PRESET_DRUM;
+  const uint8_t current = drumMode ? stepDrums[step] : stepNotes[step];
+  const uint8_t next = drumMode
+    ? mapIndexHysteresis(raw, current, kDrumCount)
+    : mapByteHysteresis(raw, current, kStepNoteMax, kStepNoteMin);
+  if (next != current) {
+    if (drumMode) stepDrums[step] = next;
+    else stepNotes[step] = next;
+    editedStep = step;
+    editedDrone = 255;
+    inlineEditUntilMs = now + kEditViewMs;
+    displayDirty = true;
+  }
+}
+
+void readPlayOctavePot(unsigned long now) {
   (void)now;
-}
-
-bool shiftActive(unsigned long now) {
-  return extraButtonHeld && (now - extraButtonPressedAtMs) >= kShiftHoldMs;
-}
-
-void handleExtraButtonClick(unsigned long now) {
-  if (pendingSingleClick && (now - pendingClickMs) <= kDoublePressMs) {
-    changePage(controlPage == 0 ? kPageCount - 1 : controlPage - 1, now);
-    pendingSingleClick = false;
-  } else {
-    pendingSingleClick = true;
-    pendingClickMs = now;
+  selectMuxChannel(0);
+  const uint16_t filtered = filterAnalog(readMedianAnalog(kStepAnalogPin), filteredStepRaw[0], stepFilterReady[0]);
+  const uint16_t raw = acceptAnalogMovement(filtered, stepMotion[0], kStepMovementThreshold);
+  const uint8_t next = mapIndexHysteresis(raw, playControls.octave, 4);
+  if (next != playControls.octave) {
+    playControls.octave = next; revoiceHeldButtons(); displayDirty = true;
   }
 }
 
-void changePage(uint8_t nextPage, unsigned long now) {
-  if (nextPage >= kPageCount || nextPage == controlPage) {
-    return;
+void readDronePitchPot(uint8_t voice, unsigned long now) {
+  const uint16_t lowPitch = pitchWordForFrequency(kDroneFrequencyMin);
+  const uint16_t highPitch = pitchWordForFrequency(kDroneFrequencyMax);
+  selectMuxChannel(voice);
+  const uint16_t filtered = filterAnalog(readMedianAnalog(kStepAnalogPin), filteredStepRaw[voice], stepFilterReady[voice]);
+  const uint16_t raw = acceptAnalogMovement(filtered, stepMotion[voice], kDroneMovementThreshold);
+  const bool showEdit = droneRawReady[voice];
+  if (showEdit && raw == lastDroneRaw[voice]) return;
+  droneRawReady[voice] = true;
+  lastDroneRaw[voice] = raw;
+  dronePitchWord[voice] = highPitch - ((uint32_t)(highPitch - lowPitch) * raw) / 1023;
+  edgar.setDronePitchWord(voice, dronePitchWord[voice]);
+  const uint16_t hz = ((uint32_t)dronePitchWord[voice] * FS + 32767UL) / 65535UL;
+  if (showEdit) {
+    editedDrone = voice;
+      editedDroneLfo = 255;
+    editedStep = 255;
+    editedDroneHz = hz;
+    inlineEditUntilMs = now + kEditViewMs;
+    displayDirty = true;
   }
+}
 
-  controlPage = nextPage;
-  resetLivePotPickup();
-  showEditView(now);
+void scanModeButton(unsigned long now) {
+  selectMuxChannel(0);
+  const uint8_t reading = digitalRead(kModeButtonPin);
+  if (reading != modeButtonReading) { modeButtonReading = reading; modeButtonChangedAt = now; }
+  if ((unsigned long)(now - modeButtonChangedAt) >= kButtonDebounceMs && reading != modeButtonStable) {
+    modeButtonStable = reading;
+    if (reading == LOW) {
+      modeButtonPressedAt = now;
+      modeButtonLongHandled = false;
+      modeButtonChordUsed = false;
+      if (instrumentMode == MODE_DRONE) {
+        for (uint8_t pair = 0; pair < kSettingCount; ++pair) {
+          droneLfoShiftRaw[pair] = settingValues[pair];
+        }
+      }
+    } else if (!modeButtonLongHandled && !modeButtonChordUsed) {
+      changeMode((InstrumentMode)((instrumentMode + 1) % 3), now);
+    }
+  }
+  if (modeButtonStable == LOW && !modeButtonLongHandled && !modeButtonChordUsed &&
+      (unsigned long)(now - modeButtonPressedAt) >= kPanicHoldMs) {
+    panicAll(); modeButtonLongHandled = true; setEditText("PANIC", "ALL OFF", now);
+  }
 }
 
 void scanStepButtons(unsigned long now) {
-  for (uint8_t slot = 0; slot < kVisibleStepCount; ++slot) {
-    selectMuxChannel(slot);
+  for (uint8_t button = 0; button < kStepCount; ++button) {
+    selectMuxChannel(button);
     const uint8_t reading = digitalRead(kStepButtonPin);
-
-    if (reading != stepButtonLastReading[slot]) {
-      stepButtonLastChangeMs[slot] = now;
-      stepButtonLastReading[slot] = reading;
-    }
-
-    if ((now - stepButtonLastChangeMs[slot]) >= kButtonDebounceMs &&
-        reading != stepButtonStableState[slot]) {
-      stepButtonStableState[slot] = reading;
-
-      if (reading == LOW) {
-        handleStepButton(slot, now);
-      }
+    if (reading != stepButtonReading[button]) { stepButtonReading[button] = reading; stepButtonChangedAt[button] = now; }
+    if ((unsigned long)(now - stepButtonChangedAt[button]) >= kButtonDebounceMs && reading != stepButtonStable[button]) {
+      stepButtonStable[button] = reading; handleStepButton(button, reading == LOW);
     }
   }
 }
 
-void handleStepButton(uint8_t slot, unsigned long now) {
-  (void)now;
-  const uint8_t step = slot;
-  const bool enabled = !stepGate(activePattern, step);
-  setStepGate(activePattern, step, enabled);
-}
-
-void handleUtilityButton(uint8_t slot, unsigned long now) {
-  if (slot == 0) {
-    panicVoices();
-    setLastEditText("PNC", "OK ", now);
-  } else if (slot == 1) {
-    initPattern(activePattern);
-    setLastEditText("INI", "OK ", now);
-  } else if (slot == 2) {
-    patterns[activePattern].gates = 0xFFFF;
-    setLastEditText("GAT", "ALL", now);
-  } else if (slot == 3) {
-    controlPage = PAGE_OSC;
-    resetLivePotPickup();
-    setLastEditText("UTL", "EXT", now);
+void handleStepButton(uint8_t button, bool pressed) {
+  if (button == 0 && modeChordStepHeld) {
+    if (!pressed) modeChordStepHeld = false;
+    return;
   }
-}
-
-void handleShiftStepButton(uint8_t slot, unsigned long now) {
-  shiftActionUsed = true;
-
-  switch (slot) {
-    case 0:
-      activeLane = LANE_NOTE;
-      setLastEditText("LAN", "N  ", now);
-      break;
-    case 1:
-      activeLane = LANE_GATE;
-      setLastEditText("LAN", "G  ", now);
-      break;
-    case 2:
-      activeLane = LANE_PROB;
-      setLastEditText("LAN", "P  ", now);
-      break;
-    case 3:
-      visibleRange = visibleRange ? 0 : 1;
-      setLastEditText("RNG", visibleRange ? "916" : "1-8", now);
-      break;
-    case 4:
-      clipboardPattern = patterns[activePattern];
-      clipboardHasPattern = true;
-      setLastEditText("CPY", "OK ", now);
-      break;
-    case 5:
-      if (clipboardHasPattern) {
-        patterns[activePattern] = clipboardPattern;
-        resetLivePotPickup();
-        setLastEditText("PST", "OK ", now);
-      } else {
-        setLastEditText("PST", "NO ", now);
-      }
-      break;
-    case 6:
-      clearCurrentLane();
-      setLastEditText("CLR", "OK ", now);
-      break;
-    case 7:
-      randomizeCurrentLane();
-      setLastEditText("RND", "OK ", now);
-      break;
+  if (instrumentMode == MODE_PLAY && button == 0 && pressed && modeButtonStable == LOW) {
+    playSequencerEnabled = !playSequencerEnabled;
+    modeButtonChordUsed = true;
+    modeChordStepHeld = true;
+    if (!playSequencerEnabled) { stopNormalVoice(0); edgar.stopDrum(); }
+    displayDirty = true;
+    return;
   }
-}
-
-bool stepGate(uint8_t patternSlot, uint8_t step) {
-  return (patterns[patternSlot].gates & (1U << step)) != 0;
-}
-
-void setStepGate(uint8_t patternSlot, uint8_t step, bool enabled) {
-  if (enabled) {
-    patterns[patternSlot].gates |= (1U << step);
+  if (instrumentMode == MODE_SEQ) {
+    if (pressed) { seqGateMask ^= (1 << button); displayDirty = true; }
+    return;
+  }
+  if (instrumentMode == MODE_DRONE) {
+    if (pressed) {
+      droneGateMask ^= (1 << button); edgar.setDroneGate(button, bitRead(droneGateMask, button)); displayDirty = true;
+    }
+    return;
+  }
+  if (pressed) {
+    heldButtonMask |= (1 << button); buttonPressOrder[button] = ++pressOrderCounter; handleLivePress(button);
   } else {
-    patterns[patternSlot].gates &= ~(1U << step);
+    heldButtonMask &= ~(1 << button); handleLiveRelease(button);
   }
   displayDirty = true;
 }
 
-void initPattern(uint8_t slot) {
-  patterns[slot].gates = 0xFFFF;
-  for (uint8_t step = 0; step < kStepCount; ++step) {
-    patterns[slot].note[step] = 48 + step;
-    patterns[slot].probability[step] = kDefaultProbability;
-    patterns[slot].ratchet[step] = kDefaultRatchet;
-    patterns[slot].voicingLock[step] = kDefaultVoicingLock;
-  }
-  displayDirty = true;
-}
+void changeMode(InstrumentMode nextMode, unsigned long now) {
+  if (nextMode == instrumentMode) return;
+  const InstrumentMode previous = instrumentMode;
+  if (previous == MODE_DRONE) { edgar.stopAllDrones(); edgar.setDroneMode(false); }
+  if (previous == MODE_PLAY) clearHeldNotes();
+  edgar.stopDrum();
+  stopNormalVoices();
+  instrumentMode = nextMode;
 
-void clearCurrentLane() {
-  const uint8_t baseStep = visibleRange ? 8 : 0;
-
-  for (uint8_t slot = 0; slot < kVisibleStepCount; ++slot) {
-    const uint8_t step = baseStep + slot;
-    if (activeLane == LANE_NOTE) {
-      patterns[activePattern].note[step] = 48;
-    } else if (activeLane == LANE_GATE) {
-      setStepGate(activePattern, step, false);
-    } else if (activeLane == LANE_PROB) {
-      patterns[activePattern].probability[step] = kDefaultProbability;
-    } else if (activeLane == LANE_RATCHET) {
-      patterns[activePattern].ratchet[step] = kDefaultRatchet;
-    } else {
-      patterns[activePattern].voicingLock[step] = kDefaultVoicingLock;
+  if (nextMode == MODE_DRONE) {
+    edgar.setSampleHold(1);
+    for (uint8_t pair = 0; pair < kSettingCount; ++pair) {
+      edgar.setDroneWave(pair * 2, dronePairWave[pair]);
+      edgar.setDroneWave(pair * 2 + 1, dronePairWave[pair]);
+      edgar.setDroneLfoRate(pair, droneLfoRateTenths[pair]);
     }
-  }
-  displayDirty = true;
-}
-
-void randomizeCurrentLane() {
-  const uint8_t baseStep = visibleRange ? 8 : 0;
-  const int8_t noteSpread = (int8_t)(patControls.randomAmount / 8);
-  const int8_t lockSpread = (int8_t)(patControls.randomAmount / 8);
-
-  for (uint8_t slot = 0; slot < kVisibleStepCount; ++slot) {
-    const uint8_t step = baseStep + slot;
-    if (activeLane == LANE_NOTE) {
-      const int8_t offset = (int8_t)random(-noteSpread, noteSpread + 1);
-      patterns[activePattern].note[step] = constrain((int16_t)patterns[activePattern].note[step] + offset, 12, 84);
-    } else if (activeLane == LANE_GATE) {
-      setStepGate(activePattern, step, random(100) < patControls.randomAmount);
-    } else if (activeLane == LANE_PROB) {
-      patterns[activePattern].probability[step] = random(101);
-    } else if (activeLane == LANE_RATCHET) {
-      patterns[activePattern].ratchet[step] = (uint8_t)random(1, 5);
-    } else {
-      patterns[activePattern].voicingLock[step] = (int8_t)random(-lockSpread, lockSpread + 1);
+    for (uint8_t voice = 0; voice < kStepCount; ++voice) {
+      droneRawReady[voice] = false;
+      edgar.setDronePitchWord(voice, dronePitchWord[voice]);
+      edgar.setDroneGate(voice, bitRead(droneGateMask, voice));
     }
-  }
-  displayDirty = true;
-}
-
-void panicVoices() {
-  for (uint8_t voice = 0; voice < kSynthVoiceCount; ++voice) {
-    stopVoiceTracked(voice);
-  }
-  remainingRatchets = 0;
-  ratchetStep = 255;
-}
-
-void applySynthControls() {
-  if (oscControls.waveform != configuredWaveform) {
-    edgar.setWave(kMainVoice, kWaveIds[oscControls.waveform]);
-    edgar.setWave(kChordVoiceA, kWaveIds[oscControls.waveform]);
-    edgar.setWave(kChordVoiceB, kWaveIds[oscControls.waveform]);
-    configuredWaveform = oscControls.waveform;
-  }
-
-  if (osc2Controls.waveform != configuredOsc2Waveform) {
-    edgar.setWave(kOsc2Voice, kWaveIds[osc2Controls.waveform]);
-    configuredOsc2Waveform = osc2Controls.waveform;
-  }
-
-  if (envControls.envelope != configuredEnvelope) {
-    edgar.setEnvelope(kMainVoice, envControls.envelope);
-    edgar.setEnvelope(kChordVoiceA, envControls.envelope);
-    edgar.setEnvelope(kChordVoiceB, envControls.envelope);
-    configuredEnvelope = envControls.envelope;
-  }
-
-  if (osc2Controls.envelope != configuredOsc2Envelope) {
-    if (osc2Controls.envelope == 0) {
-      stopVoiceTracked(kOsc2Voice);
-    } else {
-      edgar.setEnvelope(kOsc2Voice, osc2Controls.envelope - 1);
-    }
-    configuredOsc2Envelope = osc2Controls.envelope;
-  }
-
-  if (envControls.length != configuredLength) {
-    for (uint8_t voice = 0; voice < kSynthVoiceCount; ++voice) {
-      edgar.setLength(voice, envControls.length);
-    }
-    configuredLength = envControls.length;
-  }
-
-  if (envControls.modulation != configuredModulation) {
-    for (uint8_t voice = 0; voice < kSynthVoiceCount; ++voice) {
-      edgar.setMod(voice, envControls.modulation);
-    }
-    configuredModulation = envControls.modulation;
-  }
-
-  if (fxControls.sampleHoldFrames != configuredSampleHoldFrames) {
-    edgar.setSampleHold(fxControls.sampleHoldFrames);
-    configuredSampleHoldFrames = fxControls.sampleHoldFrames;
-  }
-}
-
-void runSequencer(unsigned long now) {
-  if (remainingRatchets > 0 && (unsigned long)(now - lastRatchetMs) >= ratchetIntervalMs) {
-    lastRatchetMs += ratchetIntervalMs;
-    --remainingRatchets;
-    triggerStepPlayback(ratchetStep);
-    return;
-  }
-
-  if ((unsigned long)(now - lastStepMs) < nextStepIntervalMs) {
-    return;
-  }
-
-  lastStepMs = now;
-  nextStepIntervalMs = intervalAfterStep(currentStep);
-  playStep(currentStep, nextStepIntervalMs);
-  playingStep = currentStep;
-  currentStep = (currentStep + 1) % kPlaybackStepCount;
-  displayDirty = true;
-}
-
-uint16_t bpmStepMs() {
-  return (uint16_t)(15000UL / max((uint8_t)1, seqControls.bpm));
-}
-
-uint16_t intervalAfterStep(uint8_t step) {
-  const uint16_t tempo = bpmStepMs();
-  const uint16_t offset = ((uint32_t)tempo * seqControls.swing) / 200;
-
-  if (offset == 0) {
-    return tempo;
-  }
-
-  if (step & 0x01) {
-    return tempo + offset;
-  }
-
-  return tempo > offset + 5 ? tempo - offset : 5;
-}
-
-void playStep(uint8_t step, uint16_t stepIntervalMs) {
-  remainingRatchets = 0;
-  ratchetStep = 255;
-
-  if (!stepGate(activePattern, step)) {
-    stopVoicesForRest();
-    return;
-  }
-
-  const uint8_t probability = patterns[activePattern].probability[step];
-  if (probability < 100 && random(100) >= probability) {
-    stopVoicesForRest();
-    return;
-  }
-
-  triggerStepPlayback(step);
-
-  const uint8_t ratchets = constrain(patterns[activePattern].ratchet[step], 1, 4);
-  if (ratchets > 1) {
-    remainingRatchets = ratchets - 1;
-    ratchetStep = step;
-    ratchetIntervalMs = max((uint16_t)1, (uint16_t)(stepIntervalMs / ratchets));
-    lastRatchetMs = lastStepMs;
-  }
-}
-
-void triggerStepPlayback(uint8_t step) {
-  if (oscControls.playMode == MODE_CHORD) {
-    triggerChordStep(step);
-  } else if (oscControls.playMode == MODE_ARP) {
-    triggerArpStep(step);
+    edgar.setDroneMode(true); setEditText("MODE", "DRONE", now);
+  } else if (nextMode == MODE_PLAY) {
+    applyLiveConfiguration(); setEditText("MODE", "PLAY", now);
   } else {
-    triggerScaleStep(step);
-  }
-}
-
-void triggerScaleStep(uint8_t step) {
-  const uint8_t note = quantizeNoteWithTranspose(patterns[activePattern].note[step]);
-  uint8_t usedMask = 0;
-
-  triggerVoiceWithPitch(kMainVoice, pitchWordForNote(note));
-  usedMask |= (1 << kMainVoice);
-
-  if (osc2Enabled()) {
-    triggerVoiceWithPitch(kOsc2Voice, osc2PitchWordForNote(note));
-    usedMask |= (1 << kOsc2Voice);
-  }
-
-  stopUnusedVoices(usedMask);
-}
-
-void triggerChordStep(uint8_t step) {
-  uint8_t chordNotes[3];
-  buildChordNotes(quantizeNoteWithTranspose(patterns[activePattern].note[step]), chordNotes);
-  applyVoicing(chordNotes, constrain((int8_t)(oscControls.voicing + patterns[activePattern].voicingLock[step]), -12, 12));
-
-  uint8_t usedMask = 0;
-  triggerVoiceWithPitch(kMainVoice, pitchWordForNote(chordNotes[0]));
-  usedMask |= (1 << kMainVoice);
-
-  if (osc2Enabled()) {
-    triggerVoiceWithPitch(kOsc2Voice, osc2PitchWordForNote(chordNotes[1]));
-    triggerVoiceWithPitch(kChordVoiceA, pitchWordForNote(chordNotes[2]));
-    usedMask |= (1 << kOsc2Voice) | (1 << kChordVoiceA);
-  } else {
-    triggerVoiceWithPitch(kChordVoiceA, pitchWordForNote(chordNotes[1]));
-    triggerVoiceWithPitch(kChordVoiceB, pitchWordForNote(chordNotes[2]));
-    usedMask |= (1 << kChordVoiceA) | (1 << kChordVoiceB);
-  }
-
-  stopUnusedVoices(usedMask);
-}
-
-void triggerArpStep(uint8_t step) {
-  uint8_t chordNotes[3];
-  buildChordNotes(quantizeNoteWithTranspose(patterns[activePattern].note[step]), chordNotes);
-  applyVoicing(chordNotes, constrain((int8_t)(oscControls.voicing + patterns[activePattern].voicingLock[step]), -12, 12));
-
-  const uint8_t note = chordNotes[arpIndex % 3];
-  ++arpIndex;
-
-  uint8_t usedMask = 0;
-  triggerVoiceWithPitch(kMainVoice, pitchWordForNote(note));
-  usedMask |= (1 << kMainVoice);
-
-  if (osc2Enabled()) {
-    triggerVoiceWithPitch(kOsc2Voice, osc2PitchWordForNote(note));
-    usedMask |= (1 << kOsc2Voice);
-  }
-
-  stopUnusedVoices(usedMask);
-}
-
-void triggerVoiceWithPitch(uint8_t voice, uint16_t pitch) {
-  targetPitchWord[voice] = pitch;
-
-  if (envControls.glide == 0 || currentPitchWord[voice] == 0) {
-    currentPitchWord[voice] = targetPitchWord[voice];
-    edgar.setPitchWord(voice, currentPitchWord[voice]);
-  }
-
-  edgar.trigger(voice);
-}
-
-void stopVoiceTracked(uint8_t voice) {
-  edgar.stopVoice(voice);
-  currentPitchWord[voice] = 0;
-  targetPitchWord[voice] = 0;
-}
-
-void stopUnusedVoices(uint8_t usedMask) {
-  for (uint8_t voice = 0; voice < kSynthVoiceCount; ++voice) {
-    if ((usedMask & (1 << voice)) == 0) {
-      stopVoiceTracked(voice);
+    if (previous == MODE_DRONE) {
+      currentStep = 0;
+      playingStep = 0;
+      if (bitRead(seqGateMask, 0)) triggerSequencerStep(0, false);
+      currentStep = 1;
+      lastStepMs = now;
+      nextStepIntervalMs = bpmStepMs();
     }
+    edgar.setSampleHold(seqControls.preset == PRESET_CHIP ? map(seqControls.color, 0, 127, 1, 8) : 1);
+    setEditText("MODE", "SEQ", now);
   }
+  displayDirty = true;
 }
 
-void stopVoicesForRest() {
-  if (envControls.glide == 0) {
-    stopUnusedVoices(0);
-  }
+void panicAll() {
+  edgar.stopDrum(); stopNormalVoices(); heldButtonMask = 0; resetLiveAssignments();
+  if (instrumentMode == MODE_DRONE) { droneGateMask = 0; edgar.stopAllDrones(); }
+  displayDirty = true;
 }
 
-void updateGlide() {
-  if (envControls.glide == 0) {
-    return;
-  }
-
-  for (uint8_t voice = 0; voice < kSynthVoiceCount; ++voice) {
-    if (targetPitchWord[voice] != 0 && currentPitchWord[voice] != targetPitchWord[voice]) {
-      currentPitchWord[voice] = glidePitch(currentPitchWord[voice], targetPitchWord[voice]);
-      edgar.setPitchWord(voice, currentPitchWord[voice]);
-    }
-  }
+void stopNormalVoice(uint8_t voice) {
+  edgar.stopVoice(voice); normalCurrentPitch[voice] = 0; normalTargetPitch[voice] = 0; normalGlide[voice] = 0;
 }
 
-uint16_t glidePitch(uint16_t current, uint16_t target) {
-  const uint8_t divisor = map(envControls.glide, 1, 127, 2, 24);
-  const int32_t difference = (int32_t)target - current;
-
-  if (difference == 0) {
-    return target;
-  }
-
-  int32_t step = difference / divisor;
-  if (step == 0) {
-    step = difference > 0 ? 1 : -1;
-  }
-
-  return (uint16_t)(current + step);
+void stopNormalVoices() {
+  for (uint8_t voice = 0; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
 }
 
-bool osc2Enabled() {
-  return osc2Controls.envelope > 0;
-}
-
-uint8_t quantizeNoteWithTranspose(uint8_t note) {
-  int16_t transposed = (int16_t)note + oscControls.transpose;
-  if (transposed < 0) {
-    transposed = 0;
-  } else if (transposed > SYNTH_MIDI_NOTE_MAX) {
-    transposed = SYNTH_MIDI_NOTE_MAX;
-  }
-
-  return quantizeNote((uint8_t)transposed, seqControls.scale);
-}
-
-uint16_t pitchWordForNote(uint8_t note) {
-  if (note > SYNTH_MIDI_NOTE_MAX) {
-    note = SYNTH_MIDI_NOTE_MAX;
-  }
+uint16_t pitchForNote(int16_t note) {
+  note = constrain(note, 0, SYNTH_MIDI_NOTE_MAX);
   return pgm_read_word(&PITCHS[note]);
 }
 
-uint16_t osc2PitchWordForNote(uint8_t note) {
-  const uint8_t transposed = transposeNote(note, osc2Controls.transpose);
-  const uint16_t pitchWord = pitchWordForNote(transposed);
-  return pitchWord + (((uint32_t)pitchWord * osc2Controls.detune) / 512);
+uint16_t detunePitch(uint16_t pitch, int16_t permille) {
+  int32_t result = pitch + ((int32_t)pitch * permille) / 1000;
+  return constrain(result, 1, 65535);
 }
 
-void buildChordNotes(uint8_t root, uint8_t notes[3]) {
-  int8_t third = 4;
-  int8_t fifth = 7;
-
-  if (seqControls.scale == SCALE_MINOR || seqControls.scale == SCALE_BLUES) {
-    third = 3;
-  } else if (seqControls.scale == SCALE_PENTATONIC) {
-    third = 5;
+void triggerNormalVoice(uint8_t voice, uint16_t pitch, uint8_t glide) {
+  normalTargetPitch[voice] = pitch; normalGlide[voice] = glide;
+  if (glide == 0 || normalCurrentPitch[voice] == 0) {
+    normalCurrentPitch[voice] = pitch; edgar.setPitchWord(voice, pitch);
   }
-
-  notes[0] = root;
-  notes[1] = transposeNote(root, third);
-  notes[2] = transposeNote(root, fifth);
+  edgar.trigger(voice);
 }
 
-void sortChordNotes(int16_t notes[3]) {
-  for (uint8_t i = 0; i < 2; ++i) {
-    for (uint8_t j = i + 1; j < 3; ++j) {
-      if (notes[j] < notes[i]) {
-        const int16_t temp = notes[i];
-        notes[i] = notes[j];
-        notes[j] = temp;
+void updateGlide(unsigned long now) {
+  if ((unsigned long)(now - lastGlideMs) < 1) return;
+  lastGlideMs = now;
+  for (uint8_t voice = 0; voice < SYNTH_VOICE_COUNT; ++voice) {
+    if (normalGlide[voice] == 0 || normalCurrentPitch[voice] == 0 || normalCurrentPitch[voice] == normalTargetPitch[voice]) continue;
+    const int32_t difference = (int32_t)normalTargetPitch[voice] - normalCurrentPitch[voice];
+    const uint8_t divisor = map(normalGlide[voice], 1, 127, 2, 32);
+    int32_t amount = difference / divisor;
+    if (amount == 0) amount = difference > 0 ? 1 : -1;
+    normalCurrentPitch[voice] += amount; edgar.setPitchWord(voice, normalCurrentPitch[voice]);
+  }
+}
+
+uint8_t seqShapeLength(uint8_t preset, uint8_t shape) {
+  switch (preset) {
+    case PRESET_BASS: return map(shape, 0, 127, 12, 92);
+    case PRESET_PLUCK: return map(shape, 0, 127, 4, 76);
+    case PRESET_BELL: return map(shape, 0, 127, 28, 112);
+    case PRESET_CHORD: return map(shape, 0, 127, 20, 108);
+    case PRESET_CHIP: return map(shape, 0, 127, 8, 100);
+    case PRESET_PERC: return map(shape, 0, 127, 2, 62);
+    case PRESET_SUB: return map(shape, 0, 127, 24, 110);
+    default: return 102;
+  }
+}
+
+int8_t chordIntervalForVoice(uint8_t voice, uint8_t color) {
+  static const int8_t intervals[4][4] = {{0, 3, 7, 12}, {0, 4, 7, 12}, {0, 2, 7, 12}, {0, 5, 7, 12}};
+  return intervals[min((uint8_t)(color >> 5), (uint8_t)3)][voice];
+}
+
+uint8_t effectiveSampleHold() {
+  uint8_t hold = seqControls.preset == PRESET_CHIP ? map(seqControls.color, 0, 127, 1, 8) : 1;
+  if (instrumentMode == MODE_PLAY) { LivePreset live; readLivePreset(playControls.preset, live); hold = max(hold, live.sampleHold); }
+  return hold;
+}
+
+void triggerSequencerNote(uint8_t note, bool backgroundOnly) {
+  edgar.stopDrum();
+  SeqPreset preset; readSeqPreset(seqControls.preset, preset); edgar.setSampleHold(effectiveSampleHold());
+  const uint8_t voiceCount = backgroundOnly ? 1 : preset.voiceCount;
+  const uint8_t length = seqShapeLength(seqControls.preset, seqControls.shape);
+
+  for (uint8_t voice = 0; voice < voiceCount; ++voice) {
+    VoiceRecipe recipe = preset.voices[voice];
+    int8_t semitone = recipe.semitone;
+    int16_t fine = 0;
+    uint8_t modulation = recipe.modulation;
+    uint8_t glide = 0;
+    if (seqControls.preset == PRESET_SUB && voice == 1) fine = map(seqControls.color, 0, 127, 0, 8);
+    else if (seqControls.preset == PRESET_BASS) modulation = map(seqControls.color, 0, 127, 64, 36);
+    else if (seqControls.preset == PRESET_PLUCK && voice == 1) fine = map(seqControls.color, 0, 127, 0, 12);
+    else if (seqControls.preset == PRESET_BELL && voice == 2) fine = map(seqControls.color, 0, 127, -15, 40);
+    else if (seqControls.preset == PRESET_LEAD) {
+      const int16_t spread = map(seqControls.color, 0, 127, 0, 18);
+      fine = voice == 0 ? -(spread / 2) : spread; glide = seqControls.shape;
+    } else if (seqControls.preset == PRESET_CHORD) semitone = chordIntervalForVoice(voice, seqControls.color);
+    else if (seqControls.preset == PRESET_PERC) {
+      if (voice == 0) semitone = map(seqControls.color, 0, 127, -12, 24);
+      else modulation = map(seqControls.color, 0, 127, 30, 58);
+    }
+    edgar.setWave(voice, recipe.wave); edgar.setEnvelope(voice, recipe.envelope);
+    edgar.setLength(voice, length); edgar.setMod(voice, modulation);
+    triggerNormalVoice(voice, detunePitch(pitchForNote((int16_t)note + semitone), fine), glide);
+  }
+  if (!backgroundOnly) for (uint8_t voice = voiceCount; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
+}
+
+void triggerDrum(uint8_t drum, bool backgroundOnly) {
+  if (backgroundOnly) stopNormalVoice(0);
+  else stopNormalVoices();
+  edgar.setSampleHold(effectiveSampleHold());
+  normalCurrentPitch[0] = 0;
+  normalTargetPitch[0] = 0;
+  normalGlide[0] = 0;
+  edgar.triggerDrum(min(drum, (uint8_t)(kDrumCount - 1)), seqControls.color, seqControls.shape);
+}
+
+void triggerSequencerStep(uint8_t step, bool backgroundOnly) {
+  if (seqControls.preset == PRESET_DRUM) triggerDrum(stepDrums[step], backgroundOnly);
+  else triggerSequencerNote(stepNotes[step], backgroundOnly);
+}
+
+uint16_t bpmStepMs() { return 15000UL / max((uint8_t)1, seqControls.bpm); }
+
+void runSequencer(unsigned long now) {
+  if (instrumentMode == MODE_DRONE || (unsigned long)(now - lastStepMs) < nextStepIntervalMs) return;
+  lastStepMs += nextStepIntervalMs;
+  nextStepIntervalMs = bpmStepMs();
+  if ((unsigned long)(now - lastStepMs) >= nextStepIntervalMs) lastStepMs = now;
+  playingStep = currentStep;
+  if (instrumentMode == MODE_PLAY) {
+    if (playSequencerEnabled && bitRead(seqGateMask, currentStep)) triggerSequencerStep(currentStep, true);
+    else { stopNormalVoice(0); edgar.stopDrum(); }
+  } else if (bitRead(seqGateMask, currentStep)) {
+    triggerSequencerStep(currentStep, false);
+  } else {
+    edgar.stopDrum(); stopNormalVoices();
+  }
+  currentStep = (currentStep + 1) % kStepCount;
+  if (instrumentMode == MODE_PLAY && playControls.style >= STYLE_ARP_UP) advanceArpeggio();
+  if (instrumentMode == MODE_SEQ) displayDirty = true;
+}
+
+void applyLiveConfiguration() {
+  LivePreset preset; readLivePreset(playControls.preset, preset);
+  for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) {
+    edgar.setWave(voice, preset.wave); edgar.setEnvelope(voice, preset.envelope);
+    edgar.setLength(voice, preset.length); edgar.setMod(voice, preset.modulation);
+  }
+  edgar.setSampleHold(effectiveSampleHold());
+}
+
+uint8_t liveNoteForButton(uint8_t button) {
+  const int8_t offset = pgm_read_byte(&kScaleOffsets[playControls.scale][button]);
+  return constrain(36 + playControls.octave * 12 + playControls.root + offset, 0, 127);
+}
+
+int8_t scaleDegreeOffset(uint8_t scale, uint8_t degree) {
+  const uint8_t length = pgm_read_byte(&kScaleLengths[scale]);
+  return pgm_read_byte(&kScaleOffsets[scale][degree % length]) + (degree / length) * 12;
+}
+
+int8_t latestHeldButton() {
+  int8_t latest = -1; uint16_t latestOrder = 0;
+  for (uint8_t button = 0; button < kStepCount; ++button) {
+    if (bitRead(heldButtonMask, button) && buttonPressOrder[button] >= latestOrder) {
+      latestOrder = buttonPressOrder[button]; latest = button;
+    }
+  }
+  return latest;
+}
+
+void resetLiveAssignments() {
+  for (uint8_t button = 0; button < kStepCount; ++button) liveVoiceForButton[button] = -1;
+  for (uint8_t slot = 0; slot < 3; ++slot) { liveButtonForVoice[slot] = -1; liveVoiceAge[slot] = 0; }
+}
+
+void clearHeldNotes() {
+  heldButtonMask = 0;
+  for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
+  resetLiveAssignments();
+}
+
+void triggerPolyButton(uint8_t button) {
+  int8_t slot = -1;
+  for (uint8_t i = 0; i < 3; ++i) if (liveButtonForVoice[i] < 0) { slot = i; break; }
+  if (slot < 0) {
+    slot = 0;
+    for (uint8_t i = 1; i < 3; ++i) if (liveVoiceAge[i] < liveVoiceAge[slot]) slot = i;
+    const int8_t stolenButton = liveButtonForVoice[slot];
+    if (stolenButton >= 0) liveVoiceForButton[stolenButton] = -1;
+  }
+  const uint8_t voice = slot + 1;
+  liveButtonForVoice[slot] = button; liveVoiceForButton[button] = voice; liveVoiceAge[slot] = buttonPressOrder[button];
+  triggerNormalVoice(voice, pitchForNote(liveNoteForButton(button)), 0);
+}
+
+void triggerHeldChord() {
+  const int8_t button = latestHeldButton();
+  if (button < 0) {
+    for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
+    return;
+  }
+  const int16_t root = 36 + playControls.octave * 12 + playControls.root;
+  for (uint8_t chordVoice = 0; chordVoice < 3; ++chordVoice) {
+    const int8_t offset = scaleDegreeOffset(playControls.scale, button + chordVoice * 2);
+    triggerNormalVoice(chordVoice + 1, pitchForNote(root + offset), 0);
+  }
+}
+
+uint8_t collectHeldButtons(uint8_t buttons[kStepCount]) {
+  uint8_t count = 0;
+  for (uint8_t button = 0; button < kStepCount; ++button) if (bitRead(heldButtonMask, button)) buttons[count++] = button;
+  return count;
+}
+
+void advanceArpeggio() {
+  uint8_t buttons[kStepCount];
+  const uint8_t count = collectHeldButtons(buttons);
+  stopNormalVoice(2); stopNormalVoice(3);
+  if (count == 0) { stopNormalVoice(1); arpPosition = 0; arpDirection = 1; return; }
+
+  if (playControls.style == STYLE_ARP_DOWN) {
+    arpPosition %= count;
+    triggerNormalVoice(1, pitchForNote(liveNoteForButton(buttons[count - 1 - arpPosition])), 0);
+    arpPosition = (arpPosition + 1) % count;
+    return;
+  }
+  if (playControls.style == STYLE_ARP_UPDOWN && count > 1) {
+    if (arpPosition >= count) arpPosition = count - 1;
+    triggerNormalVoice(1, pitchForNote(liveNoteForButton(buttons[arpPosition])), 0);
+    if (arpDirection > 0 && arpPosition >= count - 1) arpDirection = -1;
+    else if (arpDirection < 0 && arpPosition == 0) arpDirection = 1;
+    arpPosition += arpDirection;
+    return;
+  }
+  arpPosition %= count;
+  triggerNormalVoice(1, pitchForNote(liveNoteForButton(buttons[arpPosition])), 0);
+  arpPosition = (arpPosition + 1) % count;
+}
+
+void handleLivePress(uint8_t button) {
+  applyLiveConfiguration();
+  if (playControls.style == STYLE_POLY) triggerPolyButton(button);
+  else if (playControls.style == STYLE_CHORD) triggerHeldChord();
+  else if ((heldButtonMask & ~(1 << button)) == 0) { arpPosition = 0; arpDirection = 1; advanceArpeggio(); }
+}
+
+void handleLiveRelease(uint8_t button) {
+  if (playControls.style == STYLE_POLY) {
+    const int8_t voice = liveVoiceForButton[button];
+    if (voice >= 1) {
+      stopNormalVoice(voice); liveButtonForVoice[voice - 1] = -1; liveVoiceForButton[button] = -1;
+    }
+  } else if (playControls.style == STYLE_CHORD) triggerHeldChord();
+  else advanceArpeggio();
+}
+
+void revoiceHeldButtons() {
+  if (instrumentMode != MODE_PLAY) return;
+  for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
+  resetLiveAssignments(); applyLiveConfiguration();
+  if (playControls.style == STYLE_POLY) {
+    uint8_t ordered[kStepCount];
+    uint8_t count = 0;
+    for (uint8_t button = 0; button < kStepCount; ++button) if (bitRead(heldButtonMask, button)) ordered[count++] = button;
+    for (uint8_t i = 0; i < count; ++i) {
+      for (uint8_t j = i + 1; j < count; ++j) {
+        if (buttonPressOrder[ordered[j]] < buttonPressOrder[ordered[i]]) {
+          const uint8_t swap = ordered[i]; ordered[i] = ordered[j]; ordered[j] = swap;
+        }
+      }
+      triggerPolyButton(ordered[i]);
+    }
+  } else if (playControls.style == STYLE_CHORD) triggerHeldChord();
+  else { arpPosition = 0; arpDirection = 1; advanceArpeggio(); }
+}
+
+void formatNoteName(uint8_t note, char output[5]) {
+  static const char names[12][3] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+  copyText(output, names[note % 12], 3);
+  const uint8_t length = strlen(output);
+  output[length] = '0' + (note / 12 - 1); output[length + 1] = '\0';
+}
+
+void resetDisplayFrame() {
+  for (uint8_t row = 0; row < 2; ++row) {
+    memset(displayFrame[row], ' ', 16);
+    displayFrame[row][16] = '\0';
+  }
+}
+
+void frameChar(uint8_t row, uint8_t column, char value) {
+  if (row < 2 && column < 16) displayFrame[row][column] = value;
+}
+
+void frameText(uint8_t row, uint8_t column, const char *text) {
+  while (row < 2 && column < 16 && *text) displayFrame[row][column++] = *text++;
+}
+
+void frameNumber(uint8_t row, uint8_t column, uint16_t value) {
+  char text[6];
+  utoa(value, text, 10);
+  frameText(row, column, text);
+}
+
+void frameTenths(uint8_t row, uint8_t column, uint16_t value) {
+  char text[6];
+  utoa(value / 10, text, 10);
+  const uint8_t length = strlen(text);
+  text[length] = '.';
+  text[length + 1] = '0' + value % 10;
+  text[length + 2] = '\0';
+  frameText(row, column, text);
+}
+
+void flushDisplayFrame() {
+  for (uint8_t row = 0; row < 2; ++row) {
+    uint8_t column = 0;
+    while (column < 16) {
+      while (column < 16 && renderedFrameReady &&
+             displayFrame[row][column] == renderedFrame[row][column]) ++column;
+      if (column >= 16) break;
+      lcd.setCursor(column, row);
+      while (column < 16 && (!renderedFrameReady ||
+             displayFrame[row][column] != renderedFrame[row][column])) {
+        lcd.write(displayFrame[row][column]);
+        renderedFrame[row][column] = displayFrame[row][column];
+        ++column;
       }
     }
   }
-}
-
-uint8_t clampMidiNote(int16_t note) {
-  if (note < 0) {
-    return 0;
-  }
-  if (note > SYNTH_MIDI_NOTE_MAX) {
-    return SYNTH_MIDI_NOTE_MAX;
-  }
-  return (uint8_t)note;
-}
-
-void applyVoicing(uint8_t notes[3], int8_t voicing) {
-  int16_t voiced[3] = {notes[0], notes[1], notes[2]};
-
-  while (voicing > 0) {
-    sortChordNotes(voiced);
-    voiced[0] += 12;
-    --voicing;
-  }
-
-  while (voicing < 0) {
-    sortChordNotes(voiced);
-    voiced[2] -= 12;
-    ++voicing;
-  }
-
-  sortChordNotes(voiced);
-  notes[0] = clampMidiNote(voiced[0]);
-  notes[1] = clampMidiNote(voiced[1]);
-  notes[2] = clampMidiNote(voiced[2]);
-}
-
-uint8_t transposeNote(uint8_t note, int8_t semitones) {
-  int16_t transposed = (int16_t)note + semitones;
-
-  if (transposed < 0) {
-    return 0;
-  }
-
-  if (transposed > SYNTH_MIDI_NOTE_MAX) {
-    return SYNTH_MIDI_NOTE_MAX;
-  }
-
-  return (uint8_t)transposed;
-}
-
-uint8_t quantizeNote(uint8_t note, uint8_t scale) {
-  if (scale == SCALE_CHROMATIC) {
-    return note;
-  }
-
-  for (uint8_t distance = 0; distance < 6; ++distance) {
-    if (note >= distance && noteAllowedInScale(note - distance, scale)) {
-      return note - distance;
-    }
-
-    if (note + distance <= SYNTH_MIDI_NOTE_MAX && noteAllowedInScale(note + distance, scale)) {
-      return note + distance;
-    }
-  }
-
-  return note;
-}
-
-bool noteAllowedInScale(uint8_t note, uint8_t scale) {
-  const uint8_t pitchClass = note % 12;
-
-  switch (scale) {
-    case SCALE_MAJOR:
-      return pitchClass == 0 || pitchClass == 2 || pitchClass == 4 || pitchClass == 5 ||
-             pitchClass == 7 || pitchClass == 9 || pitchClass == 11;
-    case SCALE_MINOR:
-      return pitchClass == 0 || pitchClass == 2 || pitchClass == 3 || pitchClass == 5 ||
-             pitchClass == 7 || pitchClass == 8 || pitchClass == 10;
-    case SCALE_PENTATONIC:
-      return pitchClass == 0 || pitchClass == 2 || pitchClass == 4 ||
-             pitchClass == 7 || pitchClass == 9;
-    case SCALE_BLUES:
-      return pitchClass == 0 || pitchClass == 3 || pitchClass == 5 ||
-             pitchClass == 6 || pitchClass == 7 || pitchClass == 10;
-    default:
-      return true;
-  }
-}
-
-const char *waveLabel(uint8_t waveform) {
-  switch (waveform) {
-    case 0:
-      return "SIN";
-    case 1:
-      return "TRI";
-    case 2:
-      return "SQR";
-    case 3:
-      return "SAW";
-    case 4:
-      return "RMP";
-    case 5:
-      return "NOI";
-    default:
-      return "WAV";
-  }
-}
-
-const char *playModeLabel(uint8_t mode) {
-  switch (mode) {
-    case MODE_CHORD:
-      return "CHD";
-    case MODE_ARP:
-      return "ARP";
-    default:
-      return "SCL";
-  }
-}
-
-const char *osc2EnvelopeLabel(uint8_t envelope) {
-  switch (envelope) {
-    case 1:
-      return "E0 ";
-    case 2:
-      return "E1 ";
-    case 3:
-      return "E2 ";
-    case 4:
-      return "E3 ";
-    default:
-      return "OFF";
-  }
-}
-
-const char *scaleLabel(uint8_t scale) {
-  switch (scale) {
-    case SCALE_MAJOR:
-      return "MAJ";
-    case SCALE_MINOR:
-      return "MIN";
-    case SCALE_PENTATONIC:
-      return "PEN";
-    case SCALE_BLUES:
-      return "BLU";
-    default:
-      return "CHR";
-  }
-}
-
-const char *laneLabel(uint8_t lane) {
-  switch (lane) {
-    case LANE_GATE:
-      return "G  ";
-    case LANE_PROB:
-      return "P  ";
-    case LANE_RATCHET:
-      return "R  ";
-    case LANE_LOCK:
-      return "L  ";
-    default:
-      return "N  ";
-  }
-}
-
-void printPadded2(uint8_t value) {
-  if (value < 10) {
-    lcd.print('0');
-  }
-  lcd.print(value);
-}
-
-void printPadded3(uint16_t value) {
-  if (value < 100) {
-    lcd.print(' ');
-  }
-  if (value < 10) {
-    lcd.print(' ');
-  }
-  lcd.print(value);
-}
-
-void printSigned3(int8_t value) {
-  if (value >= 0) {
-    lcd.print('+');
-  } else {
-    lcd.print('-');
-    value = -value;
-  }
-  if (value < 10) {
-    lcd.print('0');
-  }
-  lcd.print(value);
-}
-
-void printSpaces(uint8_t count) {
-  while (count--) {
-    lcd.print(' ');
-  }
-}
-
-void printPageLabel() {
-  switch (controlPage) {
-    case PAGE_OSC2:
-      lcd.print(F("O2 "));
-      break;
-    case PAGE_ENV:
-      lcd.print(F("ENV"));
-      break;
-    case PAGE_SEQ:
-      lcd.print(F("SEQ"));
-      break;
-    case PAGE_PAT:
-      lcd.print(F("PAT"));
-      break;
-    case PAGE_FX:
-      lcd.print(F("FX "));
-      break;
-    case PAGE_UTL:
-      lcd.print(F("UTL"));
-      break;
-    case PAGE_OSC:
-    default:
-      lcd.print(F("OSC"));
-      break;
-  }
-}
-
-bool controlsChangedForDisplay() {
-  return controlPage != lastDisplayedPage ||
-         activePattern != lastDisplayedPattern ||
-         activeLane != lastDisplayedLane ||
-         visibleRange != lastDisplayedRange ||
-         oscControls.waveform != lastDisplayedOscControls.waveform ||
-         oscControls.playMode != lastDisplayedOscControls.playMode ||
-         oscControls.voicing != lastDisplayedOscControls.voicing ||
-         oscControls.transpose != lastDisplayedOscControls.transpose ||
-         osc2Controls.waveform != lastDisplayedOsc2Controls.waveform ||
-         osc2Controls.envelope != lastDisplayedOsc2Controls.envelope ||
-         osc2Controls.detune != lastDisplayedOsc2Controls.detune ||
-         osc2Controls.transpose != lastDisplayedOsc2Controls.transpose ||
-         envControls.envelope != lastDisplayedEnvControls.envelope ||
-         envControls.length != lastDisplayedEnvControls.length ||
-         envControls.modulation != lastDisplayedEnvControls.modulation ||
-         envControls.glide != lastDisplayedEnvControls.glide ||
-         seqControls.bpm != lastDisplayedSeqControls.bpm ||
-         seqControls.swing != lastDisplayedSeqControls.swing ||
-         seqControls.scale != lastDisplayedSeqControls.scale ||
-         patControls.targetSlot != lastDisplayedPatControls.targetSlot ||
-         patControls.randomAmount != lastDisplayedPatControls.randomAmount ||
-         fxControls.sampleHoldFrames != lastDisplayedFxControls.sampleHoldFrames;
+  renderedFrameReady = true;
 }
 
 void renderDisplay(unsigned long now) {
-  const bool controlsChanged = controlsChangedForDisplay();
-  const bool stepChanged = renderedStep != playingStep;
-  const bool shiftChanged = shiftActive(now) != lastDisplayedShift;
-  const bool showNoteEdit = now < editViewUntilMs;
-  const bool displayModeChanged = showNoteEdit != noteEditVisible;
+  const bool editVisible = (long)(editUntilMs - now) > 0;
+  const bool inlineEditVisible = !editVisible && (long)(inlineEditUntilMs - now) > 0 &&
+    ((instrumentMode == MODE_SEQ && editedStep < kStepCount) ||
+     (instrumentMode == MODE_DRONE &&
+      (editedDrone < kStepCount || editedDroneLfo < kSettingCount)));
+  const bool displayedStepChanged = instrumentMode == MODE_SEQ && renderedStep != playingStep;
+  if (!displayDirty && !displayedStepChanged && editVisible == renderedEditVisible &&
+      inlineEditVisible == renderedInlineEditVisible) return;
 
-  if (!displayDirty && !controlsChanged && !stepChanged && !shiftChanged && !displayModeChanged) {
-    return;
-  }
-
-  if (showNoteEdit) {
-    renderNoteEditView();
-  } else {
-    renderDashboard(now);
-  }
+  resetDisplayFrame();
+  if (editVisible) {
+    frameText(0, 0, editTitle); frameText(1, 0, editValue);
+  } else if (instrumentMode == MODE_SEQ) renderSequencerDashboard(inlineEditVisible);
+  else if (instrumentMode == MODE_PLAY) renderPlayDashboard();
+  else renderDroneDashboard(inlineEditVisible);
+  flushDisplayFrame();
 
   renderedStep = playingStep;
-  lastDisplayedPage = controlPage;
-  lastDisplayedPattern = activePattern;
-  lastDisplayedLane = activeLane;
-  lastDisplayedRange = visibleRange;
-  lastDisplayedOscControls = oscControls;
-  lastDisplayedOsc2Controls = osc2Controls;
-  lastDisplayedEnvControls = envControls;
-  lastDisplayedSeqControls = seqControls;
-  lastDisplayedPatControls = patControls;
-  lastDisplayedFxControls = fxControls;
-  lastDisplayedShift = shiftActive(now);
-  noteEditVisible = showNoteEdit;
+  renderedEditVisible = editVisible;
+  renderedInlineEditVisible = inlineEditVisible;
   displayDirty = false;
 }
 
-void renderDashboard(unsigned long now) {
-  (void)now;
-  lcd.setCursor(0, 0);
-  lcd.print(waveLabel(oscControls.waveform));
-  lcd.print(' ');
-  printPadded3(seqControls.bpm);
-  lcd.print(' ');
-  printPadded3(envControls.length);
-  lcd.print(' ');
-  printPadded3(envControls.modulation);
-  printSpaces(1);
-
-  lcd.setCursor(0, 1);
-  printStepMask();
-  printSpaces(8);
-}
-
-void renderNoteEditView() {
-  lcd.setCursor(0, 0);
-  lcd.print(F("                "));
-  lcd.setCursor(0, 0);
-  lcd.print(F("STEP "));
-  lcd.print(editedNoteStep + 1);
-
-  lcd.setCursor(0, 1);
-  lcd.print(F("                "));
-  lcd.setCursor(0, 1);
-  printNoteName(patterns[activePattern].note[editedNoteStep]);
-}
-
-void printText3OrHint(uint8_t pot, const char *text) {
-  if (!livePotCaptured[pot] && pickupHint[pot] != ' ') {
-    lcd.print(pickupHint[pot]);
-    lcd.print(F("  "));
-  } else {
-    lcd.print(text);
+void renderSequencerDashboard(bool inlineEditVisible) {
+  SeqPreset preset; readSeqPreset(seqControls.preset, preset);
+  frameText(0, 0, preset.label);
+  frameChar(0, 4, 'B'); frameNumber(0, 5, seqControls.bpm);
+  frameChar(0, 9, seqControls.preset == PRESET_DRUM ? 'T' : 'C');
+  frameNumber(0, 10, map(seqControls.color, 0, 127, 0, 99));
+  frameChar(0, 13, seqControls.preset == PRESET_DRUM ? 'D' : 'S');
+  frameNumber(0, 14, map(seqControls.shape, 0, 127, 0, 99));
+  for (uint8_t step = 0; step < kStepCount; ++step) {
+    const bool enabled = bitRead(seqGateMask, step);
+    if (step == playingStep) frameChar(1, step, enabled ? 'O' : 'o');
+    else frameChar(1, step, enabled ? 'x' : '-');
   }
-}
-
-void printNumber2OrHint(uint8_t pot, uint8_t value) {
-  if (!livePotCaptured[pot] && pickupHint[pot] != ' ') {
-    lcd.print(pickupHint[pot]);
-    lcd.print(' ');
-  } else {
-    printPadded2(value);
-  }
-}
-
-void printNumber3OrHint(uint8_t pot, uint16_t value) {
-  if (!livePotCaptured[pot] && pickupHint[pot] != ' ') {
-    lcd.print(pickupHint[pot]);
-    lcd.print(F("  "));
-  } else {
-    printPadded3(value);
-  }
-}
-
-void printSigned3OrHint(uint8_t pot, int8_t value) {
-  if (!livePotCaptured[pot] && pickupHint[pot] != ' ') {
-    lcd.print(pickupHint[pot]);
-    lcd.print(F("  "));
-  } else {
-    printSigned3(value);
-  }
-}
-
-void printStepMask() {
-  for (uint8_t slot = 0; slot < kVisibleStepCount; ++slot) {
-    const uint8_t step = slot;
-    const bool enabled = stepGate(activePattern, step);
-
-    if (step == playingStep) {
-      lcd.print(enabled ? 'O' : 'o');
+  if (inlineEditVisible) {
+    frameChar(1, 9, 'S'); frameChar(1, 10, '1' + editedStep); frameChar(1, 11, ':');
+    if (seqControls.preset == PRESET_DRUM) {
+      char label[5]; copyProgmemLabel(label, kDrumLabels[stepDrums[editedStep]], sizeof(label));
+      frameText(1, 12, label);
     } else {
-      lcd.print(enabled ? 'x' : '-');
+      char note[5]; formatNoteName(stepNotes[editedStep], note); frameText(1, 12, note);
     }
   }
 }
 
-void printNoteName(uint8_t note) {
-  switch (note % 12) {
-    case 0:
-      lcd.print('C');
-      break;
-    case 1:
-      lcd.print(F("C#"));
-      break;
-    case 2:
-      lcd.print('D');
-      break;
-    case 3:
-      lcd.print(F("D#"));
-      break;
-    case 4:
-      lcd.print('E');
-      break;
-    case 5:
-      lcd.print('F');
-      break;
-    case 6:
-      lcd.print(F("F#"));
-      break;
-    case 7:
-      lcd.print('G');
-      break;
-    case 8:
-      lcd.print(F("G#"));
-      break;
-    case 9:
-      lcd.print('A');
-      break;
-    case 10:
-      lcd.print(F("A#"));
-      break;
-    default:
-      lcd.print('B');
-      break;
-  }
-
-  lcd.print((int8_t)(note / 12) - 1);
+void renderPlayDashboard() {
+  LivePreset preset; readLivePreset(playControls.preset, preset);
+  char root[3], scale[4], style[5];
+  copyProgmemLabel(root, kRootLabels[playControls.root], sizeof(root));
+  copyProgmemLabel(scale, kScaleLabels[playControls.scale], sizeof(scale));
+  copyProgmemLabel(style, kStyleLabels[playControls.style], sizeof(style));
+  frameText(0, 0, "PLY "); frameText(0, 4, preset.label); frameText(0, 9, root); frameText(0, 12, scale);
+  frameText(1, 0, style); frameChar(1, 5, 'O'); frameChar(1, 6, '2' + playControls.octave);
+  frameText(1, 9, playSequencerEnabled ? "SEQ+" : "SEQ-");
 }
 
-void renderPageView(unsigned long now) {
-  lcd.setCursor(0, 0);
-  printPageLabel();
-
-  if (shiftActive(now)) {
-    lcd.print(F(" SHIFT       "));
-    lcd.setCursor(0, 1);
-    lcd.print(F("1N2G3P4R5C6P7X8?"));
-    return;
+void renderDroneDashboard(bool inlineEditVisible) {
+  frameText(0, 0, "DRN ");
+  for (uint8_t pair = 0; pair < kSettingCount; ++pair) {
+    char label[4]; copyProgmemLabel(label, kDroneWaveLabels[dronePairWave[pair]], sizeof(label));
+    frameChar(0, 4 + pair * 3, label[0]); frameChar(0, 5 + pair * 3, label[1]);
   }
-
-  switch (controlPage) {
-    case PAGE_OSC2:
-      lcd.print(F(" W E D T     "));
-      lcd.setCursor(0, 1);
-      printPickupOrOsc2Values();
-      break;
-    case PAGE_ENV:
-      lcd.print(F(" E L M G     "));
-      lcd.setCursor(0, 1);
-      printPickupOrEnvValues();
-      break;
-    case PAGE_SEQ:
-      lcd.print(F(" B S C L     "));
-      lcd.setCursor(0, 1);
-      printPickupOrSeqValues();
-      break;
-    case PAGE_PAT:
-      lcd.print(F(" P D R G     "));
-      lcd.setCursor(0, 1);
-      printPickupOrPatValues();
-      break;
-    case PAGE_FX:
-      lcd.print(F(" H - - -     "));
-      lcd.setCursor(0, 1);
-      printPickupOrFxValues();
-      break;
-    case PAGE_UTL:
-      lcd.print(F(" 1P 2I 3G 4X"));
-      lcd.setCursor(0, 1);
-      lcd.print(F("   "));
-      lcd.print(lastEditLabel);
-      lcd.print(lastEditValue);
-      printSpaces(7);
-      break;
-    case PAGE_OSC:
-    default:
-      lcd.print(F(" W M V T     "));
-      lcd.setCursor(0, 1);
-      printPickupOrOscValues();
-      break;
+  for (uint8_t voice = 0; voice < kStepCount; ++voice) {
+    frameChar(1, voice, bitRead(droneGateMask, voice) ? 'x' : '-');
   }
-}
-
-void printPickupOrOscValues() {
-  printText3OrHint(0, waveLabel(oscControls.waveform));
-  lcd.print(' ');
-  printText3OrHint(1, playModeLabel(oscControls.playMode));
-  lcd.print(' ');
-  printSigned3OrHint(2, oscControls.voicing);
-  lcd.print(' ');
-  printSigned3OrHint(3, oscControls.transpose);
-  printSpaces(1);
-}
-
-void printPickupOrOsc2Values() {
-  printText3OrHint(0, waveLabel(osc2Controls.waveform));
-  lcd.print(' ');
-  printText3OrHint(1, osc2EnvelopeLabel(osc2Controls.envelope));
-  lcd.print(' ');
-  printNumber2OrHint(2, osc2Controls.detune);
-  lcd.print(' ');
-  printSigned3OrHint(3, osc2Controls.transpose);
-  printSpaces(2);
-}
-
-void printPickupOrEnvValues() {
-  if (!livePotCaptured[0] && pickupHint[0] != ' ') {
-    lcd.print(pickupHint[0]);
-    lcd.print(' ');
-  } else {
-    lcd.print('E');
-    lcd.print(envControls.envelope);
-  }
-  lcd.print(' ');
-  printNumber3OrHint(1, envControls.length);
-  lcd.print(' ');
-  printNumber3OrHint(2, envControls.modulation);
-  lcd.print(' ');
-  printNumber3OrHint(3, envControls.glide);
-  printSpaces(2);
-}
-
-void printPickupOrSeqValues() {
-  printNumber3OrHint(0, seqControls.bpm);
-  lcd.print(' ');
-  printNumber2OrHint(1, seqControls.swing);
-  lcd.print(' ');
-  printText3OrHint(2, scaleLabel(seqControls.scale));
-  lcd.print(' ');
-  if (!livePotCaptured[3] && pickupHint[3] != ' ') {
-    lcd.print(pickupHint[3]);
-  } else {
-    lcd.print(laneLabel(activeLane)[0]);
-  }
-  printSpaces(4);
-}
-
-void printPickupOrPatValues() {
-  if (!livePotCaptured[0] && pickupHint[0] != ' ') {
-    lcd.print(pickupHint[0]);
-    lcd.print(' ');
-  } else {
-    lcd.print('P');
-    lcd.print(activePattern + 1);
-  }
-  lcd.print(' ');
-  if (!livePotCaptured[1] && pickupHint[1] != ' ') {
-    lcd.print(pickupHint[1]);
-    lcd.print(' ');
-  } else {
-    lcd.print('D');
-    lcd.print(patControls.targetSlot + 1);
-  }
-  lcd.print(' ');
-  printNumber3OrHint(2, patControls.randomAmount);
-  lcd.print(' ');
-  printText3OrHint(3, visibleRange ? "916" : "1-8");
-  printSpaces(3);
-}
-
-void printPickupOrFxValues() {
-  if (!livePotCaptured[0] && pickupHint[0] != ' ') {
-    lcd.print(pickupHint[0]);
-    lcd.print(F("   --  --  --  "));
-  } else {
-    lcd.print(F("H"));
-    printPadded2(fxControls.sampleHoldFrames);
-    lcd.print(F(" -- -- --    "));
+  if (inlineEditVisible) {
+    if (editedDroneLfo < kSettingCount) {
+      frameChar(1, 9, 'L'); frameChar(1, 10, '1' + editedDroneLfo); frameChar(1, 11, ':');
+      if (editedDroneLfoRateTenths == 0) frameText(1, 12, "OFF");
+      else frameTenths(1, 12, editedDroneLfoRateTenths);
+    } else {
+      frameChar(1, 9, 'D'); frameChar(1, 10, '1' + editedDrone); frameChar(1, 11, ':');
+      frameNumber(1, 12, editedDroneHz);
+    }
   }
 }
