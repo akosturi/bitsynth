@@ -78,6 +78,11 @@ volatile uint16_t playMorphWavPtr = (uint16_t)SinTable;
 volatile uint32_t playMorphLfoPCW = 0x80000000UL;
 volatile uint32_t playMorphLfoFTW = 0;
 volatile uint8_t playMorphAmount = 128;
+volatile uint8_t playFilterAmount = 0;
+volatile uint8_t playFilterDepth = 0;
+volatile int32_t playFilterStateQ7 = 0;
+volatile uint32_t playFilterLfoPCW = 0x80000000UL;
+volatile uint32_t playFilterLfoFTW = 0;
 volatile bool droneMode = false;
 volatile uint16_t dronePCW[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
 volatile uint16_t droneFTW[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
@@ -118,6 +123,25 @@ static inline __attribute__((always_inline)) int8_t nextMorphedVoiceSample(
   const int8_t sampleB = (int8_t)pgm_read_byte(secondaryWave + index);
   const int16_t difference = (int16_t)sampleB - sampleA;
   return sampleA + (((int16_t)(difference * morphAmount)) >> 7);
+}
+
+static inline __attribute__((always_inline)) int16_t filterPlayMix(int16_t inputQ7)
+{
+  const uint8_t level = playFilterAmount;
+  if (level == 0) {
+    playFilterStateQ7 = inputQ7;
+    return inputQ7;
+  }
+
+  const int32_t difference = (int32_t)inputQ7 - playFilterStateQ7;
+  if (level == 1) {
+    playFilterStateQ7 += difference - (difference >> 3); // 7/8
+  } else if (level == 2) {
+    playFilterStateQ7 += difference - (difference >> 2); // 3/4
+  } else {
+    playFilterStateQ7 += difference >> (level - 2);      // 1/2 .. 1/32
+  }
+  return (int16_t)playFilterStateQ7;
 }
 
 //*********************************************************************************************
@@ -183,6 +207,14 @@ ISR(TIMER2_COMPA_vect)
       AMP[divider] = (envelopeIndex & 0x80) ? 0 : pgm_read_byte(envs[divider] + envelopeIndex);
     }
 
+    if (divider == 0 && playFilterLfoFTW != 0) {
+      playFilterLfoPCW += playFilterLfoFTW;
+      const uint8_t trianglePhase = ((uint8_t*)&playFilterLfoPCW)[3];
+      const uint8_t triangleAmount = (trianglePhase & 0x80) ?
+        (uint8_t)(256U - trianglePhase) : trianglePhase;
+      playFilterAmount = ((uint16_t)playFilterDepth * triangleAmount + 64) >> 7;
+    }
+
     //-------------------------------
     //  Synthesizer/audio mixer
     //-------------------------------
@@ -206,6 +238,7 @@ ISR(TIMER2_COMPA_vect)
       sourceZeroQ7 = ((int16_t)nextVoiceSample(0) * AMP[0]) >> 2;
     }
 
+    int16_t liveMixQ7;
     if (playMorphActive) {
       if (divider == 0) {
         playMorphLfoPCW += playMorphLfoFTW;
@@ -215,16 +248,17 @@ ISR(TIMER2_COMPA_vect)
       }
       const uint16_t secondaryWave = playMorphWavPtr;
       const uint8_t morphAmount = playMorphAmount;
-      mixQ7 = sourceZeroQ7 +
+      liveMixQ7 =
         (((int16_t)nextMorphedVoiceSample(1, secondaryWave, morphAmount) * AMP[1]) >> 2) +
         (((int16_t)nextMorphedVoiceSample(2, secondaryWave, morphAmount) * AMP[2]) >> 2) +
         (((int16_t)nextMorphedVoiceSample(3, secondaryWave, morphAmount) * AMP[3]) >> 2);
     } else {
-      mixQ7 = sourceZeroQ7 +
+      liveMixQ7 =
         (((int16_t)nextVoiceSample(1) * AMP[1]) >> 2) +
         (((int16_t)nextVoiceSample(2) * AMP[2]) >> 2) +
         (((int16_t)nextVoiceSample(3) * AMP[3]) >> 2);
     }
+    mixQ7 = sourceZeroQ7 + filterPlayMix(liveMixQ7);
   }
 
   bool updateOutput = true;
@@ -504,6 +538,36 @@ class synth
         playMorphActive = false;
         playMorphLfoFTW = 0;
         playMorphAmount = 128;
+      }
+    }
+
+    void configurePlayFilter(uint8_t level, uint16_t frequencyTenths)
+    {
+      if (level > 7) {
+        level = 7;
+      }
+      const uint32_t lfoStep = level == 0 || frequencyTenths == 0 ? 0 :
+        (uint32_t)frequencyTenths * 85899UL;
+
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        const bool wasActive = playFilterLfoFTW != 0;
+        playFilterDepth = level;
+        playFilterLfoFTW = lfoStep;
+        if (lfoStep == 0) {
+          playFilterAmount = level;
+        } else if (!wasActive) {
+          playFilterLfoPCW = 0x80000000UL;
+          playFilterAmount = level;
+        }
+      }
+    }
+
+    void disablePlayFilter()
+    {
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        playFilterDepth = 0;
+        playFilterAmount = 0;
+        playFilterLfoFTW = 0;
       }
     }
 

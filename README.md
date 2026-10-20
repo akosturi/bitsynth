@@ -76,14 +76,18 @@ A gombok lenyomásra indítják, felengedésre leállítják a hangot. `POLY` m�
 
 PLAY módban a MODE gomb nyomva tartása közben az első step gomb kapcsolja be vagy ki a háttérszekvenszert. A kijelzőn `SEQ+` jelzi a bekapcsolt, `SEQ-` a némított állapotot. A szekvenszer órája és pozíciója kikapcsolt háttérhang mellett is tovább fut, ezért az arpeggiók tempója nem áll meg.
 
-MODE nyomva tartása közben az első két paraméterpoti a három élő voice közös hullámtábla-morphját vezérli:
+MODE nyomva tartása közben a négy paraméterpoti a három élő voice közös hullámtábla-morphját és low-pass szűrőjét vezérli:
 
 - Paraméterpoti 1: háromszög LFO `OFF`, illetve `0,1–5,0 Hz` között, `0,1 Hz`-es lépésekben
 - Paraméterpoti 2: második hullámforma; teljesen letekerve `OFF`, fölötte `SIN`, `TRI`, `SQR`, `SAW`
+- Paraméterpoti 3: a három élő voice közös egyszerű low-pass szűrője; `OFF`, majd körülbelül `6,6 kHz`, `4,4 kHz`, `2,2 kHz`, `916 Hz`, `425 Hz`, `205 Hz` és `101 Hz`
+- Paraméterpoti 4: háromszög filter-LFO `OFF`, illetve `0,1–5,0 Hz` között, `0,1 Hz`-es lépésekben
 
 Kikapcsolt második hullámformánál az LFO nem állítható. Második hullámforma és kikapcsolt LFO esetén csak a második hullám szól; aktív LFO-nál a hang folyamatosan halad az eredeti preset-hullám és a második hullám között. A két táblát minden voice ugyanannál a fázispozíciónál olvassa, ezért a morph nem használ további oszcillátort, és nem változtatja meg a hangmagasságot. A háttérszekvenszer számára fenntartott voice 0 nem kap morphot.
 
-SHIFT-szerkesztés után az első két poti soft takeoverrel tér vissza a preset és a gyökérhang vezérléséhez: egyik érték sem ugrik el a MODE felengedésekor, csak a poti következő szándékos elmozdításakor.
+Kikapcsolt filter mellett a filter-LFO nem állítható. Aktív filter és kikapcsolt filter-LFO esetén a 3. potival kiválasztott fix cutoff érvényesül; aktív LFO-nál a cutoff a teljesen nyitott állás és a kiválasztott legmélyebb érték között lépcsőzetesen mozog. A filter és mindkét LFO csak a három élő voice-ra hat, a háttérszekvenszerre nem.
+
+SHIFT-szerkesztés után mind a négy poti soft takeoverrel tér vissza a preset, a gyökérhang, a skála és a játékstílus vezérléséhez: egyik érték sem ugrik el a MODE felengedésekor, csak a poti következő szándékos elmozdításakor.
 
 Live presetek: `PURE`, `SOFT`, `KEYS`, `PLUK`, `BASS`, `LEAD`, `ORGN`, `LOFI`.
 
@@ -110,7 +114,7 @@ A PWM kimenet továbbra is 20 kHz-en frissül. A processzorterhelés kordában t
 - PLAY: preset, gyökér, skála, játékmód, oktáv és a háttérszekvenszer állapota
 - DRONE: a négy oszcillátorpár hullámformája és a nyolc gate
 
-A paraméterpotik értékei közvetlenül a főképernyőn változnak, nincs külön szerkesztési képernyő. Sequencer pitch szerkesztésekor a hangnév, PLAY morph szerkesztésekor a `B:` hullámforma vagy az `L:` LFO-érték, drone pitch szerkesztésekor a frekvencia, VCA-LFO szerkesztésekor pedig az `L1`–`L4` csoport és annak `OFF`/Hz értéke jelenik meg röviden a főképernyő jobb oldalán. Az LCD csak a ténylegesen megváltozott karaktereket írja újra, így nem villog minden sequencer-lépésnél.
+A paraméterpotik értékei közvetlenül a főképernyőn változnak, nincs külön szerkesztési képernyő. Sequencer pitch szerkesztésekor a hangnév, PLAY shift-szerkesztéskor a `B:` hullámforma, az `L:` morph-LFO, az `F:` filterfrekvencia vagy az `FL:` filter-LFO értéke, drone pitch szerkesztésekor a frekvencia, VCA-LFO szerkesztésekor pedig az `L1`–`L4` csoport és annak `OFF`/Hz értéke jelenik meg röviden a főképernyő jobb oldalán. Az LCD csak a ténylegesen megváltozott karaktereket írja újra, így nem villog minden sequencer-lépésnél.
 
 ## Fordítás
 
@@ -125,6 +129,6 @@ arduino-cli compile --fqbn arduino:avr:pro:cpu=16MHzatmega328 --library <LiquidC
 ## Korlátok
 
 - Nincs EEPROM-mentés; a beállítások újraindításkor alapértékre állnak.
-- Nincs valódi szűrőfokozat. A legacy `setFilter()` függvény nem módosítja a hangot.
+- A PLAY mód három élő voice-a közös, rezonancia nélküli egy pólusú low-pass szűrőt használ; a legacy, voice-onkénti `setFilter()` függvény továbbra sem része a hangútnak.
 - A normál hangmotor négyszólamú. PLAY módban ebből egy voice a háttérszekvenszeré és három az élő játéké.
 - A nyolc drone oszcillátor egyszerűsített, burkológörbe nélküli keverőágat használ az ATmega328P időkeretének betartásához.
