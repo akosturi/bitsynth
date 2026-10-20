@@ -15,6 +15,7 @@ A program 16 MHz-es ATmega328P alapú Arduino laphoz készült, például 5 V-os
 - 9 bites PWM audiokimenet: `D9`
 
 A hangot Timer1 állítja elő 9 bites PWM-mel, a 20 kHz-es audio interruptot Timer2 adja. A PWM kimenet után külső analóg aluláteresztő- és kimeneti fokozat szükséges.
+Az oszcillátorok 256 mintás hullámtáblákat használnak; ez nem változtatja meg a 9 bites PWM-kimenet felbontását.
 
 ## Módváltás
 
@@ -86,6 +87,8 @@ MODE nyomva tartása közben a négy paraméterpoti a három élő voice közös
 Kikapcsolt második hullámformánál az LFO nem állítható. Második hullámforma és kikapcsolt LFO esetén csak a második hullám szól; aktív LFO-nál a hang folyamatosan halad az eredeti preset-hullám és a második hullám között. A két táblát minden voice ugyanannál a fázispozíciónál olvassa, ezért a morph nem használ további oszcillátort, és nem változtatja meg a hangmagasságot. A háttérszekvenszer számára fenntartott voice 0 nem kap morphot.
 
 Kikapcsolt filter mellett a filter-LFO nem állítható. Aktív filter és kikapcsolt filter-LFO esetén a 3. potival kiválasztott fix cutoff érvényesül; aktív LFO-nál a cutoff a teljesen nyitott állás és a kiválasztott legmélyebb érték között lépcsőzetesen mozog. A filter és mindkét LFO csak a három élő voice-ra hat, a háttérszekvenszerre nem.
+
+A két PLAY LFO 32 bites fázisakkumulátorral, 2,5 kHz-es vezérlési frissítéssel működik. Az audio és a közös live mix továbbra is a teljes 20 kHz-es, Q7 belső felbontású hangúton fut.
 
 SHIFT-szerkesztés után mind a négy poti soft takeoverrel tér vissza a preset, a gyökérhang, a skála és a játékstílus vezérléséhez: egyik érték sem ugrik el a MODE felengedésekor, csak a poti következő szándékos elmozdításakor.
 

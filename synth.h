@@ -48,8 +48,15 @@ const uint8_t SYNTH_VOICE_COUNT = 4;
 const uint8_t SYNTH_DRONE_COUNT = 8;
 const uint8_t SYNTH_MIDI_NOTE_MAX = 127;
 const uint8_t SYNTH_LENGTH_MAX = 127;
-const uint8_t SYNTH_WAVETABLE_INDEX_BITS = 9;
+const uint8_t SYNTH_WAVETABLE_INDEX_BITS = 8;
 const uint8_t SYNTH_WAVETABLE_SHIFT = 16 - SYNTH_WAVETABLE_INDEX_BITS;
+
+static_assert(sizeof(SinTable) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid sine table size");
+static_assert(sizeof(TriangleTable) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid triangle table size");
+static_assert(sizeof(SquareTable) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid square table size");
+static_assert(sizeof(SawTable) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid saw table size");
+static_assert(sizeof(RampTable) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid ramp table size");
+static_assert(sizeof(NoiseTable) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid noise table size");
 
 volatile uint16_t PCW[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
 volatile uint16_t FTW[SYNTH_VOICE_COUNT] = {1000, 200, 300, 400};
@@ -80,9 +87,10 @@ volatile uint32_t playMorphLfoFTW = 0;
 volatile uint8_t playMorphAmount = 128;
 volatile uint8_t playFilterAmount = 0;
 volatile uint8_t playFilterDepth = 0;
-volatile int32_t playFilterStateQ7 = 0;
+int16_t playFilterStateQ7 = 0;
 volatile uint32_t playFilterLfoPCW = 0x80000000UL;
 volatile uint32_t playFilterLfoFTW = 0;
+uint8_t playLfoDivider = 0;
 volatile bool droneMode = false;
 volatile uint16_t dronePCW[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
 volatile uint16_t droneFTW[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
@@ -133,15 +141,17 @@ static inline __attribute__((always_inline)) int16_t filterPlayMix(int16_t input
     return inputQ7;
   }
 
-  const int32_t difference = (int32_t)inputQ7 - playFilterStateQ7;
+  int16_t stateQ7 = playFilterStateQ7;
   if (level == 1) {
-    playFilterStateQ7 += difference - (difference >> 3); // 7/8
+    stateQ7 = inputQ7 - (inputQ7 >> 3) + (stateQ7 >> 3); // 7/8
   } else if (level == 2) {
-    playFilterStateQ7 += difference - (difference >> 2); // 3/4
+    stateQ7 = inputQ7 - (inputQ7 >> 2) + (stateQ7 >> 2); // 3/4
   } else {
-    playFilterStateQ7 += difference >> (level - 2);      // 1/2 .. 1/32
+    const uint8_t shift = level - 2;
+    stateQ7 += (inputQ7 >> shift) - (stateQ7 >> shift);  // 1/2 .. 1/32
   }
-  return (int16_t)playFilterStateQ7;
+  playFilterStateQ7 = stateQ7;
+  return stateQ7;
 }
 
 //*********************************************************************************************
@@ -207,12 +217,20 @@ ISR(TIMER2_COMPA_vect)
       AMP[divider] = (envelopeIndex & 0x80) ? 0 : pgm_read_byte(envs[divider] + envelopeIndex);
     }
 
-    if (divider == 0 && playFilterLfoFTW != 0) {
-      playFilterLfoPCW += playFilterLfoFTW;
-      const uint8_t trianglePhase = ((uint8_t*)&playFilterLfoPCW)[3];
-      const uint8_t triangleAmount = (trianglePhase & 0x80) ?
-        (uint8_t)(256U - trianglePhase) : trianglePhase;
-      playFilterAmount = ((uint16_t)playFilterDepth * triangleAmount + 64) >> 7;
+    bool updatePlayLfos = false;
+    if (divider == 0) {
+      playLfoDivider ^= 1;
+      updatePlayLfos = playLfoDivider == 0;
+    }
+    if (updatePlayLfos) {
+      const uint32_t filterLfoStep = playFilterLfoFTW;
+      if (filterLfoStep != 0) {
+        playFilterLfoPCW += filterLfoStep;
+        const uint8_t trianglePhase = ((uint8_t*)&playFilterLfoPCW)[3];
+        const uint8_t triangleAmount = (trianglePhase & 0x80) ?
+          (uint8_t)(256U - trianglePhase) : trianglePhase;
+        playFilterAmount = ((uint16_t)playFilterDepth * triangleAmount + 64) >> 7;
+      }
     }
 
     //-------------------------------
@@ -240,8 +258,9 @@ ISR(TIMER2_COMPA_vect)
 
     int16_t liveMixQ7;
     if (playMorphActive) {
-      if (divider == 0) {
-        playMorphLfoPCW += playMorphLfoFTW;
+      if (updatePlayLfos) {
+        const uint32_t morphLfoStep = playMorphLfoFTW;
+        playMorphLfoPCW += morphLfoStep;
         const uint8_t trianglePhase = ((uint8_t*)&playMorphLfoPCW)[3];
         playMorphAmount = (trianglePhase & 0x80) ?
           (uint8_t)(256U - trianglePhase) : trianglePhase;
@@ -507,7 +526,7 @@ class synth
       const uint16_t primaryPointer = wavePointer(primaryWave);
       const uint16_t secondaryPointer = wavePointer(secondaryWave);
       const uint32_t lfoStep = frequencyTenths == 0 ? 0 :
-        (uint32_t)frequencyTenths * 85899UL;
+        (uint32_t)frequencyTenths * 171799UL;
       const bool active = secondaryEnabled && lfoStep != 0;
       const uint16_t outputPointer = secondaryEnabled && !active ? secondaryPointer : primaryPointer;
       const bool noisy = active ?
@@ -547,7 +566,7 @@ class synth
         level = 7;
       }
       const uint32_t lfoStep = level == 0 || frequencyTenths == 0 ? 0 :
-        (uint32_t)frequencyTenths * 85899UL;
+        (uint32_t)frequencyTenths * 171799UL;
 
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         const bool wasActive = playFilterLfoFTW != 0;

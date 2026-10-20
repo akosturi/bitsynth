@@ -226,7 +226,7 @@ uint16_t lfoRateForRaw(uint16_t raw) {
   const uint16_t travel = 1023 - kAnalogEndpointMargin;
   const uint16_t position = 1023 - raw - kAnalogEndpointMargin;
   return kLfoFrequencyMinTenths +
-    ((uint32_t)position * (kLfoFrequencyMaxTenths - kLfoFrequencyMinTenths)) / travel;
+    (position * (kLfoFrequencyMaxTenths - kLfoFrequencyMinTenths)) / travel;
 }
 
 void setup() {
@@ -245,12 +245,12 @@ void setup() {
   const uint16_t lowPitch = pitchWordForFrequency(kDroneFrequencyMin);
   const uint16_t highPitch = pitchWordForFrequency(kDroneFrequencyMax);
   for (uint8_t i = 0; i < kStepCount; ++i) {
-    dronePitchWord[i] = lowPitch + ((uint32_t)(highPitch - lowPitch) * i) / (kStepCount - 1);
+    dronePitchWord[i] = lowPitch + ((highPitch - lowPitch) * i) / (kStepCount - 1);
   }
 
   lcd.begin(16, 2);
   lcd.clear(); lcd.print(F("BitSynth 3-mode")); delay(500); lcd.clear();
-  nextStepIntervalMs = 15000UL / seqControls.bpm;
+  nextStepIntervalMs = 15000U / seqControls.bpm;
   lastStepMs = millis();
 }
 
@@ -289,7 +289,7 @@ uint16_t readMedianAnalog(uint8_t pin) {
 uint16_t filterAnalog(uint16_t raw, uint16_t &filtered, bool &ready) {
   const uint16_t fixed = raw << kAnalogFilterFractionBits;
   if (!ready) { filtered = fixed; ready = true; return raw; }
-  const int32_t delta = (int32_t)fixed - filtered;
+  const int16_t delta = (int16_t)fixed - (int16_t)filtered;
   filtered += (delta * kAnalogFilterAlphaNumerator) / kAnalogFilterAlphaDenominator;
   return (filtered + (1 << (kAnalogFilterFractionBits - 1))) >> kAnalogFilterFractionBits;
 }
@@ -356,15 +356,15 @@ uint8_t mapIndexHysteresis(uint16_t raw, uint8_t current, uint8_t count) {
   if (raw <= kAnalogEndpointMargin) return count - 1;
   if (raw >= 1023 - kAnalogEndpointMargin) return 0;
 
-  const uint8_t forwardBin = min((uint8_t)(((uint32_t)raw * count) >> 10), (uint8_t)(count - 1));
+  const uint8_t forwardBin = min((uint8_t)((raw * count) >> 10), (uint8_t)(count - 1));
   const uint8_t candidate = count - 1 - forwardBin;
   if (current >= count || candidate == current) return candidate;
 
   if (candidate < current) {
-    const uint16_t boundary = ((uint32_t)(count - current) << 10) / count;
+    const uint16_t boundary = ((uint16_t)(count - current) << 10) / count;
     if (raw > boundary + kAnalogHysteresis) return candidate;
   } else {
-    const uint16_t boundary = ((uint32_t)(count - 1 - current) << 10) / count;
+    const uint16_t boundary = ((uint16_t)(count - 1 - current) << 10) / count;
     if (raw + kAnalogHysteresis < boundary) return candidate;
   }
   return current;
@@ -891,7 +891,7 @@ void triggerSequencerStep(uint8_t step, bool backgroundOnly) {
   else triggerSequencerNote(stepNotes[step], backgroundOnly);
 }
 
-uint16_t bpmStepMs() { return 15000UL / max((uint8_t)1, seqControls.bpm); }
+uint16_t bpmStepMs() { return 15000U / max((uint8_t)1, seqControls.bpm); }
 
 void runSequencer(unsigned long now) {
   if (instrumentMode == MODE_DRONE || (unsigned long)(now - lastStepMs) < nextStepIntervalMs) return;
