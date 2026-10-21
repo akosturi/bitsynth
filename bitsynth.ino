@@ -56,7 +56,6 @@ struct VoiceRecipe {
   uint8_t wave;
   int8_t semitone;
   uint8_t envelope;
-  uint8_t length;
   uint8_t modulation;
 };
 
@@ -86,15 +85,15 @@ struct AnalogMotionState {
 };
 
 const SeqPreset kSeqPresets[kSeqPresetCount] PROGMEM = {
-  {"SUB",  2, {{SINE, 0, ENVELOPE0, 82, 64}, {SQUARE, -12, ENVELOPE0, 82, 64}, {SINE, 0, 0, 0, 64}, {SINE, 0, 0, 0, 64}}},
-  {"BAS", 2, {{SAW, 0, ENVELOPE1, 64, 64}, {SQUARE, -12, ENVELOPE1, 64, 64}, {SINE, 0, 0, 0, 64}, {SINE, 0, 0, 0, 64}}},
-  {"PLK", 2, {{TRIANGLE, 0, ENVELOPE1, 42, 64}, {SQUARE, 12, ENVELOPE1, 42, 64}, {SINE, 0, 0, 0, 64}, {SINE, 0, 0, 0, 64}}},
-  {"BEL", 3, {{SINE, 0, ENVELOPE2, 88, 64}, {SINE, 12, ENVELOPE2, 88, 64}, {TRIANGLE, 19, ENVELOPE2, 88, 64}, {SINE, 0, 0, 0, 64}}},
-  {"LED", 2, {{SAW, 0, ENVELOPE0, 102, 64}, {RAMP, 0, ENVELOPE0, 102, 64}, {SINE, 0, 0, 0, 64}, {SINE, 0, 0, 0, 64}}},
-  {"CRD", 4, {{TRIANGLE, 0, ENVELOPE0, 78, 64}, {TRIANGLE, 4, ENVELOPE0, 78, 64}, {TRIANGLE, 7, ENVELOPE0, 78, 64}, {SINE, 12, ENVELOPE0, 78, 64}}},
-  {"CIP", 2, {{SQUARE, 0, ENVELOPE3, 72, 64}, {SQUARE, 12, ENVELOPE3, 72, 64}, {SINE, 0, 0, 0, 64}, {SINE, 0, 0, 0, 64}}},
-  {"PRC", 2, {{NOISE, 12, ENVELOPE1, 24, 64}, {SINE, -12, ENVELOPE1, 24, 42}, {SINE, 0, 0, 0, 64}, {SINE, 0, 0, 0, 64}}},
-  {"DRM", 1, {{SINE, 0, ENVELOPE1, 24, 64}, {SINE, 0, 0, 0, 64}, {SINE, 0, 0, 0, 64}, {SINE, 0, 0, 0, 64}}}
+  {"SUB",  2, {{SINE, 0, ENVELOPE0, 64}, {SQUARE, -12, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}},
+  {"BAS", 2, {{SAW, 0, ENVELOPE1, 64}, {SQUARE, -12, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}},
+  {"PLK", 2, {{TRIANGLE, 0, ENVELOPE1, 64}, {SQUARE, 12, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}},
+  {"BEL", 3, {{SINE, 0, ENVELOPE2, 64}, {SINE, 12, ENVELOPE2, 64}, {TRIANGLE, 19, ENVELOPE2, 64}, {SINE, 0, 0, 64}}},
+  {"LED", 2, {{SAW, 0, ENVELOPE0, 64}, {RAMP, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}},
+  {"CRD", 4, {{TRIANGLE, 0, ENVELOPE0, 64}, {TRIANGLE, 4, ENVELOPE0, 64}, {TRIANGLE, 7, ENVELOPE0, 64}, {SINE, 12, ENVELOPE0, 64}}},
+  {"CIP", 2, {{SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 12, ENVELOPE3, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}},
+  {"PRC", 2, {{NOISE, 12, ENVELOPE1, 64}, {SINE, -12, ENVELOPE1, 42}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}},
+  {"DRM", 1, {{SINE, 0, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}}
 };
 
 const LivePreset kLivePresets[kLivePresetCount] PROGMEM = {

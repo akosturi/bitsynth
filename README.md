@@ -132,6 +132,6 @@ arduino-cli compile --fqbn arduino:avr:pro:cpu=16MHzatmega328 --library <LiquidC
 ## Korlátok
 
 - Nincs EEPROM-mentés; a beállítások újraindításkor alapértékre állnak.
-- A PLAY mód három élő voice-a közös, rezonancia nélküli egy pólusú low-pass szűrőt használ; a legacy, voice-onkénti `setFilter()` függvény továbbra sem része a hangútnak.
+- A PLAY mód három élő voice-a közös, rezonancia nélküli egy pólusú low-pass szűrőt használ.
 - A normál hangmotor négyszólamú. PLAY módban ebből egy voice a háttérszekvenszeré és három az élő játéké.
 - A nyolc drone oszcillátor egyszerűsített, burkológörbe nélküli keverőágat használ az ATmega328P időkeretének betartásához.

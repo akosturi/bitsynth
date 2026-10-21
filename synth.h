@@ -41,8 +41,6 @@ static_assert(hihatSampleRate == FS, "hi-hat sample rate must match the 20 kHz a
 
 #define SET(x,y) (x |= (1 << y))
 #define CLR(x,y) (x &= (~(1 << y)))
-#define CHK(x,y) (x & (1 << y))
-#define TOG(x,y) (x ^= (1 << y))
 
 const uint8_t SYNTH_VOICE_COUNT = 4;
 const uint8_t SYNTH_DRONE_COUNT = 8;
@@ -72,8 +70,6 @@ volatile uint16_t envs[SYNTH_VOICE_COUNT] = {
 volatile uint16_t EPCW[SYNTH_VOICE_COUNT] = {0x8000, 0x8000, 0x8000, 0x8000};
 volatile uint16_t EFTW[SYNTH_VOICE_COUNT] = {10, 10, 10, 10};
 volatile uint8_t divider = 4;
-volatile uint8_t tik = 0;
-volatile uint8_t output_mode = CHA;
 volatile uint8_t noiseVoiceMask = 0;
 volatile int16_t pwmQuantizationError = 0;
 volatile uint8_t pwmDitherLfsr = 0xA5;
@@ -163,10 +159,7 @@ ISR(TIMER2_COMPA_vect)
   //-------------------------------
   // Time division
   //-------------------------------
-  divider++;
-  if (!(divider &= 0x03)) {
-    tik = 1;
-  }
+  divider = (divider + 1) & 0x03;
 
   int16_t mixQ7;
 
@@ -382,7 +375,6 @@ class synth
 
     void configureChaOutput()
     {
-      output_mode = CHA;
       configureTimer1Pwm();
       SET(TCCR1A, COM1A1);
       CLR(TCCR1A, COM1A0);
@@ -391,7 +383,6 @@ class synth
 
     void configureChbOutput()
     {
-      output_mode = CHB;
       configureTimer1Pwm();
       SET(TCCR1A, COM1B1);
       CLR(TCCR1A, COM1B0);
@@ -400,7 +391,6 @@ class synth
 
     void configureDifferentialOutput()
     {
-      output_mode = DIFF;
       configureTimer1Pwm();
       SET(TCCR1A, COM1A1);
       CLR(TCCR1A, COM1A0);
@@ -413,15 +403,6 @@ class synth
   public:
     synth()
     {
-    }
-
-    //*********************************************************************
-    //  Startup default
-    //*********************************************************************
-
-    void begin()
-    {
-      begin(CHA);
     }
 
     //*********************************************************************
@@ -452,33 +433,6 @@ class synth
     }
 
     //*********************************************************************
-    //  Timing/sequencing functions
-    //*********************************************************************
-
-    uint8_t synthTick()
-    {
-      if (tik)
-      {
-        tik = 0;
-        return 1;
-      }
-      return 0;
-    }
-
-    uint8_t voiceFree(uint8_t voice)
-    {
-      if (!validVoice(voice)) {
-        return 0;
-      }
-
-      if (!(((uint8_t*)&EPCW[voice])[1] & 0x80)) {
-        return 0;
-      }
-
-      return 1;
-    }
-
-    //*********************************************************************
     //  Setup voice parameters in MIDI range
     //  voice[0-3], wave[0-5], pitch[0-127], envelope[0-3],
     //  length[0-127], mod[0-127:64=no mod]
@@ -491,11 +445,6 @@ class synth
       setEnvelope(voice, env);
       setLength(voice, length);
       setMod(voice, mod);
-    }
-
-    void setupVoice(uint8_t voice, uint8_t wave, uint8_t pitch, uint8_t env, uint8_t length, uint8_t mod, uint16_t)
-    {
-      setupVoice(voice, wave, pitch, env, length, mod);
     }
 
     //*********************************************************************
@@ -671,14 +620,6 @@ class synth
     }
 
     //*********************************************************************
-    //  Legacy compatibility. This synth engine has no audio filter stage.
-    //*********************************************************************
-
-    void setFilter(uint8_t, uint16_t)
-    {
-    }
-
-    //*********************************************************************
     //  Setup mod [0-127:64=no mod]
     //*********************************************************************
 
@@ -708,60 +649,6 @@ class synth
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         sampleHoldFrames = frames;
         sampleHoldCounter = 0;
-      }
-    }
-
-    //*********************************************************************
-    //  Midi trigger
-    //*********************************************************************
-
-    void mTrigger(uint8_t voice, uint8_t midiNote)
-    {
-      if (!validVoice(voice)) {
-        return;
-      }
-
-      if (midiNote > SYNTH_MIDI_NOTE_MAX) {
-        midiNote = SYNTH_MIDI_NOTE_MAX;
-      }
-
-      const uint16_t pitch = pgm_read_word(&PITCHS[midiNote]);
-      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        PITCH[voice] = pitch;
-        EPCW[voice] = 0;
-        FTW[voice] = pitch;
-      }
-    }
-
-    //*********************************************************************
-    //  Set frequency direct
-    //*********************************************************************
-
-    void setFrequency(uint8_t voice, float frequency)
-    {
-      if (!validVoice(voice)) {
-        return;
-      }
-
-      const uint16_t pitch = (uint16_t)(frequency / (FS / 65535.0));
-      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        PITCH[voice] = pitch;
-      }
-    }
-
-    //*********************************************************************
-    //  Set time
-    //*********************************************************************
-
-    void setTime(uint8_t voice, float seconds)
-    {
-      if (!validVoice(voice) || seconds <= 0.0) {
-        return;
-      }
-
-      const uint16_t envelopeSpeed = (uint16_t)((1.0 / seconds) / (FS / (32767.5 * 10.0)));
-      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        EFTW[voice] = envelopeSpeed;
       }
     }
 
@@ -938,19 +825,6 @@ class synth
       }
     }
 
-    //*********************************************************************
-    //  Suspend/resume synth
-    //*********************************************************************
-
-    void suspend()
-    {
-      CLR(TIMSK2, OCIE2A);
-    }
-
-    void resume()
-    {
-      SET(TIMSK2, OCIE2A);
-    }
 };
 
 #endif
