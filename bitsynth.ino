@@ -203,11 +203,6 @@ char displayFrame[2][17];
 char renderedFrame[2][16];
 bool renderedFrameReady = false;
 
-void copyText(char *destination, const char *source, uint8_t size) {
-  strncpy(destination, source, size - 1);
-  destination[size - 1] = '\0';
-}
-
 void copyProgmemLabel(char *destination, const char *source, uint8_t size) {
   strncpy_P(destination, source, size - 1);
   destination[size - 1] = '\0';
@@ -382,8 +377,9 @@ uint8_t playMorphWaveForRaw(uint16_t raw) {
   return mapIndexHysteresis(scaled, current, kPlayMorphWaveCount);
 }
 
-void setEditText(const char *title, const char *value, unsigned long now) {
-  copyText(editTitle, title, sizeof(editTitle)); copyText(editValue, value, sizeof(editValue));
+void setEditText(const __FlashStringHelper *title, const __FlashStringHelper *value, unsigned long now) {
+  copyProgmemLabel(editTitle, (const char *)title, sizeof(editTitle));
+  copyProgmemLabel(editValue, (const char *)value, sizeof(editValue));
   editUntilMs = now + kEditViewMs; displayDirty = true;
 }
 
@@ -686,7 +682,7 @@ void scanModeButton(unsigned long now) {
   }
   if (modeButtonStable == LOW && !modeButtonLongHandled && !modeButtonChordUsed &&
       (unsigned long)(now - modeButtonPressedAt) >= kPanicHoldMs) {
-    panicAll(); modeButtonLongHandled = true; setEditText("PANIC", "ALL OFF", now);
+    panicAll(); modeButtonLongHandled = true; setEditText(F("PANIC"), F("ALL OFF"), now);
   }
 }
 
@@ -757,9 +753,9 @@ void changeMode(InstrumentMode nextMode, unsigned long now) {
       edgar.setDronePitchWord(voice, dronePitchWord[voice]);
       edgar.setDroneGate(voice, bitRead(droneGateMask, voice));
     }
-    edgar.setDroneMode(true); setEditText("MODE", "DRONE", now);
+    edgar.setDroneMode(true); setEditText(F("MODE"), F("DRONE"), now);
   } else if (nextMode == MODE_PLAY) {
-    applyLiveConfiguration(); setEditText("MODE", "PLAY", now);
+    applyLiveConfiguration(); setEditText(F("MODE"), F("PLAY"), now);
   } else {
     if (previous == MODE_DRONE) {
       currentStep = 0;
@@ -770,7 +766,7 @@ void changeMode(InstrumentMode nextMode, unsigned long now) {
       nextStepIntervalMs = bpmStepMs();
     }
     edgar.setSampleHold(seqControls.preset == PRESET_CHIP ? map(seqControls.color, 0, 127, 1, 8) : 1);
-    setEditText("MODE", "SEQ", now);
+    setEditText(F("MODE"), F("SEQ"), now);
   }
   displayDirty = true;
 }
@@ -834,8 +830,8 @@ uint8_t seqShapeLength(uint8_t preset, uint8_t shape) {
 }
 
 int8_t chordIntervalForVoice(uint8_t voice, uint8_t color) {
-  static const int8_t intervals[4][4] = {{0, 3, 7, 12}, {0, 4, 7, 12}, {0, 2, 7, 12}, {0, 5, 7, 12}};
-  return intervals[min((uint8_t)(color >> 5), (uint8_t)3)][voice];
+  static const int8_t intervals[4][4] PROGMEM = {{0, 3, 7, 12}, {0, 4, 7, 12}, {0, 2, 7, 12}, {0, 5, 7, 12}};
+  return (int8_t)pgm_read_byte(&intervals[min((uint8_t)(color >> 5), (uint8_t)3)][voice]);
 }
 
 uint8_t effectiveSampleHold() {
@@ -1052,8 +1048,7 @@ void revoiceHeldButtons() {
 }
 
 void formatNoteName(uint8_t note, char output[5]) {
-  static const char names[12][3] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
-  copyText(output, names[note % 12], 3);
+  copyProgmemLabel(output, kRootLabels[note % 12], 3);
   const uint8_t length = strlen(output);
   output[length] = '0' + (note / 12 - 1); output[length + 1] = '\0';
 }
@@ -1071,6 +1066,18 @@ void frameChar(uint8_t row, uint8_t column, char value) {
 
 void frameText(uint8_t row, uint8_t column, const char *text) {
   while (row < 2 && column < 16 && *text) displayFrame[row][column++] = *text++;
+}
+
+void frameProgmemText(uint8_t row, uint8_t column, const char *source) {
+  while (row < 2 && column < 16) {
+    const char value = pgm_read_byte(source++);
+    if (!value) break;
+    displayFrame[row][column++] = value;
+  }
+}
+
+void frameText(uint8_t row, uint8_t column, const __FlashStringHelper *text) {
+  frameProgmemText(row, column, (const char *)text);
 }
 
 void frameNumber(uint8_t row, uint8_t column, uint16_t value) {
@@ -1134,8 +1141,7 @@ void renderDisplay(unsigned long now) {
 }
 
 void renderSequencerDashboard(bool inlineEditVisible) {
-  SeqPreset preset; readSeqPreset(seqControls.preset, preset);
-  frameText(0, 0, preset.label);
+  frameProgmemText(0, 0, kSeqPresets[seqControls.preset].label);
   frameChar(0, 4, 'B'); frameNumber(0, 5, seqControls.bpm);
   frameChar(0, 9, seqControls.preset == PRESET_DRUM ? 'T' : 'C');
   frameNumber(0, 10, map(seqControls.color, 0, 127, 0, 99));
@@ -1149,8 +1155,7 @@ void renderSequencerDashboard(bool inlineEditVisible) {
   if (inlineEditVisible) {
     frameChar(1, 9, 'S'); frameChar(1, 10, '1' + editedStep); frameChar(1, 11, ':');
     if (seqControls.preset == PRESET_DRUM) {
-      char label[5]; copyProgmemLabel(label, kDrumLabels[stepDrums[editedStep]], sizeof(label));
-      frameText(1, 12, label);
+      frameProgmemText(1, 12, kDrumLabels[stepDrums[editedStep]]);
     } else {
       char note[5]; formatNoteName(stepNotes[editedStep], note); frameText(1, 12, note);
     }
@@ -1158,43 +1163,39 @@ void renderSequencerDashboard(bool inlineEditVisible) {
 }
 
 void renderPlayDashboard(bool inlineEditVisible) {
-  LivePreset preset; readLivePreset(playControls.preset, preset);
-  char root[3], scale[4], style[5];
-  copyProgmemLabel(root, kRootLabels[playControls.root], sizeof(root));
-  copyProgmemLabel(scale, kScaleLabels[playControls.scale], sizeof(scale));
-  copyProgmemLabel(style, kStyleLabels[playControls.style], sizeof(style));
-  frameText(0, 0, "PLY "); frameText(0, 4, preset.label); frameText(0, 9, root); frameText(0, 12, scale);
-  frameText(1, 0, style); frameChar(1, 5, 'O'); frameChar(1, 6, '2' + playControls.octave);
+  frameText(0, 0, F("PLY "));
+  frameProgmemText(0, 4, kLivePresets[playControls.preset].label);
+  frameProgmemText(0, 9, kRootLabels[playControls.root]);
+  frameProgmemText(0, 12, kScaleLabels[playControls.scale]);
+  frameProgmemText(1, 0, kStyleLabels[playControls.style]);
+  frameChar(1, 5, 'O'); frameChar(1, 6, '2' + playControls.octave);
   if (!inlineEditVisible) {
-    frameText(1, 9, playSequencerEnabled ? "SEQ+" : "SEQ-");
+    frameText(1, 9, playSequencerEnabled ? F("SEQ+") : F("SEQ-"));
   } else if (editedPlayShift == 1) {
-    frameText(1, 9, "B:");
-    if (playMorphWave == kPlayMorphOff) frameText(1, 11, "OFF");
+    frameText(1, 9, F("B:"));
+    if (playMorphWave == kPlayMorphOff) frameText(1, 11, F("OFF"));
     else {
-      char label[4]; copyProgmemLabel(label, kDroneWaveLabels[playMorphWave], sizeof(label));
-      frameText(1, 11, label);
+      frameProgmemText(1, 11, kDroneWaveLabels[playMorphWave]);
     }
   } else if (editedPlayShift == 2) {
-    frameText(1, 9, "L:");
-    if (playMorphLfoRateTenths == 0) frameText(1, 11, "OFF");
+    frameText(1, 9, F("L:"));
+    if (playMorphLfoRateTenths == 0) frameText(1, 11, F("OFF"));
     else frameTenths(1, 11, playMorphLfoRateTenths);
   } else if (editedPlayShift == 3) {
-    frameText(1, 9, "F:");
-    char label[5];
-    copyProgmemLabel(label, kPlayFilterLabels[playFilterLevel], sizeof(label));
-    frameText(1, 11, label);
+    frameText(1, 9, F("F:"));
+    frameProgmemText(1, 11, kPlayFilterLabels[playFilterLevel]);
   } else {
-    frameText(1, 9, "FL:");
-    if (playFilterLfoRateTenths == 0) frameText(1, 12, "OFF");
+    frameText(1, 9, F("FL:"));
+    if (playFilterLfoRateTenths == 0) frameText(1, 12, F("OFF"));
     else frameTenths(1, 12, playFilterLfoRateTenths);
   }
 }
 
 void renderDroneDashboard(bool inlineEditVisible) {
-  frameText(0, 0, "DRN ");
+  frameText(0, 0, F("DRN "));
   for (uint8_t pair = 0; pair < kSettingCount; ++pair) {
-    char label[4]; copyProgmemLabel(label, kDroneWaveLabels[dronePairWave[pair]], sizeof(label));
-    frameChar(0, 4 + pair * 3, label[0]); frameChar(0, 5 + pair * 3, label[1]);
+    frameChar(0, 4 + pair * 3, pgm_read_byte(&kDroneWaveLabels[dronePairWave[pair]][0]));
+    frameChar(0, 5 + pair * 3, pgm_read_byte(&kDroneWaveLabels[dronePairWave[pair]][1]));
   }
   for (uint8_t voice = 0; voice < kStepCount; ++voice) {
     frameChar(1, voice, bitRead(droneGateMask, voice) ? 'x' : '-');
@@ -1202,7 +1203,7 @@ void renderDroneDashboard(bool inlineEditVisible) {
   if (inlineEditVisible) {
     if (editedDroneLfo < kSettingCount) {
       frameChar(1, 9, 'L'); frameChar(1, 10, '1' + editedDroneLfo); frameChar(1, 11, ':');
-      if (editedDroneLfoRateTenths == 0) frameText(1, 12, "OFF");
+      if (editedDroneLfoRateTenths == 0) frameText(1, 12, F("OFF"));
       else frameTenths(1, 12, editedDroneLfoRateTenths);
     } else {
       frameChar(1, 9, 'D'); frameChar(1, 10, '1' + editedDrone); frameChar(1, 11, ':');

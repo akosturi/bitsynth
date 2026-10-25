@@ -60,7 +60,8 @@ volatile uint16_t PCW[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
 volatile uint16_t FTW[SYNTH_VOICE_COUNT] = {1000, 200, 300, 400};
 volatile uint8_t AMP[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
 volatile uint16_t PITCH[SYNTH_VOICE_COUNT] = {500, 500, 500, 500};
-volatile int16_t MOD[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
+// setMod clamps its input to 0..127, so the stored offset is -64..63.
+volatile int8_t MOD[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
 volatile uint16_t wavs[SYNTH_VOICE_COUNT] = {
   (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable
 };
@@ -125,8 +126,11 @@ static inline __attribute__((always_inline)) int8_t nextMorphedVoiceSample(
   const uint16_t index = phase >> SYNTH_WAVETABLE_SHIFT;
   const int8_t sampleA = (int8_t)pgm_read_byte(wavs[voice] + index);
   const int8_t sampleB = (int8_t)pgm_read_byte(secondaryWave + index);
-  const int16_t difference = (int16_t)sampleB - sampleA;
-  return sampleA + (((int16_t)(difference * morphAmount)) >> 7);
+  // Amount is 0..128. Both forms have the same floor rounding and no
+  // intermediate overflow, but this form uses two signed 8x8 multiplies.
+  const uint8_t primaryAmount = 128 - morphAmount;
+  return (((int16_t)sampleA * primaryAmount) +
+          ((int16_t)sampleB * morphAmount)) >> 7;
 }
 
 static inline __attribute__((always_inline)) int16_t filterPlayMix(int16_t inputQ7)
@@ -150,32 +154,48 @@ static inline __attribute__((always_inline)) int16_t filterPlayMix(int16_t input
   return stateQ7;
 }
 
+static inline __attribute__((always_inline)) uint16_t modulationCoarse(uint16_t value)
+{
+  // Exactly value >> 6. Byte-sized shifts avoid two 6-iteration AVR loops
+  // in each modulation update; keep the subsequent product 16-bit unsigned.
+  // The U suffix avoids signed int promotion and a 16-bit ASR loop at -Os.
+  const uint8_t high = value >> 8;
+  const uint8_t low = (uint8_t)value / 64U;
+  return ((uint16_t)high << 2) | low;
+}
+
 //*********************************************************************************************
 //  Audio driver interrupt
 //*********************************************************************************************
 
-ISR(TIMER2_COMPA_vect)
+// Measured separately from source changes: -O2 avoids size-oriented shift
+// loops here. The rest of the sketch/core retains the Arduino -Os setting.
+ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
 {
   //-------------------------------
   // Time division
   //-------------------------------
-  divider = (divider + 1) & 0x03;
+  // Main code cannot run during this non-nesting ISR. Read shared state once
+  // where it is reused; retain volatile storage and all main-side atomic blocks.
+  const uint8_t voiceIndex = (divider + 1) & 0x03;
+  divider = voiceIndex;
 
   int16_t mixQ7;
 
   if (droneMode) {
-    droneRampVoice = (droneRampVoice + 1) & 0x07;
-    uint8_t amplitude = droneAmp[droneRampVoice];
-    const uint8_t target = droneTargetAmp[droneRampVoice];
+    const uint8_t rampVoice = (droneRampVoice + 1) & 0x07;
+    droneRampVoice = rampVoice;
+    uint8_t amplitude = droneAmp[rampVoice];
+    const uint8_t target = droneTargetAmp[rampVoice];
     if (amplitude < target) {
       amplitude = (target - amplitude > 15) ? amplitude + 15 : target;
     } else if (amplitude > target) {
       amplitude = (amplitude - target > 15) ? amplitude - 15 : target;
     }
-    droneAmp[droneRampVoice] = amplitude;
+    droneAmp[rampVoice] = amplitude;
 
-    droneMixPair = (droneMixPair + 1) & 0x03;
-    const uint8_t pair = droneMixPair;
+    const uint8_t pair = (droneMixPair + 1) & 0x03;
+    droneMixPair = pair;
     int16_t pairMixQ7 = 0;
     const uint8_t firstVoice = pair << 1;
     for (uint8_t voice = firstVoice; voice < firstVoice + 2; ++voice) {
@@ -189,8 +209,11 @@ ISR(TIMER2_COMPA_vect)
 
     const uint32_t lfoStep = droneLfoFTW[pair];
     if (lfoStep != 0) {
-      droneLfoPCW[pair] += lfoStep;
-      const uint8_t trianglePhase = droneLfoPCW[pair] >> 25;
+      const uint32_t lfoPhase = droneLfoPCW[pair] + lfoStep;
+      droneLfoPCW[pair] = lfoPhase;
+      // Only bits 31..25 are needed. Narrow before the last shift: avr-gcc
+      // otherwise emits a 25-iteration, 32-bit shift loop at -Os.
+      const uint8_t trianglePhase = (uint8_t)(lfoPhase >> 24) >> 1;
       const uint8_t gain = (trianglePhase & 0x40) ? 127 - trianglePhase : trianglePhase;
       pairMixQ7 = (((pairMixQ7 >> 4) * gain) >> 2);
     }
@@ -202,16 +225,18 @@ ISR(TIMER2_COMPA_vect)
     // Volume envelope generator
     //-------------------------------
 
-    if (((uint8_t*)&EPCW[divider])[1] & 0x80) {
-      AMP[divider] = 0;
+    const uint16_t envelopePhase = EPCW[voiceIndex];
+    if (envelopePhase & 0x8000) {
+      AMP[voiceIndex] = 0;
     } else {
-      EPCW[divider] += EFTW[divider];
-      const uint8_t envelopeIndex = ((uint8_t*)&EPCW[divider])[1];
-      AMP[divider] = (envelopeIndex & 0x80) ? 0 : pgm_read_byte(envs[divider] + envelopeIndex);
+      const uint16_t nextEnvelopePhase = envelopePhase + EFTW[voiceIndex];
+      EPCW[voiceIndex] = nextEnvelopePhase;
+      const uint8_t envelopeIndex = nextEnvelopePhase >> 8;
+      AMP[voiceIndex] = (envelopeIndex & 0x80) ? 0 : pgm_read_byte(envs[voiceIndex] + envelopeIndex);
     }
 
     bool updatePlayLfos = false;
-    if (divider == 0) {
+    if (voiceIndex == 0) {
       playLfoDivider ^= 1;
       updatePlayLfos = playLfoDivider == 0;
     }
@@ -232,18 +257,20 @@ ISR(TIMER2_COMPA_vect)
 
     int16_t sourceZeroQ7 = 0;
     if (drumActive) {
-      const uint16_t sampleIndex = drumSamplePhase >> 16;
-      if (sampleIndex >= drumSampleLength || drumEnvelope == 0) {
+      const uint32_t samplePhase = drumSamplePhase;
+      const uint16_t envelope = drumEnvelope;
+      const uint16_t sampleIndex = samplePhase >> 16;
+      if (sampleIndex >= drumSampleLength || envelope == 0) {
         drumEnvelope = 0;
         drumActive = false;
       } else {
         const int8_t sample =
           (int16_t)pgm_read_byte(drumSampleAddress + sampleIndex) - 128;
-        drumSamplePhase += drumSampleStep;
-        const uint8_t gain = drumEnvelope >> 8;
+        drumSamplePhase = samplePhase + drumSampleStep;
+        const uint8_t gain = envelope >> 8;
         sourceZeroQ7 = ((int16_t)sample * gain) >> 2;
-        drumEnvelope = drumEnvelope <= drumEnvelopeStep ?
-          0 : drumEnvelope - drumEnvelopeStep;
+        const uint16_t envelopeStep = drumEnvelopeStep;
+        drumEnvelope = envelope <= envelopeStep ? 0 : envelope - envelopeStep;
       }
     } else {
       sourceZeroQ7 = ((int16_t)nextVoiceSample(0) * AMP[0]) >> 2;
@@ -289,9 +316,12 @@ ISR(TIMER2_COMPA_vect)
   if (updateOutput) {
     if (shapeOutput) {
       const uint8_t feedback = (pwmDitherLfsr & 0x01) ? 0xB8 : 0x00;
-      pwmDitherLfsr = (pwmDitherLfsr >> 1) ^ feedback;
+      const uint8_t lfsr = (pwmDitherLfsr >> 1) ^ feedback;
+      pwmDitherLfsr = lfsr;
+      // Unsigned division by a power of two becomes an 8-bit nibble extract.
+      const uint8_t highNibble = lfsr / 16U;
       const int16_t dither =
-        ((int8_t)(pwmDitherLfsr & 0x0F) - (int8_t)(pwmDitherLfsr >> 4)) << 2;
+        ((int8_t)(lfsr & 0x0F) - (int8_t)highNibble) << 2;
       mixQ7 += pwmQuantizationError + dither;
     } else {
       pwmQuantizationError = 0;
@@ -318,8 +348,11 @@ ISR(TIMER2_COMPA_vect)
   //************************************************
   //  Modulation engine
   //************************************************
-  if (!droneMode && (!drumActive || divider != 0)) {
-    FTW[divider] = PITCH[divider] + (int16_t)((((PITCH[divider] >> 6) * (EPCW[divider] >> 6)) / 128) * MOD[divider]);
+  if (!droneMode && (!drumActive || voiceIndex != 0)) {
+    const uint16_t pitch = PITCH[voiceIndex];
+    // Preserve the original AVR unsigned 16-bit product/wrap before division.
+    FTW[voiceIndex] = pitch + (int16_t)(((modulationCoarse(pitch) *
+      modulationCoarse(EPCW[voiceIndex])) / 128) * MOD[voiceIndex]);
   }
 }
 
