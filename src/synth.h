@@ -343,7 +343,19 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
     pwmQuantizationError = 0;
   }
 
+#ifdef WOKWI_SIMULATION
+  // Wokwi's buzzer cannot reconstruct an analog signal from the 31.25 kHz
+  // 9-bit PWM carrier: it aliases the carrier into pulsing machine noise.
+  // Feed it a carrier-free, hard-clipped preview of the calculated audio
+  // sample instead. A small dead band silences quantization noise at zero.
+  if (pwmSample > 260) {
+    SET(PORTB, 1);
+  } else if (pwmSample < 252) {
+    CLR(PORTB, 1);
+  }
+#else
   OCR1A = OCR1B = pwmSample;
+#endif
 
   //************************************************
   //  Modulation engine
@@ -408,10 +420,21 @@ class synth
 
     void configureChaOutput()
     {
+#ifdef WOKWI_SIMULATION
+      // D9 is a regular digital audio-preview output in the simulator.
+      // Timer2 still calculates samples at 20 kHz; Timer1 PWM is unnecessary.
+      TCCR1A = 0;
+      TCCR1B = 0;
+      TCCR1C = 0;
+      TCNT1 = 0;
+      SET(DDRB, 1);
+      CLR(PORTB, 1);
+#else
       configureTimer1Pwm();
       SET(TCCR1A, COM1A1);
       CLR(TCCR1A, COM1A0);
       SET(DDRB, 1);
+#endif
     }
 
     void configureChbOutput()

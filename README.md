@@ -59,7 +59,7 @@ A `DRUM` nem hoz létre további sequencer-sávokat: minden lépés pontosan egy
 - Paraméterpoti 3 / `T`: az aktuális dobok közös tone/tuning makrója
 - Paraméterpoti 4 / `D`: hangszerfüggő decay
 
-A dobok külön monofonikus PCM-lejátszóból szólnak. A minták unsigned 8 bites, monó, 20 kHz-es adatokként a `tables.h` fájlban találhatók. A lejátszó közvetlenül a flashből olvas, RAM-másolat nélkül. A `T` poti 0,75×–1,25× között változtatja a lejátszási sebességet, a `D` poti pedig a minta hosszának 25–100%-ára állítja a lecsengő amplitúdóburkolót. Új ütés az előző mintát azonnal újraindítja. PLAY módban a DRUM sequencer ugyanazon a fenntartott monó háttérhelyen fut tovább, így a három live voice megmarad.
+A dobok külön monofonikus PCM-lejátszóból szólnak. A minták unsigned 8 bites, monó, 20 kHz-es adatokként a `src/tables.h` fájlban találhatók. A lejátszó közvetlenül a flashből olvas, RAM-másolat nélkül. A `T` poti 0,75×–1,25× között változtatja a lejátszási sebességet, a `D` poti pedig a minta hosszának 25–100%-ára állítja a lecsengő amplitúdóburkolót. Új ütés az előző mintát azonnal újraindítja. PLAY módban a DRUM sequencer ugyanazon a fenntartott monó háttérhelyen fut tovább, így a három live voice megmarad.
 
 ## PLAY — skálabiztos élő játék
 
@@ -121,13 +121,61 @@ A paraméterpotik értékei közvetlenül a főképernyőn változnak, nincs kü
 
 ## Fordítás
 
-Nyisd meg a `bitsynth.ino` fájlt Arduino IDE-ben, válaszd az Arduino Pro or Pro Mini / ATmega328P 5V 16 MHz célt, és telepítsd a hivatalos `LiquidCrystal` könyvtárat. A szintetizátormotor és a wavetable adatok a projekt részei.
+A program és a hozzá tartozó fejállományok az `src/` mappában, a
+Wokwi-konfigurációk pedig a `wokwi/` mappában találhatók.
+A projekthez telepítsd a hivatalos `LiquidCrystal` könyvtárat; a PlatformIO
+ezt a gyökérben lévő `platformio.ini` alapján automatikusan kezeli.
 
-Arduino CLI példa:
+### Wokwi VS Code
 
-```powershell
-arduino-cli compile --fqbn arduino:avr:pro:cpu=16MHzatmega328 --library <LiquidCrystal-könyvtár> .
+A repository tartalmazza a teljes Wokwi kapcsolást (`wokwi/diagram.json`) és az indítási
+konfigurációt (`wokwi/wokwi.toml`). A szimulátor egy Arduino Unót használ, amely azonos
+ATmega328P/16 MHz cél a firmware szempontjából. A kapcsolásban benne van a három
+multiplexer, mind a tizenkét poti, a nyolc step gomb, a MODE gomb, a 16×2 LCD és
+az `accurate` módú piezo audiokimenet.
+
+1. Telepítsd a VS Code PlatformIO IDE és Wokwi bővítményét.
+2. A repository gyökeréből fordítsd le a firmware-t: `pio run -e wokwi`.
+3. Az első indításkor futtasd a `Wokwi: Select Config File` parancsot, és válaszd
+   ki a `wokwi/wokwi.toml` fájlt.
+4. Futtasd a `Wokwi: Start Simulator` parancsot.
+
+A step gombok az `1`–`8`, a MODE/PANIC gomb az `M` billentyűvel is kezelhető.
+A Wokwi nem fordít automatikusan, ezért forrásmódosítás után ismét futtasd a
+PlatformIO buildet. A Wokwi build megfordítja a virtuális potik ADC-irányát, így
+jobbra tekerve minden vezérlés – a BPM-et is beleértve – növekszik. Ez csak a
+szimulációs buildre vonatkozik, a fizikai hardver firmware-ét nem módosítja.
+
+A Wokwi piezo nem modellez analóg rekonstrukciós szűrőt: a 31,25 kHz-es
+hardveres PWM közvetlen lejátszása hallható alias- és pulzáló gépzajt okoz.
+Ezért a Wokwi buildben a `D9` nem PWM-vivőt, hanem a 20 kHz-en kiszámolt
+audióminták hard-clippelt, egybites előnézetét adja a piezónak. A hangmagasság,
+a ritmus, a voice-keverés és a moduláció hallható marad, de ez nem alkalmas a
+valódi analóg kimenet hangszínének megítélésére. A fizikai build továbbra is
+a teljes 9 bites PWM-jelet használja.
+
+### Analóg audiokimenet
+
+A valódi hardveren a `D9` PWM kimenethez az alábbi háromfokozatú passzív
+aluláteresztő és AC-csatolt vonalkimenet használható:
+
+```text
+D9 PWM -- R1 2,2 kΩ --o-- R2 2,2 kΩ --o-- R3 2,2 kΩ --o-- (+) C4 4,7 µF --o-- VOL 50 kΩ log -- Rout 1 kΩ -- AUDIO OUT
+                     |               |               |                         |          |
+                  C1 4,7 nF       C2 4,7 nF       C3 6,8 nF               R4 100 kΩ    GND
+                     |               |               |                         |
+                    GND             GND             GND                       GND
 ```
+
+A `C4` elektrolit pozitív lába az `R3` felé nézzen. A hangerőpoti felső
+kivezetése a `C4/R4` csomópontra, alsó kivezetése GND-re, csúszkája pedig
+az 1 kΩ-os kimeneti ellenállásra kerül. Ez nagy impedanciájú vonalbemenethez
+való; hangszórót vagy alacsony impedanciájú fejhallgatót külön erősítő
+nélkül ne hajts meg róla.
+
+A Wokwi csak korlátozott analóg szimulációt ad, ezért a diagramon a fenti
+szűrő dokumentációként jelenik meg; az alkatrészek frekvenciamenetét a
+szimulátor nem számolja.
 
 ## Korlátok
 

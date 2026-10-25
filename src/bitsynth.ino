@@ -272,7 +272,12 @@ uint16_t readMedianAnalog(uint8_t pin) {
   uint16_t samples[kAnalogSamples];
   for (uint8_t i = 0; i < kAnalogDiscardSamples; ++i) analogRead(pin);
   for (uint8_t i = 0; i < kAnalogSamples; ++i) {
-    const uint16_t value = analogRead(pin);
+    uint16_t value = analogRead(pin);
+#ifdef WOKWI_SIMULATION
+    // The physical front panel uses the opposite pot orientation from Wokwi.
+    // Normalize the simulator so clockwise movement increases the control.
+    value = 1023 - value;
+#endif
     uint8_t at = i;
     while (at > 0 && samples[at - 1] > value) { samples[at] = samples[at - 1]; --at; }
     samples[at] = value;
@@ -423,7 +428,12 @@ void readSequencerControls(const uint16_t values[], unsigned long now) {
     seqControls.preset = next;
     displayDirty = true;
   }
+#ifdef WOKWI_SIMULATION
+  // values[] is inverted above; keep BPM increasing clockwise as well.
+  next = mapByteHysteresis(values[1], seqControls.bpm, 220, 60);
+#else
   next = mapByteHysteresis(values[1], seqControls.bpm, 60, 220);
+#endif
   if (next != seqControls.bpm) { seqControls.bpm = next; displayDirty = true; }
   next = mapByteHysteresis(values[2], seqControls.color, 127, 0);
   if (next != seqControls.color) { seqControls.color = next; displayDirty = true; }
