@@ -1,5 +1,50 @@
 # bitsynth
 
+## Browser simulator
+
+The buildless simulator lives in `simulator/`. It loads AVR8js 0.21.1 from a
+pinned jsDelivr URL and runs ELF, Intel HEX, or raw BIN firmware locally in the
+browser. The controls and their initial values are read from
+`wokwi/diagram.json`; an embedded copy of the current mapping is used only when
+that file cannot be fetched.
+
+Build firmware with the normal 9-bit Timer1 PWM output:
+
+```sh
+pio run -e browser
+```
+
+Then serve the repository with any static HTTP server. Python is one option
+(Node.js is not required):
+
+```sh
+python -m http.server 8000
+```
+
+Open `http://localhost:8000/simulator/`, load
+`.pio/build/browser/firmware.elf` (or `firmware.hex`), and press **Start audio**.
+Browsers require the explicit button press before Web Audio may start. Drag a
+knob vertically or use its mouse wheel. Keys `1`-`8` hold the eight step
+buttons, and `M` holds MODE/PANIC. The same controls are clickable on screen.
+
+Prefer the `browser` environment for this simulator. The `wokwi` environment
+still emits its intentional carrier-free 1-bit buzzer preview, which the browser
+can run but identifies as lower fidelity.
+
+The firmware's Timer1 and `OCR1A` behavior is not modified. A specialized model
+reproduces Timer1 mode 6 as 9-bit Fast PWM: the counter runs from 0 to 511, the
+buffered compare value takes effect at BOTTOM, and the non-inverting D9 output
+switches between 0 V and 5 V at the real 31.25 kHz carrier rate. Those edges
+drive the loaded, coupled R1/C1-R2/C2-R3/C3 passive ladder and then the C4/R4
+AC-coupling stage. The linear circuit is advanced with an exact state-transition
+matrix rather than fixed approximation steps. Before conversion to the
+browser's output rate, the analog result is sampled at 2x the monitor rate and
+passed through a 4-pole anti-alias filter, comparable to a line-input ADC.
+The 1 kohm `Rout` is modeled as unloaded because the documented destination is
+a high-impedance line input, so it has no material effect. Speaker, headphone,
+volume-pot, cable, and amplifier loading are not modeled; the monitor-level
+slider is a browser output gain only.
+
 Nyolclépes, három üzemmódú wavetable szintetizátor Arduino Pro Minihez. A firmware a kevés kezelőszervet közvetlen, előadás közben is használható funkciókra osztja: sequencer, skálára kvantált free play és nyolcoszcillátoros drone mód.
 
 ## Hardver
