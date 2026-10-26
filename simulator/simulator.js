@@ -58,10 +58,12 @@ const ui = {
   stepsGrid: $('#steps-grid'),
   modeButton: $('#mode-button'),
   lcdLines: [$('#lcd-line-1'), $('#lcd-line-2')],
+  lcdCanvas: $('#lcd-dot-matrix'),
   volume: $('#volume'),
   runtimeNote: $('#runtime-note'),
   scope: $('#scope'),
 };
+const hardwareView = document.body.classList.contains('hardware-ui');
 
 let hardware = FALLBACK_HARDWARE;
 let settings = [];
@@ -73,6 +75,119 @@ let audioContext = null;
 let audioNode = null;
 let running = false;
 let audioFailureReported = false;
+
+// Five column bitmap glyphs for printable ASCII. Each byte is one vertical
+// column, with the least-significant bit at the top of the 5x8 character cell.
+const LCD_FONT_5X8 = new Uint8Array(`
+  00 00 00 00 00  00 00 5f 00 00  00 07 00 07 00  14 7f 14 7f 14
+  24 2a 7f 2a 12  23 13 08 64 62  36 49 55 22 50  00 05 03 00 00
+  00 1c 22 41 00  00 41 22 1c 00  14 08 3e 08 14  08 08 3e 08 08
+  00 50 30 00 00  08 08 08 08 08  00 60 60 00 00  20 10 08 04 02
+  3e 51 49 45 3e  00 42 7f 40 00  42 61 51 49 46  21 41 45 4b 31
+  18 14 12 7f 10  27 45 45 45 39  3c 4a 49 49 30  01 71 09 05 03
+  36 49 49 49 36  06 49 49 29 1e  00 36 36 00 00  00 56 36 00 00
+  08 14 22 41 00  14 14 14 14 14  00 41 22 14 08  02 01 51 09 06
+  32 49 79 41 3e  7e 11 11 11 7e  7f 49 49 49 36  3e 41 41 41 22
+  7f 41 41 22 1c  7f 49 49 49 41  7f 09 09 09 01  3e 41 49 49 7a
+  7f 08 08 08 7f  00 41 7f 41 00  20 40 41 3f 01  7f 08 14 22 41
+  7f 40 40 40 40  7f 02 0c 02 7f  7f 04 08 10 7f  3e 41 41 41 3e
+  7f 09 09 09 06  3e 41 51 21 5e  7f 09 19 29 46  46 49 49 49 31
+  01 01 7f 01 01  3f 40 40 40 3f  1f 20 40 20 1f  3f 40 38 40 3f
+  63 14 08 14 63  07 08 70 08 07  61 51 49 45 43  00 7f 41 41 00
+  02 04 08 10 20  00 41 41 7f 00  04 02 01 02 04  40 40 40 40 40
+  00 01 02 04 00  20 54 54 54 78  7f 48 44 44 38  38 44 44 44 20
+  38 44 44 48 7f  38 54 54 54 18  08 7e 09 01 02  0c 52 52 52 3e
+  7f 08 04 04 78  00 44 7d 40 00  20 40 44 3d 00  7f 10 28 44 00
+  00 41 7f 40 00  7c 04 18 04 78  7c 08 04 04 78  38 44 44 44 38
+  7c 14 14 14 08  08 14 14 18 7c  7c 08 04 04 08  48 54 54 54 20
+  04 3f 44 40 20  3c 40 40 20 7c  1c 20 40 20 1c  3c 40 30 40 3c
+  44 28 10 28 44  0c 50 50 50 3c  44 64 54 4c 44  00 08 36 41 00
+  00 00 7f 00 00  00 41 36 08 00  08 04 08 10 08  00 06 09 09 06
+`.trim().split(/\s+/).map((value) => Number.parseInt(value, 16)));
+
+let lcdText = ui.lcdLines.map((line) => (line?.textContent ?? '').padEnd(16).slice(0, 16));
+let lcdDrawFrame = 0;
+
+function drawLcdDotMatrix() {
+  const canvas = ui.lcdCanvas;
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+
+  const pixelRatio = Math.min(2, devicePixelRatio || 1);
+  const width = Math.max(1, Math.round(rect.width * pixelRatio));
+  const height = Math.max(1, Math.round(rect.height * pixelRatio));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+
+  const context = canvas.getContext('2d');
+  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  context.clearRect(0, 0, rect.width, rect.height);
+
+  const unit = Math.min(rect.width / 98, rect.height / 20);
+  const matrixWidth = 95 * unit;
+  const matrixHeight = 18 * unit;
+  const originX = (rect.width - matrixWidth) / 2;
+  const originY = (rect.height - matrixHeight) / 2;
+  const dotSize = unit * 0.68;
+  const dotInset = (unit - dotSize) / 2;
+
+  context.shadowColor = 'transparent';
+  context.shadowBlur = 0;
+  context.fillStyle = 'rgba(139, 199, 255, .055)';
+  for (let line = 0; line < 2; line++) {
+    for (let character = 0; character < 16; character++) {
+      for (let column = 0; column < 5; column++) {
+        for (let row = 0; row < 8; row++) {
+          const x = originX + (character * 6 + column) * unit + dotInset;
+          const y = originY + (line * 10 + row) * unit + dotInset;
+          context.fillRect(x, y, dotSize, dotSize);
+        }
+      }
+    }
+  }
+
+  context.fillStyle = '#edf8ff';
+  context.shadowColor = '#dff3ff';
+  context.shadowBlur = unit * 0.75;
+  for (let line = 0; line < 2; line++) {
+    for (let character = 0; character < 16; character++) {
+      const code = lcdText[line].charCodeAt(character);
+      const glyph = code >= 32 && code <= 127 ? code - 32 : 31;
+      for (let column = 0; column < 5; column++) {
+        const bits = LCD_FONT_5X8[glyph * 5 + column];
+        for (let row = 0; row < 8; row++) {
+          if (!(bits & (1 << row))) continue;
+          const x = originX + (character * 6 + column) * unit + dotInset;
+          const y = originY + (line * 10 + row) * unit + dotInset;
+          context.fillRect(x, y, dotSize, dotSize);
+        }
+      }
+    }
+  }
+}
+
+function setLcdLines(line1, line2) {
+  lcdText = [line1, line2].map((line) => String(line).padEnd(16).slice(0, 16));
+  ui.lcdLines.forEach((element, index) => {
+    if (element.textContent !== lcdText[index]) element.textContent = lcdText[index];
+  });
+  scheduleLcdDotMatrix();
+}
+
+function scheduleLcdDotMatrix() {
+  if (!ui.lcdCanvas || lcdDrawFrame) return;
+  lcdDrawFrame = requestAnimationFrame(() => {
+    lcdDrawFrame = 0;
+    drawLcdDotMatrix();
+  });
+}
+
+if (ui.lcdCanvas && 'ResizeObserver' in window) {
+  new ResizeObserver(scheduleLcdDotMatrix).observe(ui.lcdCanvas);
+}
 
 function connectionOtherEnd(connections, endpoint) {
   for (const connection of connections) {
@@ -222,14 +337,16 @@ function bindMomentary(element, setter) {
 }
 
 function buildControls() {
-  settings = hardware.settings.map((item) => ({ ...item }));
-  steps = hardware.steps.map((item) => ({ ...item, pressed: false }));
+  settings = hardware.settings.map((item) => ({ ...item, value: hardwareView ? 511 : item.value }));
+  steps = hardware.steps.map((item) => ({ ...item, value: hardwareView ? 511 : item.value, pressed: false }));
   ui.settingsGrid.replaceChildren(...settings.map((control) => makeKnob(control)));
   const cards = steps.map((control, index) => {
     const card = makeKnob(control, true);
     const button = document.createElement('button');
     button.className = 'pad';
     button.setAttribute('aria-label', `${control.label}, key ${control.key}`);
+    button.dataset.step = String(index + 1);
+    button.dataset.key = control.key;
     button.innerHTML = `<span class="keycap">${control.key}</span><span class="step-number">${index + 1}</span>`;
     control.button = button;
     bindMomentary(button, (pressed) => setStepPressed(index, pressed));
@@ -556,10 +673,7 @@ class BitsynthMachine {
     this.adc = new AVRADC(this.cpu, adcConfig);
     this.filter = new OutputFilter();
     this.pwm = new FastPwm9(this.filter);
-    this.lcd = new HD44780((line1, line2) => {
-      ui.lcdLines[0].textContent = line1;
-      ui.lcdLines[1].textContent = line2;
-    });
+    this.lcd = new HD44780(setLcdLines);
     this.portValues = { B: 0, C: 0, D: 0 };
     this.audioHigh = false;
     this.scope = new Float32Array(2048);
@@ -758,7 +872,7 @@ async function decodeFirmware(file) {
   return { bytes: new Uint8Array(buffer), detail: `${buffer.byteLength.toLocaleString()} raw bytes` };
 }
 
-async function loadFirmware(file) {
+async function loadFirmware(file, autoStart = false) {
   stopAudio();
   try {
     const decoded = await decodeFirmware(file);
@@ -771,6 +885,7 @@ async function loadFirmware(file) {
     ui.runButton.disabled = false;
     ui.resetButton.disabled = false;
     ui.runButton.textContent = 'Start audio';
+    if (autoStart) await startAudio(true);
   } catch (error) {
     firmwareImage = null;
     machine = null;
@@ -783,9 +898,9 @@ async function loadFirmware(file) {
   }
 }
 
-async function ensureAudio() {
+async function ensureAudio(resume = true) {
   if (!audioContext) audioContext = new AudioContext({ latencyHint: 'interactive' });
-  await audioContext.resume();
+  if (resume) await audioContext.resume();
   if (!audioNode) {
     audioNode = audioContext.createScriptProcessor(AUDIO_BUFFER_SIZE, 0, 2);
     audioNode.onaudioprocess = (event) => {
@@ -810,19 +925,55 @@ async function ensureAudio() {
   }
 }
 
-async function startAudio() {
+async function startAudio(automatic = false) {
   if (!machine) return;
-  await ensureAudio();
+  await ensureAudio(!automatic);
+  if (automatic) audioContext.resume().catch(() => {});
   running = true;
   audioFailureReported = false;
   audioNode.connect(audioContext.destination);
   ui.runButton.textContent = 'Stop';
-  ui.engineStatus.textContent = 'engine: running';
-  ui.engineStatus.className = 'badge live';
+  ui.runButton.classList.add('active');
+  if (audioContext.state === 'running') {
+    ui.engineStatus.textContent = 'engine: running';
+    ui.engineStatus.className = 'badge live';
+  } else {
+    ui.engineStatus.textContent = 'audio: click to enable';
+    ui.engineStatus.className = 'badge';
+  }
+}
+
+async function unlockAudio() {
+  if (!running || !audioContext || audioContext.state === 'running') return;
+  try {
+    await audioContext.resume();
+    ui.engineStatus.textContent = 'engine: running';
+    ui.engineStatus.className = 'badge live';
+  } catch { /* The next user gesture can try again. */ }
+}
+
+function showHardwareLoadPrompt() {
+  setLcdLines('Click here to', 'load firmware');
+  ui.engineStatus.textContent = 'firmware: choose file';
+  ui.engineStatus.className = 'badge';
+  ui.runtimeNote.textContent = 'Default firmware.hex was not found.';
+}
+
+async function loadDefaultHardwareFirmware() {
+  try {
+    const response = await fetch('../.pio/build/browser/firmware.hex', { cache: 'no-store' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const buffer = await response.arrayBuffer();
+    const file = new File([buffer], 'firmware.hex', { type: 'text/plain' });
+    await loadFirmware(file, true);
+  } catch {
+    showHardwareLoadPrompt();
+  }
 }
 
 function stopAudio() {
   running = false;
+  ui.runButton.classList.remove('active');
   if (audioNode) {
     try { audioNode.disconnect(); } catch { /* already disconnected */ }
   }
@@ -851,35 +1002,37 @@ function resetMachine() {
 
 function drawScope() {
   const canvas = ui.scope;
-  const rect = canvas.getBoundingClientRect();
-  const scale = Math.min(2, devicePixelRatio || 1);
-  const width = Math.max(1, Math.round(rect.width * scale));
-  const height = Math.max(1, Math.round(rect.height * scale));
-  if (canvas.width !== width || canvas.height !== height) {
-    canvas.width = width;
-    canvas.height = height;
-  }
-  const context = canvas.getContext('2d');
-  context.clearRect(0, 0, width, height);
-  context.strokeStyle = '#1c332a';
-  context.lineWidth = 1;
-  context.beginPath();
-  context.moveTo(0, height / 2);
-  context.lineTo(width, height / 2);
-  context.stroke();
-  if (machine) {
-    context.strokeStyle = '#72e4d1';
-    context.lineWidth = Math.max(1, scale);
-    context.beginPath();
-    const visible = Math.min(machine.scope.length, Math.round(width / scale) * 2);
-    for (let index = 0; index < visible; index++) {
-      const ringIndex = (machine.scopeIndex - visible + index) & (machine.scope.length - 1);
-      const x = (index / (visible - 1)) * width;
-      const y = height * (0.5 - machine.scope[ringIndex] * 0.42);
-      if (index === 0) context.moveTo(x, y);
-      else context.lineTo(x, y);
+  if (canvas) {
+    const rect = canvas.getBoundingClientRect();
+    const scale = Math.min(2, devicePixelRatio || 1);
+    const width = Math.max(1, Math.round(rect.width * scale));
+    const height = Math.max(1, Math.round(rect.height * scale));
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
     }
+    const context = canvas.getContext('2d');
+    context.clearRect(0, 0, width, height);
+    context.strokeStyle = '#1c332a';
+    context.lineWidth = 1;
+    context.beginPath();
+    context.moveTo(0, height / 2);
+    context.lineTo(width, height / 2);
     context.stroke();
+    if (machine) {
+      context.strokeStyle = '#72e4d1';
+      context.lineWidth = Math.max(1, scale);
+      context.beginPath();
+      const visible = Math.min(machine.scope.length, Math.round(width / scale) * 2);
+      for (let index = 0; index < visible; index++) {
+        const ringIndex = (machine.scopeIndex - visible + index) & (machine.scope.length - 1);
+        const x = (index / (visible - 1)) * width;
+        const y = height * (0.5 - machine.scope[ringIndex] * 0.42);
+        if (index === 0) context.moveTo(x, y);
+        else context.lineTo(x, y);
+      }
+      context.stroke();
+    }
   }
   if (running && machine) {
     const mode = machine.previewBuild ? '1-bit Wokwi preview' : '9-bit Fast PWM · 31.25 kHz';
@@ -893,6 +1046,7 @@ function isTextEntry(target) {
 }
 
 document.addEventListener('keydown', (event) => {
+  unlockAudio();
   if (isTextEntry(event.target) || event.repeat) return;
   const key = event.key.toLowerCase();
   const index = steps.findIndex((step) => step.key.toLowerCase() === key);
@@ -916,10 +1070,11 @@ window.addEventListener('blur', () => {
   steps.forEach((_, index) => setStepPressed(index, false));
   setModePressed(false);
 });
+document.addEventListener('pointerdown', unlockAudio);
 
 ui.firmwareFile.addEventListener('change', () => {
   const [file] = ui.firmwareFile.files;
-  if (file) loadFirmware(file);
+  if (file) loadFirmware(file, hardwareView);
 });
 for (const type of ['dragenter', 'dragover']) {
   ui.dropZone.addEventListener(type, (event) => {
@@ -935,7 +1090,7 @@ for (const type of ['dragleave', 'drop']) {
 }
 ui.dropZone.addEventListener('drop', (event) => {
   const [file] = event.dataTransfer.files;
-  if (file) loadFirmware(file);
+  if (file) loadFirmware(file, hardwareView);
 });
 ui.runButton.addEventListener('click', () => {
   if (running) stopAudio();
@@ -946,3 +1101,5 @@ ui.resetButton.addEventListener('click', resetMachine);
 await readDiagram();
 buildControls();
 drawScope();
+scheduleLcdDotMatrix();
+if (hardwareView) await loadDefaultHardwareFirmware();

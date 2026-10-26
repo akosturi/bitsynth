@@ -27,6 +27,16 @@ Browsers require the explicit button press before Web Audio may start. Drag a
 knob vertically or use its mouse wheel. Keys `1`-`8` hold the eight step
 buttons, and `M` holds MODE/PANIC. The same controls are clickable on screen.
 
+Two interfaces use the same simulator engine:
+
+- `simulator/index.html` is the compact laboratory view with an oscilloscope.
+- `simulator/hardware.html` recreates the physical front panel from the supplied
+  photographs, with a blue/white 16x2 LCD rendered as 5x8 dot-matrix cells,
+  image-based knobs and buttons, plus reset and monitor-volume controls. It
+  intentionally omits the oscilloscope. This
+  view automatically loads and starts `.pio/build/browser/firmware.hex`. If the
+  file is unavailable, click the LCD to choose ELF, HEX, or BIN firmware.
+
 Prefer the `browser` environment for this simulator. The `wokwi` environment
 still emits its intentional carrier-free 1-bit buzzer preview, which the browser
 can run but identifies as lower fidelity.
