@@ -6,116 +6,42 @@
   <meta name="color-scheme" content="dark">
   <title>Bitsynth Hardware Panel</title>
   <style>
-    :root {
-      --ink: #f1eee8;
-      --muted: #9c9b96;
-      --line: #3d3b36;
-      --orange: #dc8a4a;
-      --lcd: #f7fbff;
-      --lcd-bg: #063997;
-    }
-
     * { box-sizing: border-box; }
 
     body {
       margin: 0;
       min-width: 320px;
       min-height: 100vh;
-      color: var(--ink);
-      background:
-        radial-gradient(circle at 50% -20%, #34312c, transparent 38rem),
-        repeating-linear-gradient(90deg, #12110f 0, #171512 2px, #11100e 5px);
+      color: #f1eee8;
+      background: #101010;
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
 
     button, input { font: inherit; }
     button { color: inherit; }
 
-    .workbench { width: min(1480px, calc(100% - 24px)); margin: 0 auto; padding: 22px 0 36px; }
-
-    .utility-bar {
-      display: grid;
-      grid-template-columns: minmax(280px, 1fr) auto auto;
-      gap: 18px;
-      align-items: center;
-      margin-bottom: 14px;
-      padding: 12px 15px;
-      border: 1px solid #49453e;
-      border-radius: 10px;
-      background: linear-gradient(#26241f, #171613);
-      box-shadow: 0 12px 35px #0008, inset 0 1px #ffffff12;
-    }
-
-    .drop-zone {
-      min-height: 58px;
-      padding: 9px 12px;
+    .workbench {
+      width: 100%;
+      min-height: 100vh;
+      padding: 12px;
       display: flex;
       align-items: center;
-      gap: 12px;
-      border: 1px dashed #646057;
-      border-radius: 7px;
-      cursor: pointer;
-      transition: .15s ease;
+      justify-content: center;
     }
 
-    .drop-zone:hover, .drop-zone.drag { border-color: var(--orange); background: #dc8a4a0e; }
-    .drop-zone strong { display: block; font-size: 14px; }
-    .drop-zone small { display: block; margin-top: 3px; color: var(--muted); }
-    .file-icon { color: var(--orange); font: 800 23px/1 ui-monospace, monospace; }
-
-    .status-stack { display: grid; gap: 7px; justify-items: start; }
-    .badge {
-      padding: 6px 9px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      color: var(--muted);
-      background: #11100e;
-      font: 700 10px/1 ui-monospace, monospace;
-      white-space: nowrap;
+    .panel-scroll {
+      width: 100%;
+      display: flex;
+      justify-content: center;
     }
-    .badge.live { color: #07130d; border-color: #68dda9; background: #68dda9; }
-    .badge.error { color: white; border-color: #e34d5f; background: #762633; }
 
-    .power-control, .volume-control { display: grid; justify-items: center; gap: 3px; }
-    .control-caption { color: #b9b4aa; font: 800 9px/1 ui-monospace, monospace; letter-spacing: .14em; }
-
-    #run-button {
-      width: 58px;
-      height: 58px;
-      padding: 0;
-      border: 0;
-      outline: none;
-      text-indent: -9999px;
-      background: url('./assets/black_button.png') center / contain no-repeat;
-      cursor: pointer;
-    }
-    #run-button.active { background-image: url('./assets/black_button_pressed.png'); }
-    #run-button:disabled { opacity: .36; cursor: not-allowed; }
-    #run-button:focus-visible { filter: drop-shadow(0 0 5px #fff); }
-
-    .volume-control { min-width: 170px; }
-    #volume { width: 170px; accent-color: #d94436; }
-
-    #reset-button {
-      min-height: 38px;
-      padding: 0 13px;
-      border: 1px solid #5a554d;
-      border-radius: 5px;
-      background: linear-gradient(#39352e, #211f1b);
-      font-size: 12px;
-      font-weight: 800;
-      cursor: pointer;
-    }
-    #reset-button:disabled { opacity: .35; cursor: not-allowed; }
-
-    .panel-scroll { overflow-x: auto; padding: 6px 0 18px; }
     .panel-stage {
       position: relative;
-      width: 100%;
-      min-width: 900px;
+      width: min(1400px, calc(100vw - 24px), calc(262.172vh - 62.922px));
+      flex: 0 0 auto;
       aspect-ratio: 1400 / 534;
       overflow: hidden;
-      background: url('./assets/base.jpg') center / 100% 100% no-repeat;
+      background: url('./assets/base.png') center / 100% 100% no-repeat;
       box-shadow: 0 24px 60px #000b;
       user-select: none;
     }
@@ -127,14 +53,14 @@
       width: 24.65%;
       height: 13.25%;
       overflow: hidden;
-      background:
-        radial-gradient(ellipse at 48% 48%, #1166d8 0, #084aae 60%, #032c7e 100%);
+      background: radial-gradient(ellipse at 48% 48%, #1166d8 0, #084aae 60%, #032c7e 100%);
       box-shadow:
         inset 0 0 18px #001036,
         inset 0 1px #50a1ff88,
         0 0 9px #105fd855;
       cursor: pointer;
     }
+
     .lcd::after {
       content: "";
       position: absolute;
@@ -145,11 +71,13 @@
         repeating-linear-gradient(0deg, transparent 0 3px, #00194d13 3px 4px);
       box-shadow: inset 0 0 12px #00133d99;
     }
+
     #lcd-dot-matrix {
       display: block;
       width: 100%;
       height: 100%;
     }
+
     .lcd-text {
       position: absolute;
       width: 1px;
@@ -163,55 +91,78 @@
 
     .control-card {
       position: absolute;
+      top: 0;
       z-index: 2;
+      width: 6.142857%;
+      height: 100%;
+      transform: translateX(-50%);
       text-align: center;
+      pointer-events: none;
     }
 
-    #settings-grid .control-card {
-      top: 13.3%;
-      width: 7%;
-      height: 23%;
+    /* The knob shadow lives on its stationary card, so it does not rotate. */
+    .control-card::before {
+      content: "";
+      position: absolute;
+      left: 4%;
+      z-index: 0;
+      width: 94%;
+      aspect-ratio: 86 / 90;
+      border-radius: 48%;
+      background: #000d;
+      filter: blur(4px);
+      transform: translate(7%, 7%);
+      pointer-events: none;
     }
-    #settings-grid .control-card:nth-child(1) { left: 51.4%; }
-    #settings-grid .control-card:nth-child(2) { left: 62.4%; }
-    #settings-grid .control-card:nth-child(3) { left: 73.5%; }
-    #settings-grid .control-card:nth-child(4) { left: 84.8%; }
+
+    #settings-grid .control-card::before,
+    #settings-grid .knob { top: 14.981%; }
+
+    #steps-grid .control-card::before,
+    #steps-grid .knob { top: 41.948%; }
+
+    #settings-grid .control-card:nth-child(1) { left: 54.9%; }
+    #settings-grid .control-card:nth-child(2) { left: 65.9%; }
+    #settings-grid .control-card:nth-child(3) { left: 77%; }
+    #settings-grid .control-card:nth-child(4) { left: 88.3%; }
+
+    #steps-grid .control-card:nth-child(1) { left: 11.35%; }
+    #steps-grid .control-card:nth-child(2) { left: 22.05%; }
+    #steps-grid .control-card:nth-child(3) { left: 33.05%; }
+    #steps-grid .control-card:nth-child(4) { left: 43.9%; }
+    #steps-grid .control-card:nth-child(5) { left: 54.9%; }
+    #steps-grid .control-card:nth-child(6) { left: 65.9%; }
+    #steps-grid .control-card:nth-child(7) { left: 77%; }
+    #steps-grid .control-card:nth-child(8) { left: 88.3%; }
 
     .knob {
       --turn: 0deg;
+      position: absolute;
+      left: 0;
+      z-index: 1;
       width: 100%;
-      aspect-ratio: 98 / 102;
-      margin: 0 auto;
+      aspect-ratio: 86 / 90;
       border: 0;
       outline: none;
       cursor: ns-resize;
       touch-action: none;
+      pointer-events: auto;
       background: url('./assets/knob.png') center / contain no-repeat;
       transform: rotate(var(--turn));
       transform-origin: 50% 50%;
-      filter: drop-shadow(0 3px 3px #0009);
     }
-    .knob::before { display: none; }
-    .knob:focus-visible { filter: drop-shadow(0 0 6px #fff) drop-shadow(0 3px 3px #0009); }
 
-    .control-name, .control-value {
-      position: absolute;
-      left: 50%;
-      width: 150%;
-      transform: translateX(-50%);
-      color: #d8d2c8;
-      text-shadow: 0 1px 2px #000;
-      font: 800 clamp(6px, .66vw, 10px)/1 ui-monospace, monospace;
-      white-space: nowrap;
-    }
-    #settings-grid .control-name, #settings-grid .control-value { display: none; }
+    .knob::before { display: none; }
+    .knob:focus-visible { filter: drop-shadow(0 0 5px #fff); }
+
+    .control-name, .control-value { display: none; }
 
     #mode-button {
       position: absolute;
       z-index: 3;
-      left: 41.35%;
-      top: 16.5%;
-      width: 5.15%;
+      left: 43.925%;
+      top: 17.884%;
+      width: 4.214286%;
       aspect-ratio: 1;
       padding: 0;
       border: 0;
@@ -220,41 +171,21 @@
       background: url('./assets/black_button.png') center / contain no-repeat;
       cursor: pointer;
       touch-action: none;
+      transform: translateX(-50%);
+      filter: drop-shadow(5px 7px 5px #000e);
     }
+
     #mode-button.active { background-image: url('./assets/black_button_pressed.png'); }
-    #mode-button:focus-visible { filter: drop-shadow(0 0 5px #fff); }
+    #mode-button:focus-visible { filter: drop-shadow(0 0 5px #fff) drop-shadow(5px 7px 5px #000e); }
     #mode-button::after { display: none; }
     #mode-button .keycap, #mode-button strong { display: none; }
 
-    #steps-grid .control-card {
-      top: 40%;
-      width: 7%;
-      height: 50%;
-    }
-    #steps-grid .control-card:nth-child(1) { left: 7.85%; }
-    #steps-grid .control-card:nth-child(2) { left: 18.55%; }
-    #steps-grid .control-card:nth-child(3) { left: 29.55%; }
-    #steps-grid .control-card:nth-child(4) { left: 40.4%; }
-    #steps-grid .control-card:nth-child(5) { left: 51.4%; }
-    #steps-grid .control-card:nth-child(6) { left: 62.4%; }
-    #steps-grid .control-card:nth-child(7) { left: 73.5%; }
-    #steps-grid .control-card:nth-child(8) { left: 84.8%; }
-
-    #steps-grid .knob {
-      position: absolute;
-      left: 0;
-      top: 1%;
-      bottom: auto;
-    }
-    #steps-grid .control-name, #steps-grid .control-value { display: none; }
-
     .pad {
       position: absolute;
-      left: 12%;
-      top: auto;
-      bottom: 13%;
-      width: 76%;
-      aspect-ratio: 75 / 76;
+      left: 50%;
+      top: 70.88%;
+      width: 69.767442%;
+      aspect-ratio: 60 / 61;
       padding: 0;
       border: 0;
       outline: none;
@@ -262,61 +193,32 @@
       background: url('./assets/red_button.png') center / contain no-repeat;
       cursor: pointer;
       touch-action: none;
+      pointer-events: auto;
+      transform: translateX(-50%);
+      filter: drop-shadow(5px 7px 5px #000e);
     }
+
     .pad.active { background-image: url('./assets/red_button_pressed.png'); }
-    .pad:focus-visible { filter: drop-shadow(0 0 5px #fff); }
+    .pad:focus-visible { filter: drop-shadow(0 0 5px #fff) drop-shadow(5px 7px 5px #000e); }
     .pad .keycap, .pad .step-number { display: none; }
     .pad::after { display: none; }
-
-    .help-row {
-      display: flex;
-      justify-content: space-between;
-      gap: 18px;
-      padding: 2px 5px 0;
-      color: #8e8a82;
-      font-size: 11px;
-      line-height: 1.5;
-    }
-    .help-row strong { color: #cec8bd; }
-
-    @media (max-width: 900px) {
-      .utility-bar { grid-template-columns: 1fr auto auto; }
-      .status-stack { grid-column: 1 / -1; grid-row: 2; display: flex; flex-wrap: wrap; }
-      .volume-control { min-width: 130px; }
-      #volume { width: 130px; }
-    }
-
-    @media (max-width: 580px) {
-      .workbench { width: min(100% - 12px, 1480px); padding-top: 8px; }
-      .utility-bar { grid-template-columns: 1fr auto; gap: 10px; }
-      .drop-zone { grid-column: 1 / -1; }
-      .volume-control { justify-self: stretch; }
-      .help-row { flex-direction: column; }
-    }
   </style>
 </head>
 <body class="hardware-ui">
   <main class="workbench">
-    <section class="utility-bar" aria-label="Simulator controls">
-      <label class="drop-zone" id="drop-zone">
+    <!-- Kept hidden because simulator.js uses these values and status hooks. -->
+    <div class="simulator-runtime" hidden aria-hidden="true">
+      <label id="drop-zone">
         <input id="firmware-file" type="file" accept=".elf,.hex,.bin,application/octet-stream" hidden>
-        <span class="file-icon">⇩</span>
-        <span><strong id="firmware-name">Load firmware</strong><small>ATmega328P ELF, Intel HEX, or raw BIN</small></span>
+        <span id="firmware-name">Load firmware</span>
       </label>
-
-      <div class="status-stack">
-        <span class="badge" id="diagram-status">diagram: loading</span>
-        <span class="badge" id="engine-status">firmware: empty</span>
-      </div>
-
-      <div class="volume-control">
-        <span class="control-caption">VOLUME</span>
-        <input id="volume" type="range" min="0" max="1" step="0.01" value="0.34" aria-label="Monitor volume">
-        <button id="reset-button" disabled>RESET</button>
-      </div>
-
-      <button id="run-button" type="button" hidden disabled>Start audio</button>
-    </section>
+      <span id="diagram-status">diagram: loading</span>
+      <span id="engine-status">firmware: empty</span>
+      <input id="volume" type="range" min="0" max="1" step="0.01" value="1" aria-label="Monitor volume">
+      <button id="reset-button" disabled>Reset</button>
+      <button id="run-button" type="button" disabled>Start audio</button>
+      <span id="runtime-note">Waiting for firmware.</span>
+    </div>
 
     <div class="panel-scroll">
       <section class="panel-stage" aria-label="Bitsynth hardware panel">
@@ -330,11 +232,6 @@
         <div id="steps-grid"></div>
       </section>
     </div>
-
-    <footer class="help-row">
-      <span><strong>Keys:</strong> 1–8 step buttons · M mode/panic · drag or scroll the knobs</span>
-      <span id="runtime-note">Waiting for firmware.</span>
-    </footer>
   </main>
 
   <script type="module" src="./simulator.js"></script>
