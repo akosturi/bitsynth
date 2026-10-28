@@ -38,6 +38,12 @@
 static_assert(kickSampleRate == FS, "kick sample rate must match the 20 kHz audio engine");
 static_assert(snareSampleRate == FS, "snare sample rate must match the 20 kHz audio engine");
 static_assert(hihatSampleRate == FS, "hi-hat sample rate must match the 20 kHz audio engine");
+static_assert(kickSampleBits == 9, "kick sample must use signed 9-bit PCM");
+static_assert(snareSampleBits == 9, "snare sample must use signed 9-bit PCM");
+static_assert(hihatSampleBits == 9, "hi-hat sample must use signed 9-bit PCM");
+static_assert(sizeof(kickSample) == (kickSampleLength * 9U + 7U) / 8U, "invalid packed kick sample size");
+static_assert(sizeof(snareSample) == (snareSampleLength * 9U + 7U) / 8U, "invalid packed snare sample size");
+static_assert(sizeof(hihatSample) == (hihatSampleLength * 9U + 7U) / 8U, "invalid packed hi-hat sample size");
 
 #define SET(x,y) (x |= (1 << y))
 #define CLR(x,y) (x &= (~(1 << y)))
@@ -49,12 +55,12 @@ const uint8_t SYNTH_LENGTH_MAX = 127;
 const uint8_t SYNTH_WAVETABLE_INDEX_BITS = 8;
 const uint8_t SYNTH_WAVETABLE_SHIFT = 16 - SYNTH_WAVETABLE_INDEX_BITS;
 
-static_assert(sizeof(SinTable) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid sine table size");
-static_assert(sizeof(TriangleTable) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid triangle table size");
-static_assert(sizeof(SquareTable) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid square table size");
-static_assert(sizeof(SawTable) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid saw table size");
-static_assert(sizeof(RampTable) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid ramp table size");
-static_assert(sizeof(NoiseTable) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid noise table size");
+static_assert(sizeof(SinTable) / sizeof(SinTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid sine table size");
+static_assert(sizeof(TriangleTable) / sizeof(TriangleTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid triangle table size");
+static_assert(sizeof(SquareTable) / sizeof(SquareTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid square table size");
+static_assert(sizeof(SawTable) / sizeof(SawTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid saw table size");
+static_assert(sizeof(RampTable) / sizeof(RampTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid ramp table size");
+static_assert(sizeof(NoiseTable) / sizeof(NoiseTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid noise table size");
 
 volatile uint16_t PCW[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
 volatile uint16_t FTW[SYNTH_VOICE_COUNT] = {1000, 200, 300, 400};
@@ -111,26 +117,54 @@ volatile uint32_t drumSampleStep = 0x10000UL;
 volatile uint16_t drumEnvelope = 0;
 volatile uint16_t drumEnvelopeStep = 1;
 
-static inline __attribute__((always_inline)) int8_t nextVoiceSample(uint8_t voice)
+static inline __attribute__((always_inline)) int16_t readSigned9Sample(
+  uint16_t sampleAddress, uint16_t sampleIndex)
+{
+  return (int16_t)pgm_read_word(sampleAddress + (sampleIndex << 1));
+}
+
+static inline __attribute__((always_inline)) int16_t readPackedSigned9Sample(
+  uint16_t sampleAddress, uint16_t sampleIndex)
+{
+  const uint16_t byteIndex = sampleIndex + (sampleIndex >> 3);
+  const uint8_t shift = sampleIndex & 0x07;
+  const uint16_t packed = pgm_read_word(sampleAddress + byteIndex);
+  const uint16_t encoded = (packed >> shift) & 0x01FF;
+  return (encoded & 0x0100) ? (int16_t)(encoded | 0xFE00) : encoded;
+}
+
+static inline __attribute__((always_inline)) int16_t scaleSigned9Sample(
+  int16_t sample, uint8_t gain, uint8_t shift)
+{
+  const bool negative = sample < 0;
+  const uint16_t magnitude = negative ? -sample : sample;
+  uint16_t product = magnitude * gain;
+  if (negative) {
+    // Match an arithmetic right shift for negative products.
+    product += (1U << shift) - 1U;
+    return -(int16_t)(product >> shift);
+  }
+  return product >> shift;
+}
+
+static inline __attribute__((always_inline)) int16_t nextVoiceSample(uint8_t voice)
 {
   const uint16_t phase = PCW[voice] + FTW[voice];
   PCW[voice] = phase;
-  return (int8_t)pgm_read_byte(wavs[voice] + (phase >> SYNTH_WAVETABLE_SHIFT));
+  return readSigned9Sample(wavs[voice], phase >> SYNTH_WAVETABLE_SHIFT);
 }
 
-static inline __attribute__((always_inline)) int8_t nextMorphedVoiceSample(
+static inline __attribute__((always_inline)) int16_t nextMorphedVoiceSample(
   uint8_t voice, uint16_t secondaryWave, uint8_t morphAmount)
 {
   const uint16_t phase = PCW[voice] + FTW[voice];
   PCW[voice] = phase;
   const uint16_t index = phase >> SYNTH_WAVETABLE_SHIFT;
-  const int8_t sampleA = (int8_t)pgm_read_byte(wavs[voice] + index);
-  const int8_t sampleB = (int8_t)pgm_read_byte(secondaryWave + index);
-  // Amount is 0..128. Both forms have the same floor rounding and no
-  // intermediate overflow, but this form uses two signed 8x8 multiplies.
+  const int16_t sampleA = readSigned9Sample(wavs[voice], index);
+  const int16_t sampleB = readSigned9Sample(secondaryWave, index);
+  // Amount is 0..128 and the weighted sum remains within int16_t.
   const uint8_t primaryAmount = 128 - morphAmount;
-  return (((int16_t)sampleA * primaryAmount) +
-          ((int16_t)sampleB * morphAmount)) >> 7;
+  return ((sampleA * primaryAmount) + (sampleB * morphAmount)) >> 7;
 }
 
 static inline __attribute__((always_inline)) int16_t filterPlayMix(int16_t inputQ7)
@@ -201,9 +235,10 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
     for (uint8_t voice = firstVoice; voice < firstVoice + 2; ++voice) {
       amplitude = droneAmp[voice];
       if (amplitude != 0) {
-        const int8_t sample = (int8_t)pgm_read_byte(
-          droneWavs[voice] + ((dronePCW[voice] += droneFTW[voice] << 2) >> SYNTH_WAVETABLE_SHIFT));
-        pairMixQ7 += ((int16_t)sample * amplitude) >> 3;
+        const uint16_t index =
+          (dronePCW[voice] += droneFTW[voice] << 2) >> SYNTH_WAVETABLE_SHIFT;
+        const int16_t sample = readSigned9Sample(droneWavs[voice], index);
+        pairMixQ7 += scaleSigned9Sample(sample, amplitude, 4);
       }
     }
 
@@ -264,16 +299,15 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
         drumEnvelope = 0;
         drumActive = false;
       } else {
-        const int8_t sample =
-          (int16_t)pgm_read_byte(drumSampleAddress + sampleIndex) - 128;
+        const int16_t sample = readPackedSigned9Sample(drumSampleAddress, sampleIndex);
         drumSamplePhase = samplePhase + drumSampleStep;
         const uint8_t gain = envelope >> 8;
-        sourceZeroQ7 = ((int16_t)sample * gain) >> 2;
+        sourceZeroQ7 = scaleSigned9Sample(sample, gain, 3);
         const uint16_t envelopeStep = drumEnvelopeStep;
         drumEnvelope = envelope <= envelopeStep ? 0 : envelope - envelopeStep;
       }
     } else {
-      sourceZeroQ7 = ((int16_t)nextVoiceSample(0) * AMP[0]) >> 2;
+      sourceZeroQ7 = scaleSigned9Sample(nextVoiceSample(0), AMP[0], 3);
     }
 
     int16_t liveMixQ7;
@@ -288,14 +322,14 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
       const uint16_t secondaryWave = playMorphWavPtr;
       const uint8_t morphAmount = playMorphAmount;
       liveMixQ7 =
-        (((int16_t)nextMorphedVoiceSample(1, secondaryWave, morphAmount) * AMP[1]) >> 2) +
-        (((int16_t)nextMorphedVoiceSample(2, secondaryWave, morphAmount) * AMP[2]) >> 2) +
-        (((int16_t)nextMorphedVoiceSample(3, secondaryWave, morphAmount) * AMP[3]) >> 2);
+        scaleSigned9Sample(nextMorphedVoiceSample(1, secondaryWave, morphAmount), AMP[1], 3) +
+        scaleSigned9Sample(nextMorphedVoiceSample(2, secondaryWave, morphAmount), AMP[2], 3) +
+        scaleSigned9Sample(nextMorphedVoiceSample(3, secondaryWave, morphAmount), AMP[3], 3);
     } else {
       liveMixQ7 =
-        (((int16_t)nextVoiceSample(1) * AMP[1]) >> 2) +
-        (((int16_t)nextVoiceSample(2) * AMP[2]) >> 2) +
-        (((int16_t)nextVoiceSample(3) * AMP[3]) >> 2);
+        scaleSigned9Sample(nextVoiceSample(1), AMP[1], 3) +
+        scaleSigned9Sample(nextVoiceSample(2), AMP[2], 3) +
+        scaleSigned9Sample(nextVoiceSample(3), AMP[3], 3);
     }
     mixQ7 = sourceZeroQ7 + filterPlayMix(liveMixQ7);
   }

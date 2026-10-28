@@ -114,7 +114,7 @@ A `DRUM` nem hoz létre további sequencer-sávokat: minden lépés pontosan egy
 - Paraméterpoti 3 / `T`: az aktuális dobok közös tone/tuning makrója
 - Paraméterpoti 4 / `D`: hangszerfüggő decay
 
-A dobok külön monofonikus PCM-lejátszóból szólnak. A minták unsigned 8 bites, monó, 20 kHz-es adatokként a `src/tables.h` fájlban találhatók. A lejátszó közvetlenül a flashből olvas, RAM-másolat nélkül. A `T` poti 0,75×–1,25× között változtatja a lejátszási sebességet, a `D` poti pedig a minta hosszának 25–100%-ára állítja a lecsengő amplitúdóburkolót. Új ütés az előző mintát azonnal újraindítja. PLAY módban a DRUM sequencer ugyanazon a fenntartott monó háttérhelyen fut tovább, így a három live voice megmarad.
+A dobok külön monofonikus PCM-lejátszóból szólnak. A minták előjeles 9 bites, monó, 20 kHz-es adatokként, veszteségmentesen bitcsomagolva találhatók a `src/tables.h` fájlban. A lejátszó közvetlenül a flashből olvas, RAM-másolat nélkül. A `T` poti 0,75×–1,25× között változtatja a lejátszási sebességet, a `D` poti pedig a minta hosszának 25–100%-ára állítja a lecsengő amplitúdóburkolót. Új ütés az előző mintát azonnal újraindítja. PLAY módban a DRUM sequencer ugyanazon a fenntartott monó háttérhelyen fut tovább, így a három live voice megmarad.
 
 ## PLAY — skálabiztos élő játék
 
