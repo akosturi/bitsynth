@@ -126,14 +126,14 @@
     #settings-grid .control-card:nth-child(3) { left: 77%; }
     #settings-grid .control-card:nth-child(4) { left: 88.3%; }
 
-    #steps-grid .control-card:nth-child(1) { left: 11.35%; }
-    #steps-grid .control-card:nth-child(2) { left: 22.05%; }
-    #steps-grid .control-card:nth-child(3) { left: 33.05%; }
-    #steps-grid .control-card:nth-child(4) { left: 43.9%; }
-    #steps-grid .control-card:nth-child(5) { left: 54.9%; }
-    #steps-grid .control-card:nth-child(6) { left: 65.9%; }
-    #steps-grid .control-card:nth-child(7) { left: 77%; }
-    #steps-grid .control-card:nth-child(8) { left: 88.3%; }
+    #steps-grid .control-card:nth-child(1) { left: 11.35%; --pad-turn: -12deg; }
+    #steps-grid .control-card:nth-child(2) { left: 22.05%; --pad-turn: 9deg; }
+    #steps-grid .control-card:nth-child(3) { left: 33.05%; --pad-turn: -7deg; }
+    #steps-grid .control-card:nth-child(4) { left: 43.9%; --pad-turn: 14deg; }
+    #steps-grid .control-card:nth-child(5) { left: 54.9%; --pad-turn: -10deg; }
+    #steps-grid .control-card:nth-child(6) { left: 65.9%; --pad-turn: 7deg; }
+    #steps-grid .control-card:nth-child(7) { left: 77%; --pad-turn: 12deg; }
+    #steps-grid .control-card:nth-child(8) { left: 88.3%; --pad-turn: -8deg; }
 
     .knob {
       --turn: 0deg;
@@ -194,7 +194,8 @@
       cursor: pointer;
       touch-action: none;
       pointer-events: auto;
-      transform: translateX(-50%);
+      transform: translateX(-50%) rotate(var(--pad-turn, 0deg));
+      transform-origin: 50% 50%;
       filter: drop-shadow(5px 7px 5px #000e);
     }
 

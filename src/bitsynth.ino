@@ -616,12 +616,15 @@ void readDroneControls(const uint16_t values[], unsigned long now) {
 void readSequencerStepPot(uint8_t step, unsigned long now) {
   selectMuxChannel(step);
   const uint16_t filtered = filterAnalog(readMedianAnalog(kStepAnalogPin), filteredStepRaw[step], stepFilterReady[step]);
+  const bool firstRead = !stepMotion[step].ready;
   const uint16_t raw = acceptAnalogMovement(filtered, stepMotion[step], kStepMovementThreshold);
   const bool drumMode = seqControls.preset == PRESET_DRUM;
   const uint8_t current = drumMode ? stepDrums[step] : stepNotes[step];
   const uint8_t next = drumMode
     ? mapIndexHysteresis(raw, current, kDrumCount)
-    : mapByteHysteresis(raw, current, kStepNoteMax, kStepNoteMin);
+    : (firstRead
+        ? (uint8_t)constrain(map(raw, 0, 1023, kStepNoteMax, kStepNoteMin), kStepNoteMin, kStepNoteMax)
+        : mapByteHysteresis(raw, current, kStepNoteMax, kStepNoteMin));
   if (next != current) {
     if (drumMode) stepDrums[step] = next;
     else stepNotes[step] = next;
