@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Bitsynth Hardware Panel</title>
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      min-height: 100vh;
+      color: #f1eee8;
+      background: #101010;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button, input { font: inherit; }
+    button { color: inherit; }
+
+    .workbench {
+      width: 100%;
+      min-height: 100vh;
+      padding: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .panel-scroll {
+      width: 100%;
+      display: flex;
+      justify-content: center;
+    }
+
+    .panel-stage {
+      position: relative;
+      width: min(1400px, calc(100vw - 24px), calc(262.172vh - 62.922px));
+      flex: 0 0 auto;
+      aspect-ratio: 1400 / 534;
+      overflow: hidden;
+      background: url('./assets/base.png') center / 100% 100% no-repeat;
+      box-shadow: 0 24px 60px #000b;
+      user-select: none;
+    }
+
+    .lcd {
+      position: absolute;
+      left: 10.65%;
+      top: 17.2%;
+      width: 24.65%;
+      height: 13.25%;
+      overflow: hidden;
+      background: radial-gradient(ellipse at 48% 48%, #1166d8 0, #084aae 60%, #032c7e 100%);
+      box-shadow:
+        inset 0 0 18px #001036,
+        inset 0 1px #50a1ff88,
+        0 0 9px #105fd855;
+      cursor: pointer;
+    }
+
+    .lcd::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(105deg, transparent 15%, #92caff0b 43%, transparent 65%),
+        repeating-linear-gradient(0deg, transparent 0 3px, #00194d13 3px 4px);
+      box-shadow: inset 0 0 12px #00133d99;
+    }
+
+    #lcd-dot-matrix {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .lcd-text {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    #settings-grid, #steps-grid { display: contents; }
+
+    .control-card {
+      position: absolute;
+      top: 0;
+      z-index: 2;
+      width: 6.142857%;
+      height: 100%;
+      transform: translateX(-50%);
+      text-align: center;
+      pointer-events: none;
+    }
+
+    /* The knob shadow lives on its stationary card, so it does not rotate. */
+    .control-card::before {
+      content: "";
+      position: absolute;
+      left: 4%;
+      z-index: 0;
+      width: 94%;
+      aspect-ratio: 86 / 90;
+      border-radius: 48%;
+      background: #000d;
+      filter: blur(4px);
+      transform: translate(7%, 7%);
+      pointer-events: none;
+    }
+
+    #settings-grid .control-card::before,
+    #settings-grid .knob { top: 14.981%; }
+
+    #steps-grid .control-card::before,
+    #steps-grid .knob { top: 41.948%; }
+
+    #settings-grid .control-card:nth-child(1) { left: 54.9%; }
+    #settings-grid .control-card:nth-child(2) { left: 65.9%; }
+    #settings-grid .control-card:nth-child(3) { left: 77%; }
+    #settings-grid .control-card:nth-child(4) { left: 88.3%; }
+
+    #steps-grid .control-card:nth-child(1) { left: 11.35%; --pad-turn: -12deg; }
+    #steps-grid .control-card:nth-child(2) { left: 22.05%; --pad-turn: 9deg; }
+    #steps-grid .control-card:nth-child(3) { left: 33.05%; --pad-turn: -7deg; }
+    #steps-grid .control-card:nth-child(4) { left: 43.9%; --pad-turn: 14deg; }
+    #steps-grid .control-card:nth-child(5) { left: 54.9%; --pad-turn: -10deg; }
+    #steps-grid .control-card:nth-child(6) { left: 65.9%; --pad-turn: 7deg; }
+    #steps-grid .control-card:nth-child(7) { left: 77%; --pad-turn: 12deg; }
+    #steps-grid .control-card:nth-child(8) { left: 88.3%; --pad-turn: -8deg; }
+
+    .knob {
+      --turn: 0deg;
+      position: absolute;
+      left: 0;
+      z-index: 1;
+      width: 100%;
+      aspect-ratio: 86 / 90;
+      border: 0;
+      outline: none;
+      cursor: ns-resize;
+      touch-action: none;
+      pointer-events: auto;
+      background: url('./assets/knob.png') center / contain no-repeat;
+      transform: rotate(var(--turn));
+      transform-origin: 50% 50%;
+    }
+
+    .knob::before { display: none; }
+    .knob:focus-visible { filter: drop-shadow(0 0 5px #fff); }
+
+    .control-name, .control-value { display: none; }
+
+    #mode-button {
+      position: absolute;
+      z-index: 3;
+      left: 43.925%;
+      top: 17.884%;
+      width: 4.214286%;
+      aspect-ratio: 1;
+      padding: 0;
+      border: 0;
+      outline: none;
+      color: transparent;
+      background: url('./assets/black_button.png') center / contain no-repeat;
+      cursor: pointer;
+      touch-action: none;
+      transform: translateX(-50%);
+      filter: drop-shadow(5px 7px 5px #000e);
+    }
+
+    #mode-button.active { background-image: url('./assets/black_button_pressed.png'); }
+    #mode-button:focus-visible { filter: drop-shadow(0 0 5px #fff) drop-shadow(5px 7px 5px #000e); }
+    #mode-button::after { display: none; }
+    #mode-button .keycap, #mode-button strong { display: none; }
+
+    .pad {
+      position: absolute;
+      left: 50%;
+      top: 70.88%;
+      width: 69.767442%;
+      aspect-ratio: 60 / 61;
+      padding: 0;
+      border: 0;
+      outline: none;
+      color: transparent;
+      background: url('./assets/red_button.png') center / contain no-repeat;
+      cursor: pointer;
+      touch-action: none;
+      pointer-events: auto;
+      transform: translateX(-50%) rotate(var(--pad-turn, 0deg));
+      transform-origin: 50% 50%;
+      filter: drop-shadow(5px 7px 5px #000e);
+    }
+
+    .pad.active { background-image: url('./assets/red_button_pressed.png'); }
+    .pad:focus-visible { filter: drop-shadow(0 0 5px #fff) drop-shadow(5px 7px 5px #000e); }
+    .pad .keycap, .pad .step-number { display: none; }
+    .pad::after { display: none; }
+  </style>
+</head>
+<body class="hardware-ui">
+  <main class="workbench">
+    <!-- Kept hidden because simulator.js uses these values and status hooks. -->
+    <div class="simulator-runtime" hidden aria-hidden="true">
+      <label id="drop-zone">
+        <input id="firmware-file" type="file" accept=".elf,.hex,.bin,application/octet-stream" hidden>
+        <span id="firmware-name">Load firmware</span>
+      </label>
+      <span id="diagram-status">diagram: loading</span>
+      <span id="engine-status">firmware: empty</span>
+      <input id="volume" type="range" min="0" max="1" step="0.01" value="1" aria-label="Monitor volume">
+      <button id="reset-button" disabled>Reset</button>
+      <button id="run-button" type="button" disabled>Start audio</button>
+      <span id="runtime-note">Waiting for firmware.</span>
+    </div>
+
+    <div class="panel-scroll">
+      <section class="panel-stage" aria-label="Bitsynth hardware panel">
+        <label class="lcd" for="firmware-file" aria-label="LCD 16 by 2; click to load firmware">
+          <canvas id="lcd-dot-matrix" aria-hidden="true"></canvas>
+          <div class="lcd-text" id="lcd-line-1">LOAD FIRMWARE   </div>
+          <div class="lcd-text" id="lcd-line-2">TO BEGIN        </div>
+        </label>
+        <div id="settings-grid"></div>
+        <button id="mode-button" aria-label="Mode or panic, key M"><span class="keycap">M</span><strong>MODE</strong></button>
+        <div id="steps-grid"></div>
+      </section>
+    </div>
+  </main>
+
+  <script type="module" src="./simulator.js"></script>
+</body>
+</html>
