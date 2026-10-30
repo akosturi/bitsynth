@@ -5,13 +5,13 @@
 The buildless simulator lives in `simulator/`. It loads AVR8js 0.21.1 from a
 pinned jsDelivr URL and runs ELF, Intel HEX, or raw BIN firmware locally in the
 browser. The controls and their initial values are read from
-`wokwi/diagram.json`; an embedded copy of the current mapping is used only when
+`simulator/diagram.json`; an embedded copy of the current mapping is used only when
 that file cannot be fetched.
 
 Build firmware with the normal 9-bit Timer1 PWM output:
 
 ```sh
-pio run -e browser
+pio run -e hardware
 ```
 
 Then serve the repository with any static HTTP server. Python is one option
@@ -22,7 +22,7 @@ python -m http.server 8000
 ```
 
 Open `http://localhost:8000/simulator/`, load
-`.pio/build/browser/firmware.elf` (or `firmware.hex`), and press **Start audio**.
+`.pio/build/hardware/firmware.elf` (or `firmware.hex`), and press **Start audio**.
 Browsers require the explicit button press before Web Audio may start. Drag a
 knob vertically or use its mouse wheel. Keys `1`-`8` hold the eight step
 buttons, and `M` holds MODE/PANIC. The same controls are clickable on screen.
@@ -34,12 +34,11 @@ Two interfaces use the same simulator engine:
   photographs, with a blue/white 16x2 LCD rendered as 5x8 dot-matrix cells,
   image-based knobs and buttons, plus reset and monitor-volume controls. It
   intentionally omits the oscilloscope. This
-  view automatically loads and starts `.pio/build/browser/firmware.hex`. If the
+  view automatically loads and starts `.pio/build/hardware/firmware.hex`. If the
   file is unavailable, click the LCD to choose ELF, HEX, or BIN firmware.
 
-Prefer the `browser` environment for this simulator. The `wokwi` environment
-still emits its intentional carrier-free 1-bit buzzer preview, which the browser
-can run but identifies as lower fidelity.
+The `hardware` environment produces the same firmware for the physical 16 MHz
+ATmega328P-based Pro Mini and for this simulator.
 
 The firmware's Timer1 and `OCR1A` behavior is not modified. A specialized model
 reproduces Timer1 mode 6 as 9-bit Fast PWM: the counter runs from 0 to 511, the
@@ -176,38 +175,22 @@ A paraméterpotik értékei közvetlenül a főképernyőn változnak, nincs kü
 
 ## Fordítás
 
-A program és a hozzá tartozó fejállományok az `src/` mappában, a
-Wokwi-konfigurációk pedig a `wokwi/` mappában találhatók.
+A program és a hozzá tartozó fejállományok az `src/` mappában, a böngészős
+szimulátor pedig a `simulator/` mappában található.
 A projekthez telepítsd a hivatalos `LiquidCrystal` könyvtárat; a PlatformIO
 ezt a gyökérben lévő `platformio.ini` alapján automatikusan kezeli.
 
-### Wokwi VS Code
+Fordítás a Pro Minihez és a böngészős szimulátorhoz:
 
-A repository tartalmazza a teljes Wokwi kapcsolást (`wokwi/diagram.json`) és az indítási
-konfigurációt (`wokwi/wokwi.toml`). A szimulátor egy Arduino Unót használ, amely azonos
-ATmega328P/16 MHz cél a firmware szempontjából. A kapcsolásban benne van a három
-multiplexer, mind a tizenkét poti, a nyolc step gomb, a MODE gomb, a 16×2 LCD és
-az `accurate` módú piezo audiokimenet.
+```sh
+pio run -e hardware
+```
 
-1. Telepítsd a VS Code PlatformIO IDE és Wokwi bővítményét.
-2. A repository gyökeréből fordítsd le a firmware-t: `pio run -e wokwi`.
-3. Az első indításkor futtasd a `Wokwi: Select Config File` parancsot, és válaszd
-   ki a `wokwi/wokwi.toml` fájlt.
-4. Futtasd a `Wokwi: Start Simulator` parancsot.
+Feltöltés a csatlakoztatott Pro Minire:
 
-A step gombok az `1`–`8`, a MODE/PANIC gomb az `M` billentyűvel is kezelhető.
-A Wokwi nem fordít automatikusan, ezért forrásmódosítás után ismét futtasd a
-PlatformIO buildet. A Wokwi build megfordítja a virtuális potik ADC-irányát, így
-jobbra tekerve minden vezérlés – a BPM-et is beleértve – növekszik. Ez csak a
-szimulációs buildre vonatkozik, a fizikai hardver firmware-ét nem módosítja.
-
-A Wokwi piezo nem modellez analóg rekonstrukciós szűrőt: a 31,25 kHz-es
-hardveres PWM közvetlen lejátszása hallható alias- és pulzáló gépzajt okoz.
-Ezért a Wokwi buildben a `D9` nem PWM-vivőt, hanem a 20 kHz-en kiszámolt
-audióminták hard-clippelt, egybites előnézetét adja a piezónak. A hangmagasság,
-a ritmus, a voice-keverés és a moduláció hallható marad, de ez nem alkalmas a
-valódi analóg kimenet hangszínének megítélésére. A fizikai build továbbra is
-a teljes 9 bites PWM-jelet használja.
+```sh
+pio run -e hardware -t upload
+```
 
 ### Analóg audiokimenet
 
@@ -228,9 +211,7 @@ az 1 kΩ-os kimeneti ellenállásra kerül. Ez nagy impedanciájú vonalbemeneth
 való; hangszórót vagy alacsony impedanciájú fejhallgatót külön erősítő
 nélkül ne hajts meg róla.
 
-A Wokwi csak korlátozott analóg szimulációt ad, ezért a diagramon a fenti
-szűrő dokumentációként jelenik meg; az alkatrészek frekvenciamenetét a
-szimulátor nem számolja.
+A böngészős szimulátor a fenti szűrő frekvenciamenetét is modellezi.
 
 ## Korlátok
 

@@ -206,13 +206,13 @@ function unoPin(connections, endpoint) {
 
 async function readDiagram() {
   try {
-    const response = await fetch('../wokwi/diagram.json', { cache: 'no-store' });
+    const response = await fetch('./diagram.json', { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const diagram = await response.json();
     const part = (id) => diagram.parts.find((item) => item.id === id);
     const label = (id, fallback) => part(id)?.attrs?.text || fallback;
     hardware = {
-      source: 'wokwi/diagram.json',
+      source: 'simulator/diagram.json',
       settings: Array.from({ length: 4 }, (_, index) => ({
         id: `setting${index + 1}`,
         label: label(`settingText${index + 1}`, `P${index + 1}`),
@@ -679,7 +679,6 @@ class BitsynthMachine {
     this.scope = new Float32Array(2048);
     this.scopeIndex = 0;
     this.sampleCycle = 0;
-    this.previewBuild = false;
     this.antiAlias = null;
     this.antiAliasSampleRate = 0;
 
@@ -744,16 +743,9 @@ class BitsynthMachine {
       channel | (this.arduinoPin(pin) ? (1 << bit) : 0), 0);
   }
 
-  isPreviewBuild() {
-    const tccr1a = this.cpu.data[TCCR1A];
-    const tccr1b = this.cpu.data[TCCR1B];
-    return !(tccr1a & 0xc0) || !(tccr1b & 0x07);
-  }
-
   adcVoltage(control) {
-    // The real front panel pots are wired opposite to Wokwi's visual value.
-    // WOKWI_SIMULATION firmware already performs this inversion itself.
-    const raw = this.isPreviewBuild() ? control.value : 1023 - control.value;
+    // The real front panel pots are wired opposite to the visual controls.
+    const raw = 1023 - control.value;
     return (raw / 1023) * 5;
   }
 
@@ -791,7 +783,6 @@ class BitsynthMachine {
       outputRight[index] = monitored;
       this.scope[this.scopeIndex++ & (this.scope.length - 1)] = monitored;
     }
-    this.previewBuild = this.isPreviewBuild();
   }
 }
 
@@ -961,7 +952,7 @@ function showHardwareLoadPrompt() {
 
 async function loadDefaultHardwareFirmware() {
   try {
-    const response = await fetch('../.pio/build/browser/firmware.hex', { cache: 'no-store' });
+    const response = await fetch('../.pio/build/hardware/firmware.hex', { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const buffer = await response.arrayBuffer();
     const file = new File([buffer], 'firmware.hex', { type: 'text/plain' });
@@ -1035,8 +1026,7 @@ function drawScope() {
     }
   }
   if (running && machine) {
-    const mode = machine.previewBuild ? '1-bit Wokwi preview' : '9-bit Fast PWM · 31.25 kHz';
-    ui.runtimeNote.textContent = `${mode} · ${audioContext.sampleRate.toLocaleString()} Hz monitor · local execution`;
+    ui.runtimeNote.textContent = `9-bit Fast PWM · 31.25 kHz · ${audioContext.sampleRate.toLocaleString()} Hz monitor · local execution`;
   }
   requestAnimationFrame(drawScope);
 }
