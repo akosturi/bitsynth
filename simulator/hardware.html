@@ -203,6 +203,44 @@
     .pad:focus-visible { filter: drop-shadow(0 0 5px #fff) drop-shadow(5px 7px 5px #000e); }
     .pad .keycap, .pad .step-number { display: none; }
     .pad::after { display: none; }
+
+    #preset-screw {
+      position: absolute;
+      z-index: 4;
+      left: 97%;
+      top: 92.4%;
+      width: 4.3%;
+      aspect-ratio: 1;
+      padding: 0;
+      border: 0;
+      border-radius: 50%;
+      outline: none;
+      color: transparent;
+      background: transparent;
+      cursor: pointer;
+      transform: translate(-50%, -50%);
+    }
+
+    #preset-screw:disabled { cursor: wait; }
+    #preset-screw:focus-visible { box-shadow: 0 0 0 2px #fff; }
+
+    #cycle-meter {
+      position: absolute;
+      z-index: 3;
+      right: 5.5%;
+      bottom: 5%;
+      padding: .25em .55em;
+      border: 1px solid #ffffff26;
+      border-radius: 3px;
+      color: #b9d7bd;
+      background: #050505c9;
+      font: 600 clamp(8px, .78vw, 11px) ui-monospace, SFMono-Regular, Consolas, monospace;
+      letter-spacing: .02em;
+      pointer-events: none;
+    }
+
+    #cycle-meter.over-budget { color: #ff8b80; border-color: #ff5d5066; }
+    #cycle-meter[hidden] { display: none; }
   </style>
 </head>
 <body class="hardware-ui">
@@ -219,6 +257,7 @@
       <button id="reset-button" disabled>Reset</button>
       <button id="run-button" type="button" disabled>Start audio</button>
       <span id="runtime-note">Waiting for firmware.</span>
+      <span id="preset-status" role="status" aria-live="polite"></span>
     </div>
 
     <div class="panel-scroll">
@@ -231,6 +270,8 @@
         <div id="settings-grid"></div>
         <button id="mode-button" aria-label="Mode or panic, key M"><span class="keycap">M</span><strong>MODE</strong></button>
         <div id="steps-grid"></div>
+        <output id="cycle-meter" title="Smoothed audio ISR load and highest measured ISR duration" hidden>ISR -- / 800 cycles · MAX --</output>
+        <button id="preset-screw" type="button" data-test-preset="play-organ" aria-label="Apply PLAY organ test preset"></button>
       </section>
     </div>
   </main>

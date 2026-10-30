@@ -17,10 +17,30 @@ const FLASH_BYTES = 32 * 1024;
 const PROGRAM_WORDS = 0x8000; // Matches AVR8js's ATmega328P demo allocation.
 const AUDIO_OVERSAMPLE = 2;
 const AUDIO_BUFFER_SIZE = 2048;
+const AUDIO_ISR_BUDGET_CYCLES = 800; // 16 MHz / 20 kHz sample rate.
+const CYCLE_METER_SMOOTHING = 0.15;
+const CYCLE_METER_UPDATE_MS = 500;
+const TIMER2_COMPA_VECTOR = timer2Config.compAInterrupt;
+const RETI_OPCODE = 0x9518;
+const INTERRUPT_ENTRY_CYCLES = 2; // Cycles AVR8js charges when dispatching an interrupt.
 const TCCR1A = 0x80;
 const TCCR1B = 0x81;
 const OCR1AL = 0x88;
 const OCR1AH = 0x89;
+
+// Values use the visible knob direction (0 = fully counter-clockwise,
+// 1023 = fully clockwise).
+const TEST_PRESETS = {
+  'play-organ': {
+    label: 'PLAY ORGN / CHRD / SIN 2 Hz / filter 4 Hz',
+    bootSettings: [0, 601, 516, 516],
+    // ORGN preset, C root, major scale and CHRD style.
+    playSettings: [831, 0, 0, 306],
+    steps: [0, 89, 178, 223, 312, 401, 489, 534],
+    // MODE-shifted controls: morph 2 Hz, SIN, full filter, filter LFO 4 Hz.
+    shiftedSettings: [417, 173, 1023, 832],
+  },
+};
 
 const FALLBACK_HARDWARE = {
   source: 'embedded fallback',
@@ -62,6 +82,9 @@ const ui = {
   volume: $('#volume'),
   runtimeNote: $('#runtime-note'),
   scope: $('#scope'),
+  presetButtons: [...document.querySelectorAll('[data-test-preset]')],
+  presetStatus: $('#preset-status'),
+  cycleMeter: $('#cycle-meter'),
 };
 const hardwareView = document.body.classList.contains('hardware-ui');
 
@@ -75,6 +98,7 @@ let audioContext = null;
 let audioNode = null;
 let running = false;
 let audioFailureReported = false;
+let cycleMeterUpdatedAt = 0;
 
 // Five column bitmap glyphs for printable ASCII. Each byte is one vertical
 // column, with the least-significant bit at the top of the 5x8 character cell.
@@ -268,10 +292,12 @@ function makeKnob(control, small = false) {
     value.textContent = `${Math.round((control.value / 1023) * 100)}%`;
     machine?.updateInputs();
   };
-  const setValue = (next) => {
+  const setValue = (next, fromPreset = false) => {
     control.value = Math.max(0, Math.min(1023, Math.round(next)));
     render();
+    if (!fromPreset) clearTestPresetSelection();
   };
+  control.setValue = setValue;
 
   let dragStartY = 0;
   let dragStartValue = 0;
@@ -355,6 +381,93 @@ function buildControls() {
   });
   ui.stepsGrid.replaceChildren(...cards);
   bindMomentary(ui.modeButton, setModePressed);
+}
+
+function clearTestPresetSelection() {
+  ui.presetButtons.forEach((button) => {
+    button.classList.remove('active');
+    button.setAttribute('aria-pressed', 'false');
+  });
+  ui.presetStatus.textContent = '';
+}
+
+const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+async function waitForLcd(label, predicate, timeout = 2500) {
+  const deadline = performance.now() + timeout;
+  while (performance.now() < deadline) {
+    if (predicate(lcdText)) return;
+    await wait(40);
+  }
+  throw new Error(`${label} timed out (LCD: ${lcdText.join(' / ').trim()})`);
+}
+
+async function applyTestPreset(id) {
+  const preset = TEST_PRESETS[id];
+  if (!preset || preset.bootSettings.length !== settings.length ||
+      preset.playSettings.length !== settings.length ||
+      preset.shiftedSettings.length !== settings.length || preset.steps.length !== steps.length) return;
+  const button = ui.presetButtons.find((item) => item.dataset.testPreset === id);
+  if (!firmwareImage || !machine) {
+    ui.presetStatus.textContent = 'Load firmware first';
+    return;
+  }
+
+  button.disabled = true;
+  ui.presetStatus.textContent = 'Configuring...';
+
+  try {
+    // Boot with normal sequencer positions, then make real analog movements
+    // after PLAY is confirmed. This satisfies the firmware's movement filter.
+    preset.bootSettings.forEach((value, index) => settings[index].setValue(value, true));
+    preset.steps.forEach((value, index) => steps[index].setValue(value, true));
+    await resetMachine();
+    if (!running) await startAudio();
+    await wait(300);
+
+    // A short MODE tap changes the freshly reset firmware from SEQ to PLAY.
+    setModePressed(true);
+    await wait(450);
+    setModePressed(false);
+    await waitForLcd('PLAY mode', ([line1, line2]) =>
+      line1.trim() === 'MODE' && line2.trim() === 'PLAY');
+
+    preset.playSettings.forEach((value, index) => settings[index].setValue(value, true));
+    await waitForLcd('ORGN / CHRD', ([line1, line2]) =>
+      line1.startsWith('PLY ORGN') && line2.startsWith('CHRD'));
+
+    // Hold MODE and verify each shifted parameter on the emulated LCD.
+    setModePressed(true);
+    await wait(450);
+
+    settings[1].setValue(preset.shiftedSettings[1], true);
+    await waitForLcd('SIN morph', ([, line2]) => line2.includes('B:SIN'));
+    settings[0].setValue(preset.shiftedSettings[0], true);
+    await waitForLcd('2 Hz morph', ([, line2]) => line2.includes('L:2.0'));
+    settings[2].setValue(preset.shiftedSettings[2], true);
+    await waitForLcd('full filter', ([, line2]) => line2.includes('F:101'));
+    settings[3].setValue(preset.shiftedSettings[3], true);
+    await waitForLcd('4 Hz filter', ([, line2]) => line2.includes('FL:4.0'));
+
+    setModePressed(false);
+    await wait(180);
+
+    // Sound one chord immediately so the resulting configuration is audible.
+    setStepPressed(0, true);
+    await wait(700);
+    setStepPressed(0, false);
+
+    ui.presetButtons.forEach((item) => {
+      const selected = item.dataset.testPreset === id;
+      item.classList.toggle('active', selected);
+      item.setAttribute('aria-pressed', String(selected));
+    });
+    ui.presetStatus.textContent = `${preset.label} ready`;
+  } finally {
+    setModePressed(false);
+    steps.forEach((_, index) => setStepPressed(index, false));
+    button.disabled = false;
+  }
 }
 
 class HD44780 {
@@ -681,6 +794,11 @@ class BitsynthMachine {
     this.sampleCycle = 0;
     this.antiAlias = null;
     this.antiAliasSampleRate = 0;
+    this.audioIsrActive = false;
+    this.audioIsrStartedAt = 0;
+    this.audioIsrCycles = 0;
+    this.audioIsrMaxCycles = 0;
+    this.audioIsrBlockMax = 0;
 
     this.portB.addListener((value, oldValue) => this.outputChanged('B', value, oldValue));
     this.portD.addListener((value, oldValue) => {
@@ -765,14 +883,26 @@ class BitsynthMachine {
       this.antiAlias = new MonitorAntiAliasFilter(outputSampleRate);
       this.antiAliasSampleRate = outputSampleRate;
     }
+    this.audioIsrBlockMax = 0;
     const cyclesPerSubsample = CLOCK_HZ / (outputSampleRate * AUDIO_OVERSAMPLE);
     for (let index = 0; index < outputLeft.length; index++) {
       let sample = 0;
       for (let subSample = 0; subSample < AUDIO_OVERSAMPLE; subSample++) {
         this.sampleCycle += cyclesPerSubsample;
         while (this.cpu.cycles < this.sampleCycle) {
+          const completesAudioIsr = this.audioIsrActive &&
+            this.program[this.cpu.pc] === RETI_OPCODE;
           avrInstruction(this.cpu);
           this.cpu.tick();
+          if (completesAudioIsr) {
+            const used = this.cpu.cycles - this.audioIsrStartedAt;
+            this.audioIsrBlockMax = Math.max(this.audioIsrBlockMax, used);
+            this.audioIsrActive = false;
+          }
+          if (!this.audioIsrActive && this.cpu.pc === TIMER2_COMPA_VECTOR) {
+            this.audioIsrActive = true;
+            this.audioIsrStartedAt = this.cpu.cycles - INTERRUPT_ENTRY_CYCLES;
+          }
         }
         this.pwm.advanceTo(this.cpu.cycles);
         const voltage = this.filter.sample(this.cpu.cycles);
@@ -782,6 +912,13 @@ class BitsynthMachine {
       outputLeft[index] = monitored;
       outputRight[index] = monitored;
       this.scope[this.scopeIndex++ & (this.scope.length - 1)] = monitored;
+    }
+    if (this.audioIsrBlockMax) {
+      this.audioIsrCycles = this.audioIsrCycles
+        ? this.audioIsrCycles * (1 - CYCLE_METER_SMOOTHING) +
+          this.audioIsrBlockMax * CYCLE_METER_SMOOTHING
+        : this.audioIsrBlockMax;
+      this.audioIsrMaxCycles = Math.max(this.audioIsrMaxCycles, this.audioIsrBlockMax);
     }
   }
 }
@@ -982,16 +1119,16 @@ function reportRuntimeError(error) {
   ui.runtimeNote.textContent = error instanceof Error ? error.message : String(error);
 }
 
-function resetMachine() {
+async function resetMachine() {
   if (!firmwareImage) return;
   const wasRunning = running;
   stopAudio();
   machine = new BitsynthMachine(firmwareImage.bytes);
   ui.runtimeNote.textContent = `${firmwareImage.detail}. Reset complete.`;
-  if (wasRunning) startAudio().catch(reportRuntimeError);
+  if (wasRunning) await startAudio();
 }
 
-function drawScope() {
+function drawScope(now = performance.now()) {
   const canvas = ui.scope;
   if (canvas) {
     const rect = canvas.getBoundingClientRect();
@@ -1027,6 +1164,17 @@ function drawScope() {
   }
   if (running && machine) {
     ui.runtimeNote.textContent = `9-bit Fast PWM · 31.25 kHz · ${audioContext.sampleRate.toLocaleString()} Hz monitor · local execution`;
+  }
+  if (ui.cycleMeter && !ui.cycleMeter.hidden &&
+      now - cycleMeterUpdatedAt >= CYCLE_METER_UPDATE_MS) {
+    cycleMeterUpdatedAt = now;
+    const cycles = Math.round(machine?.audioIsrCycles || 0);
+    const maxCycles = machine?.audioIsrMaxCycles || 0;
+    const text = cycles
+      ? `ISR ${cycles} / ${AUDIO_ISR_BUDGET_CYCLES} cycles (${Math.round(cycles / AUDIO_ISR_BUDGET_CYCLES * 100)}%) · MAX ${maxCycles}`
+      : `ISR -- / ${AUDIO_ISR_BUDGET_CYCLES} cycles · MAX --`;
+    if (ui.cycleMeter.textContent !== text) ui.cycleMeter.textContent = text;
+    ui.cycleMeter.classList.toggle('over-budget', maxCycles > AUDIO_ISR_BUDGET_CYCLES);
   }
   requestAnimationFrame(drawScope);
 }
@@ -1086,10 +1234,17 @@ ui.runButton.addEventListener('click', () => {
   if (running) stopAudio();
   else startAudio().catch(reportRuntimeError);
 });
-ui.resetButton.addEventListener('click', resetMachine);
+ui.resetButton.addEventListener('click', () => resetMachine().catch(reportRuntimeError));
 
 await readDiagram();
 buildControls();
+ui.presetButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    ui.cycleMeter.hidden = false;
+    cycleMeterUpdatedAt = 0;
+    applyTestPreset(button.dataset.testPreset).catch(reportRuntimeError);
+  });
+});
 drawScope();
 scheduleLcdDotMatrix();
 if (hardwareView) await loadDefaultHardwareFirmware();
