@@ -1,12 +1,5 @@
 #ifndef _SYNTH
 #define _SYNTH
-//*************************************************************************************
-//  Arduino synth V4.1
-//  Optimized audio driver, modulation engine, envelope engine.
-//
-//  Dzl/Illutron 2014
-//*************************************************************************************
-
 #include <Arduino.h>
 #include <avr/pgmspace.h>
 #include <avr/interrupt.h>
@@ -66,7 +59,6 @@ volatile uint16_t PCW[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
 volatile uint16_t FTW[SYNTH_VOICE_COUNT] = {1000, 200, 300, 400};
 volatile uint8_t AMP[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
 volatile uint16_t PITCH[SYNTH_VOICE_COUNT] = {500, 500, 500, 500};
-// setMod clamps its input to 0..127, so the stored offset is -64..63.
 volatile int8_t MOD[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
 volatile uint16_t wavs[SYNTH_VOICE_COUNT] = {
   (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable
@@ -123,6 +115,7 @@ static inline __attribute__((always_inline)) int16_t readSigned9Sample(
   return (int16_t)pgm_read_word(sampleAddress + (sampleIndex << 1));
 }
 
+// Decodes a signed 9-bit sample packed across byte boundaries.
 static inline __attribute__((always_inline)) int16_t readPackedSigned9Sample(
   uint16_t sampleAddress, uint16_t sampleIndex)
 {
@@ -133,6 +126,7 @@ static inline __attribute__((always_inline)) int16_t readPackedSigned9Sample(
   return (encoded & 0x0100) ? (int16_t)(encoded | 0xFE00) : encoded;
 }
 
+// Scales a signed sample with arithmetic-shift rounding.
 static inline __attribute__((always_inline)) int16_t scaleSigned9Sample(
   int16_t sample, uint8_t gain, uint8_t shift)
 {
@@ -140,7 +134,6 @@ static inline __attribute__((always_inline)) int16_t scaleSigned9Sample(
   const uint16_t magnitude = negative ? -sample : sample;
   uint16_t product = magnitude * gain;
   if (negative) {
-    // Match an arithmetic right shift for negative products.
     product += (1U << shift) - 1U;
     return -(int16_t)(product >> shift);
   }
@@ -154,6 +147,7 @@ static inline __attribute__((always_inline)) int16_t nextVoiceSample(uint8_t voi
   return readSigned9Sample(wavs[voice], phase >> SYNTH_WAVETABLE_SHIFT);
 }
 
+// Blends two waveforms at a shared phase.
 static inline __attribute__((always_inline)) int16_t nextMorphedVoiceSample(
   uint8_t voice, uint16_t secondaryWave, uint8_t morphAmount)
 {
@@ -162,11 +156,11 @@ static inline __attribute__((always_inline)) int16_t nextMorphedVoiceSample(
   const uint16_t index = phase >> SYNTH_WAVETABLE_SHIFT;
   const int16_t sampleA = readSigned9Sample(wavs[voice], index);
   const int16_t sampleB = readSigned9Sample(secondaryWave, index);
-  // Amount is 0..128 and the weighted sum remains within int16_t.
   const uint8_t primaryAmount = 128 - morphAmount;
   return ((sampleA * primaryAmount) + (sampleB * morphAmount)) >> 7;
 }
 
+// Applies the selected low-pass strength to the live voice mix.
 static inline __attribute__((always_inline)) int16_t filterPlayMix(int16_t inputQ7)
 {
   const uint8_t level = playFilterAmount;
@@ -177,40 +171,29 @@ static inline __attribute__((always_inline)) int16_t filterPlayMix(int16_t input
 
   int16_t stateQ7 = playFilterStateQ7;
   if (level == 1) {
-    stateQ7 = inputQ7 - (inputQ7 >> 3) + (stateQ7 >> 3); // 7/8
+    stateQ7 = inputQ7 - (inputQ7 >> 3) + (stateQ7 >> 3);
   } else if (level == 2) {
-    stateQ7 = inputQ7 - (inputQ7 >> 2) + (stateQ7 >> 2); // 3/4
+    stateQ7 = inputQ7 - (inputQ7 >> 2) + (stateQ7 >> 2);
   } else {
     const uint8_t shift = level - 2;
-    stateQ7 += (inputQ7 >> shift) - (stateQ7 >> shift);  // 1/2 .. 1/32
+    stateQ7 += (inputQ7 >> shift) - (stateQ7 >> shift);
   }
   playFilterStateQ7 = stateQ7;
   return stateQ7;
 }
 
+// Computes value / 64 without slow wide shifts on AVR.
 static inline __attribute__((always_inline)) uint16_t modulationCoarse(uint16_t value)
 {
-  // Exactly value >> 6. Byte-sized shifts avoid two 6-iteration AVR loops
-  // in each modulation update; keep the subsequent product 16-bit unsigned.
-  // The U suffix avoids signed int promotion and a 16-bit ASR loop at -Os.
   const uint8_t high = value >> 8;
   const uint8_t low = (uint8_t)value / 64U;
   return ((uint16_t)high << 2) | low;
 }
 
-//*********************************************************************************************
-//  Audio driver interrupt
-//*********************************************************************************************
-
-// Measured separately from source changes: -O2 avoids size-oriented shift
-// loops here. The rest of the sketch/core retains the Arduino -Os setting.
+// Mixes one audio frame and updates time-sliced synthesis state.
+// O2 avoids slow size-optimized shift loops in this ISR.
 ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
 {
-  //-------------------------------
-  // Time division
-  //-------------------------------
-  // Main code cannot run during this non-nesting ISR. Read shared state once
-  // where it is reused; retain volatile storage and all main-side atomic blocks.
   const uint8_t voiceIndex = (divider + 1) & 0x03;
   divider = voiceIndex;
 
@@ -246,8 +229,6 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
     if (lfoStep != 0) {
       const uint32_t lfoPhase = droneLfoPCW[pair] + lfoStep;
       droneLfoPCW[pair] = lfoPhase;
-      // Only bits 31..25 are needed. Narrow before the last shift: avr-gcc
-      // otherwise emits a 25-iteration, 32-bit shift loop at -Os.
       const uint8_t trianglePhase = (uint8_t)(lfoPhase >> 24) >> 1;
       const uint8_t gain = (trianglePhase & 0x40) ? 127 - trianglePhase : trianglePhase;
       pairMixQ7 = (((pairMixQ7 >> 4) * gain) >> 2);
@@ -256,10 +237,6 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
     mixQ7 = dronePairMixQ7[0] + dronePairMixQ7[1] +
       dronePairMixQ7[2] + dronePairMixQ7[3];
   } else {
-    //-------------------------------
-    // Volume envelope generator
-    //-------------------------------
-
     const uint16_t envelopePhase = EPCW[voiceIndex];
     if (envelopePhase & 0x8000) {
       AMP[voiceIndex] = 0;
@@ -285,10 +262,6 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
         playFilterAmount = ((uint16_t)playFilterDepth * triangleAmount + 64) >> 7;
       }
     }
-
-    //-------------------------------
-    //  Synthesizer/audio mixer
-    //-------------------------------
 
     int16_t sourceZeroQ7 = 0;
     if (drumActive) {
@@ -352,7 +325,6 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
       const uint8_t feedback = (pwmDitherLfsr & 0x01) ? 0xB8 : 0x00;
       const uint8_t lfsr = (pwmDitherLfsr >> 1) ^ feedback;
       pwmDitherLfsr = lfsr;
-      // Unsigned division by a power of two becomes an 8-bit nibble extract.
       const uint8_t highNibble = lfsr / 16U;
       const int16_t dither =
         ((int8_t)(lfsr & 0x0F) - (int8_t)highNibble) << 2;
@@ -379,12 +351,8 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
 
   OCR1A = OCR1B = pwmSample;
 
-  //************************************************
-  //  Modulation engine
-  //************************************************
   if (!droneMode && (!drumActive || voiceIndex != 0)) {
     const uint16_t pitch = PITCH[voiceIndex];
-    // Preserve the original AVR unsigned 16-bit product/wrap before division.
     FTW[voiceIndex] = pitch + (int16_t)(((modulationCoarse(pitch) *
       modulationCoarse(EPCW[voiceIndex])) / 128) * MOD[voiceIndex]);
   }
@@ -472,10 +440,7 @@ class synth
     {
     }
 
-    //*********************************************************************
-    //  Startup selecting various output modes
-    //*********************************************************************
-
+    // Starts the audio timers with the selected PWM output mode.
     void begin(uint8_t outputMode)
     {
       cli();
@@ -499,12 +464,7 @@ class synth
       sei();
     }
 
-    //*********************************************************************
-    //  Setup voice parameters in MIDI range
-    //  voice[0-3], wave[0-5], pitch[0-127], envelope[0-3],
-    //  length[0-127], mod[0-127:64=no mod]
-    //*********************************************************************
-
+    // Configures all parameters of one melodic voice.
     void setupVoice(uint8_t voice, uint8_t wave, uint8_t pitch, uint8_t env, uint8_t length, uint8_t mod)
     {
       setWave(voice, wave);
@@ -513,10 +473,6 @@ class synth
       setLength(voice, length);
       setMod(voice, mod);
     }
-
-    //*********************************************************************
-    //  Setup wave [0-5]
-    //*********************************************************************
 
     void setWave(uint8_t voice, uint8_t wave)
     {
@@ -536,6 +492,7 @@ class synth
       }
     }
 
+    // Configures LFO-driven waveform morphing for the live voices.
     void configurePlayMorph(
       uint8_t primaryWave, uint8_t secondaryWave, uint16_t frequencyTenths, bool secondaryEnabled)
     {
@@ -576,6 +533,7 @@ class synth
       }
     }
 
+    // Configures the live low-pass filter and its optional LFO.
     void configurePlayFilter(uint8_t level, uint16_t frequencyTenths)
     {
       if (level > 7) {
@@ -606,10 +564,6 @@ class synth
       }
     }
 
-    //*********************************************************************
-    //  Setup Pitch [0-127]
-    //*********************************************************************
-
     void setPitch(uint8_t voice, uint8_t midiNote)
     {
       if (!validVoice(voice)) {
@@ -637,10 +591,6 @@ class synth
       }
     }
 
-    //*********************************************************************
-    //  Setup Envelope [0-3]
-    //*********************************************************************
-
     void setEnvelope(uint8_t voice, uint8_t env)
     {
       if (!validVoice(voice)) {
@@ -666,10 +616,6 @@ class synth
       }
     }
 
-    //*********************************************************************
-    //  Setup Length [0-127]
-    //*********************************************************************
-
     void setLength(uint8_t voice, uint8_t length)
     {
       if (!validVoice(voice)) {
@@ -686,10 +632,7 @@ class synth
       }
     }
 
-    //*********************************************************************
-    //  Setup mod [0-127:64=no mod]
-    //*********************************************************************
-
+    // Sets bipolar modulation with 64 as the neutral value.
     void setMod(uint8_t voice, uint8_t mod)
     {
       if (!validVoice(voice)) {
@@ -719,10 +662,6 @@ class synth
       }
     }
 
-    //*********************************************************************
-    //  Simple trigger
-    //*********************************************************************
-
     void trigger(uint8_t voice)
     {
       if (!validVoice(voice)) {
@@ -748,6 +687,7 @@ class synth
       }
     }
 
+    // Starts packed sample playback with tone and decay scaling.
     void triggerDrum(uint8_t type, uint8_t tone, uint8_t decay)
     {
       if (type >= DRUM_SAMPLE_COUNT) type = DRUM_SAMPLE_COUNT - 1;
@@ -767,7 +707,6 @@ class synth
         sampleLength = hihatSampleLength;
       }
 
-      // Q16.16 playback step: TONE spans 0.75x to 1.25x, with 64 near unity.
       const uint32_t sampleStep = 49152UL +
         (((uint32_t)tone * 32768UL + 63UL) / 127UL);
       const uint32_t playbackFrames =

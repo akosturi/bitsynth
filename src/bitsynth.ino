@@ -215,6 +215,7 @@ uint16_t pitchWordForFrequency(uint16_t frequency) {
   return ((uint32_t)frequency * 65535UL + FS / 2) / FS;
 }
 
+// Maps the reversed control range to LFO rate, reserving the endpoint for off.
 uint16_t lfoRateForRaw(uint16_t raw) {
   if (raw >= 1023 - kAnalogEndpointMargin) return 0;
   const uint16_t travel = 1023 - kAnalogEndpointMargin;
@@ -268,6 +269,7 @@ void selectMuxChannel(uint8_t channel) {
   delayMicroseconds(kMuxSettleUs);
 }
 
+// Discards settling reads and returns the median to reject analog spikes.
 uint16_t readMedianAnalog(uint8_t pin) {
   uint16_t samples[kAnalogSamples];
   for (uint8_t i = 0; i < kAnalogDiscardSamples; ++i) analogRead(pin);
@@ -280,6 +282,7 @@ uint16_t readMedianAnalog(uint8_t pin) {
   return samples[kAnalogSamples / 2];
 }
 
+// Smooths an analog reading with a fixed-point low-pass filter.
 uint16_t filterAnalog(uint16_t raw, uint16_t &filtered, bool &ready) {
   const uint16_t fixed = raw << kAnalogFilterFractionBits;
   if (!ready) { filtered = fixed; ready = true; return raw; }
@@ -288,6 +291,7 @@ uint16_t filterAnalog(uint16_t raw, uint16_t &filtered, bool &ready) {
   return (filtered + (1 << (kAnalogFilterFractionBits - 1))) >> kAnalogFilterFractionBits;
 }
 
+// Accepts sustained directional movement while rejecting control jitter.
 uint16_t acceptAnalogMovement(uint16_t raw, AnalogMotionState &state, uint8_t threshold) {
   if (!state.ready) {
     state.accepted = raw;
@@ -325,6 +329,7 @@ uint16_t rawForMappedValue(int16_t value, int16_t outMin, int16_t outMax) {
   return constrain(map(value, outMin, outMax, 0, 1023), 0, 1023);
 }
 
+// Maps a control only after it clears the next value boundary and hysteresis.
 int16_t mapWithHysteresis(uint16_t raw, int16_t current, int16_t outMin, int16_t outMax) {
   const int16_t low = min(outMin, outMax);
   const int16_t high = max(outMin, outMax);
@@ -345,6 +350,7 @@ uint8_t mapByteHysteresis(uint16_t raw, uint8_t current, int16_t outMin, int16_t
   return (uint8_t)mapWithHysteresis(raw, current, outMin, outMax);
 }
 
+// Maps a reversed control to a stable discrete index.
 uint8_t mapIndexHysteresis(uint16_t raw, uint8_t current, uint8_t count) {
   if (count <= 1) return 0;
   if (raw <= kAnalogEndpointMargin) return count - 1;
@@ -364,6 +370,7 @@ uint8_t mapIndexHysteresis(uint16_t raw, uint8_t current, uint8_t count) {
   return current;
 }
 
+// Maps the morph control while keeping its upper endpoint as the off state.
 uint8_t playMorphWaveForRaw(uint16_t raw) {
   const uint16_t offBoundary = 1023 - kAnalogEndpointMargin;
   if (playMorphWave == kPlayMorphOff) {
@@ -383,6 +390,7 @@ void setEditText(const __FlashStringHelper *title, const __FlashStringHelper *va
   editUntilMs = now + kEditViewMs; displayDirty = true;
 }
 
+// Scans a subset of multiplexed controls each loop to limit latency.
 void readControls(unsigned long now) {
   const uint8_t setting = settingScanChannel;
   selectMuxChannel(setting);
@@ -433,6 +441,7 @@ void readSequencerControls(const uint16_t values[], unsigned long now) {
 
 void revoiceHeldButtons();
 
+// Handles normal play controls and mode-button secondary functions.
 void readPlayControls(const uint16_t values[], unsigned long now) {
   if (modeButtonStable == LOW) {
     if (values[1] != playMorphShiftRaw[1]) {
@@ -569,6 +578,7 @@ void readPlayControls(const uint16_t values[], unsigned long now) {
   }
 }
 
+// Selects drone waves or adjusts pair LFOs while the mode button is held.
 void readDroneControls(const uint16_t values[], unsigned long now) {
   if (modeButtonStable == LOW) {
     for (uint8_t pair = 0; pair < kSettingCount; ++pair) {
@@ -659,6 +669,7 @@ void readDronePitchPot(uint8_t voice, unsigned long now) {
   }
 }
 
+// Debounces mode input and distinguishes tap, modifier, and panic hold.
 void scanModeButton(unsigned long now) {
   selectMuxChannel(0);
   const uint8_t reading = digitalRead(kModeButtonPin);
@@ -700,6 +711,7 @@ void scanStepButtons(unsigned long now) {
   }
 }
 
+// Routes step buttons to gates, drone toggles, or live notes by mode.
 void handleStepButton(uint8_t button, bool pressed) {
   if (button == 0 && modeChordStepHeld) {
     if (!pressed) modeChordStepHeld = false;
@@ -731,6 +743,7 @@ void handleStepButton(uint8_t button, bool pressed) {
   displayDirty = true;
 }
 
+// Stops the previous engine and initializes the selected mode safely.
 void changeMode(InstrumentMode nextMode, unsigned long now) {
   if (nextMode == instrumentMode) return;
   const InstrumentMode previous = instrumentMode;
@@ -806,6 +819,7 @@ void triggerNormalVoice(uint8_t voice, uint16_t pitch, uint8_t glide) {
   edgar.trigger(voice);
 }
 
+// Moves active voices toward their target pitch once per millisecond.
 void updateGlide(unsigned long now) {
   if ((unsigned long)(now - lastGlideMs) < 1) return;
   lastGlideMs = now;
@@ -843,6 +857,7 @@ uint8_t effectiveSampleHold() {
   return hold;
 }
 
+// Builds a sequencer voice stack from the preset and macro controls.
 void triggerSequencerNote(uint8_t note, bool backgroundOnly) {
   edgar.stopDrum();
   SeqPreset preset; readSeqPreset(seqControls.preset, preset); edgar.setSampleHold(effectiveSampleHold());
@@ -891,6 +906,7 @@ void triggerSequencerStep(uint8_t step, bool backgroundOnly) {
 
 uint16_t bpmStepMs() { return 15000U / max((uint8_t)1, seqControls.bpm); }
 
+// Advances the shared sequencer without accumulating large timing drift.
 void runSequencer(unsigned long now) {
   if (instrumentMode == MODE_DRONE || (unsigned long)(now - lastStepMs) < nextStepIntervalMs) return;
   lastStepMs += nextStepIntervalMs;
@@ -955,6 +971,7 @@ void clearHeldNotes() {
   resetLiveAssignments();
 }
 
+// Assigns a free live voice or steals the oldest active one.
 void triggerPolyButton(uint8_t button) {
   int8_t slot = -1;
   for (uint8_t i = 0; i < 3; ++i) if (liveButtonForVoice[i] < 0) { slot = i; break; }
@@ -988,6 +1005,7 @@ uint8_t collectHeldButtons(uint8_t buttons[kStepCount]) {
   return count;
 }
 
+// Advances the current arpeggio pattern across held buttons.
 void advanceArpeggio() {
   uint8_t buttons[kStepCount];
   const uint8_t count = collectHeldButtons(buttons);
@@ -1030,6 +1048,7 @@ void handleLiveRelease(uint8_t button) {
   else advanceArpeggio();
 }
 
+// Rebuilds live voice assignments after a play setting changes.
 void revoiceHeldButtons() {
   if (instrumentMode != MODE_PLAY) return;
   for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
@@ -1099,6 +1118,7 @@ void frameTenths(uint8_t row, uint8_t column, uint16_t value) {
   frameText(row, column, text);
 }
 
+// Writes only LCD regions that differ from the rendered frame.
 void flushDisplayFrame() {
   for (uint8_t row = 0; row < 2; ++row) {
     uint8_t column = 0;
@@ -1118,6 +1138,7 @@ void flushDisplayFrame() {
   renderedFrameReady = true;
 }
 
+// Chooses the active view and refreshes it only when needed.
 void renderDisplay(unsigned long now) {
   const bool editVisible = (long)(editUntilMs - now) > 0;
   const bool inlineEditVisible = !editVisible && (long)(inlineEditUntilMs - now) > 0 &&
