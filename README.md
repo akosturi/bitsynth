@@ -9,7 +9,7 @@ The same firmware runs on the physical instrument and in the browser simulator. 
 - **Hardware:** Arduino Pro Mini, 5 V / 16 MHz, ATmega328P
 - **Firmware build:** PlatformIO environment `hardware`
 - **Browser simulator:** the physical front-panel view in `simulator/hardware.html`
-- **Current `hardware` build footprint:** 29,040 bytes flash (94.5%) and 725 bytes RAM (35.4%)
+- **Current `hardware` build footprint:** 29,232 bytes flash (95.2%) and 725 bytes RAM (35.4%)
 
 An Uno or Nano with the same ATmega328P clock and voltage can also run the firmware if wired to the same pins.
 
@@ -69,6 +69,22 @@ Simulator controls:
 - Every knob and button is also usable with the pointer.
 
 The simulator models the real 9-bit, 31.25 kHz PWM signal and the documented passive output filter, not just the synth's digital sample stream. Firmware execution, LCD output, multiplexed controls, audio generation, and filtering all run in the browser.
+
+### Test and service mode
+
+Click the screw in the lower-right corner of the simulated front panel to start the hidden test and service mode. This resets the simulated firmware and automatically configures a demanding PLAY setup:
+
+- `ORGN` live preset, C root, major scale, `CHRD` style, and octave 2
+- sine as the second waveform with a 2.0 Hz morph LFO
+- the strongest shared live filter setting with a 4.0 Hz filter LFO
+
+The setup follows the normal control path, including MODE-button presses, analog-control filtering, shifted controls, and LCD confirmation. Once every setting has been confirmed, the simulator sounds a short test chord.
+
+Activating the mode also reveals the audio ISR cycle meter in the lower-right corner, for example:
+
+```text
+ISR 878 / 800 cycles (110%) · MAX 910
+```
 
 ## Hardware
 

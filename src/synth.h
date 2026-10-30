@@ -28,6 +28,13 @@
 
 #define FS 20000UL
 
+#if defined(SYNTH_FIXED_OUTPUT_MODE) && \
+    SYNTH_FIXED_OUTPUT_MODE != DIFF && \
+    SYNTH_FIXED_OUTPUT_MODE != CHA && \
+    SYNTH_FIXED_OUTPUT_MODE != CHB
+#error "SYNTH_FIXED_OUTPUT_MODE must be DIFF, CHA, or CHB"
+#endif
+
 static_assert(kickSampleRate == FS, "kick sample rate must match the 20 kHz audio engine");
 static_assert(snareSampleRate == FS, "snare sample rate must match the 20 kHz audio engine");
 static_assert(hihatSampleRate == FS, "hi-hat sample rate must match the 20 kHz audio engine");
@@ -140,24 +147,36 @@ static inline __attribute__((always_inline)) int16_t scaleSigned9Sample(
   return product >> shift;
 }
 
-static inline __attribute__((always_inline)) int16_t nextVoiceSample(uint8_t voice)
+// Keeps phase continuity for silent voices without reading or scaling a table.
+static inline __attribute__((always_inline)) int16_t nextScaledVoiceSample(
+  uint8_t voice, uint8_t gain)
 {
   const uint16_t phase = PCW[voice] + FTW[voice];
   PCW[voice] = phase;
-  return readSigned9Sample(wavs[voice], phase >> SYNTH_WAVETABLE_SHIFT);
+  if (gain == 0) {
+    return 0;
+  }
+  return scaleSigned9Sample(
+    readSigned9Sample(wavs[voice], phase >> SYNTH_WAVETABLE_SHIFT), gain, 3);
 }
 
-// Blends two waveforms at a shared phase.
-static inline __attribute__((always_inline)) int16_t nextMorphedVoiceSample(
-  uint8_t voice, uint16_t secondaryWave, uint8_t morphAmount)
+// The silent fast path still advances phase, matching the normal renderer.
+static inline __attribute__((always_inline)) int16_t nextScaledMorphedVoiceSample(
+  uint8_t voice, uint16_t secondaryWave, uint8_t morphAmount, uint8_t gain)
 {
   const uint16_t phase = PCW[voice] + FTW[voice];
   PCW[voice] = phase;
+  if (gain == 0) {
+    return 0;
+  }
+
   const uint16_t index = phase >> SYNTH_WAVETABLE_SHIFT;
   const int16_t sampleA = readSigned9Sample(wavs[voice], index);
   const int16_t sampleB = readSigned9Sample(secondaryWave, index);
   const uint8_t primaryAmount = 128 - morphAmount;
-  return ((sampleA * primaryAmount) + (sampleB * morphAmount)) >> 7;
+  const int16_t sample =
+    ((sampleA * primaryAmount) + (sampleB * morphAmount)) >> 7;
+  return scaleSigned9Sample(sample, gain, 3);
 }
 
 // Applies the selected low-pass strength to the live voice mix.
@@ -196,10 +215,11 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
 {
   const uint8_t voiceIndex = (divider + 1) & 0x03;
   divider = voiceIndex;
+  const bool renderDrone = droneMode;
 
   int16_t mixQ7;
 
-  if (droneMode) {
+  if (renderDrone) {
     const uint8_t rampVoice = (droneRampVoice + 1) & 0x07;
     droneRampVoice = rampVoice;
     uint8_t amplitude = droneAmp[rampVoice];
@@ -264,13 +284,15 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
     }
 
     int16_t sourceZeroQ7 = 0;
-    if (drumActive) {
+    bool renderDrum = drumActive;
+    if (renderDrum) {
       const uint32_t samplePhase = drumSamplePhase;
       const uint16_t envelope = drumEnvelope;
       const uint16_t sampleIndex = samplePhase >> 16;
       if (sampleIndex >= drumSampleLength || envelope == 0) {
         drumEnvelope = 0;
         drumActive = false;
+        renderDrum = false;
       } else {
         const int16_t sample = readPackedSigned9Sample(drumSampleAddress, sampleIndex);
         drumSamplePhase = samplePhase + drumSampleStep;
@@ -280,7 +302,7 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
         drumEnvelope = envelope <= envelopeStep ? 0 : envelope - envelopeStep;
       }
     } else {
-      sourceZeroQ7 = scaleSigned9Sample(nextVoiceSample(0), AMP[0], 3);
+      sourceZeroQ7 = nextScaledVoiceSample(0, AMP[0]);
     }
 
     int16_t liveMixQ7;
@@ -295,22 +317,31 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
       const uint16_t secondaryWave = playMorphWavPtr;
       const uint8_t morphAmount = playMorphAmount;
       liveMixQ7 =
-        scaleSigned9Sample(nextMorphedVoiceSample(1, secondaryWave, morphAmount), AMP[1], 3) +
-        scaleSigned9Sample(nextMorphedVoiceSample(2, secondaryWave, morphAmount), AMP[2], 3) +
-        scaleSigned9Sample(nextMorphedVoiceSample(3, secondaryWave, morphAmount), AMP[3], 3);
+        nextScaledMorphedVoiceSample(1, secondaryWave, morphAmount, AMP[1]) +
+        nextScaledMorphedVoiceSample(2, secondaryWave, morphAmount, AMP[2]) +
+        nextScaledMorphedVoiceSample(3, secondaryWave, morphAmount, AMP[3]);
     } else {
       liveMixQ7 =
-        scaleSigned9Sample(nextVoiceSample(1), AMP[1], 3) +
-        scaleSigned9Sample(nextVoiceSample(2), AMP[2], 3) +
-        scaleSigned9Sample(nextVoiceSample(3), AMP[3], 3);
+        nextScaledVoiceSample(1, AMP[1]) +
+        nextScaledVoiceSample(2, AMP[2]) +
+        nextScaledVoiceSample(3, AMP[3]);
     }
     mixQ7 = sourceZeroQ7 + filterPlayMix(liveMixQ7);
+
+    if (!renderDrum || voiceIndex != 0) {
+      const uint16_t pitch = PITCH[voiceIndex];
+      const int8_t modulation = MOD[voiceIndex];
+      FTW[voiceIndex] = modulation == 0 ? pitch :
+        pitch + (int16_t)(((modulationCoarse(pitch) *
+          modulationCoarse(EPCW[voiceIndex])) / 128) * modulation);
+    }
   }
 
+  const uint8_t holdFrames = sampleHoldFrames;
   bool updateOutput = true;
-  if (sampleHoldFrames > 1) {
+  if (holdFrames > 1) {
     if (sampleHoldCounter == 0) {
-      sampleHoldCounter = sampleHoldFrames - 1;
+      sampleHoldCounter = holdFrames - 1;
     } else {
       --sampleHoldCounter;
       updateOutput = false;
@@ -318,7 +349,7 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
   }
 
   uint16_t pwmSample = heldPwmSample;
-  const bool shapeOutput = droneMode ? !droneNoiseMask : !noiseVoiceMask;
+  const bool shapeOutput = renderDrone ? !droneNoiseMask : !noiseVoiceMask;
 
   if (updateOutput) {
     if (shapeOutput) {
@@ -349,13 +380,18 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
     pwmQuantizationError = 0;
   }
 
+#if defined(SYNTH_FIXED_OUTPUT_MODE)
+  #if SYNTH_FIXED_OUTPUT_MODE == CHA
+    OCR1A = pwmSample;
+  #elif SYNTH_FIXED_OUTPUT_MODE == CHB
+    OCR1B = pwmSample;
+  #else
+    OCR1A = OCR1B = pwmSample;
+  #endif
+#else
   OCR1A = OCR1B = pwmSample;
+#endif
 
-  if (!droneMode && (!drumActive || voiceIndex != 0)) {
-    const uint16_t pitch = PITCH[voiceIndex];
-    FTW[voiceIndex] = pitch + (int16_t)(((modulationCoarse(pitch) *
-      modulationCoarse(EPCW[voiceIndex])) / 128) * MOD[voiceIndex]);
-  }
 }
 
 class synth
@@ -445,6 +481,10 @@ class synth
     {
       cli();
       configureTimer2();
+
+#ifdef SYNTH_FIXED_OUTPUT_MODE
+      outputMode = SYNTH_FIXED_OUTPUT_MODE;
+#endif
 
       switch (outputMode)
       {
