@@ -82,11 +82,10 @@ volatile uint16_t playMorphWavPtr = (uint16_t)SinTable;
 volatile uint32_t playMorphLfoPCW = 0x80000000UL;
 volatile uint32_t playMorphLfoFTW = 0;
 volatile uint8_t playMorphAmount = 128;
-volatile uint8_t playFilterAmount = 0;
-volatile uint8_t playFilterDepth = 0;
-int16_t playFilterStateQ7 = 0;
-volatile uint32_t playFilterLfoPCW = 0x80000000UL;
-volatile uint32_t playFilterLfoFTW = 0;
+volatile uint16_t playVcaGain = 256;
+volatile uint16_t playVcaAttenuationDepth = 0;
+volatile uint32_t playVcaLfoPCW = 0x80000000UL;
+volatile uint32_t playVcaLfoFTW = 0;
 uint8_t playLfoDivider = 0;
 volatile bool droneMode = false;
 volatile uint16_t dronePCW[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
@@ -173,26 +172,23 @@ static inline __attribute__((always_inline)) int16_t nextScaledMorphedVoiceSampl
   return scaleSigned9Sample(sample, gain, 3);
 }
 
-// Applies the selected low-pass strength to the live voice mix.
-static inline __attribute__((always_inline)) int16_t filterPlayMix(int16_t inputQ7)
+// Applies a 9-bit linear gain with error far below one PWM output step.
+static inline __attribute__((always_inline)) int16_t scalePlayMix(
+  int16_t inputQ7, uint8_t gain)
 {
-  const uint8_t level = playFilterAmount;
-  if (level == 0) {
-    playFilterStateQ7 = inputQ7;
-    return inputQ7;
-  }
+  if (gain == 0) return 0;
 
-  int16_t stateQ7 = playFilterStateQ7;
-  if (level == 1) {
-    stateQ7 = inputQ7 - (inputQ7 >> 3) + (stateQ7 >> 3);
-  } else if (level == 2) {
-    stateQ7 = inputQ7 - (inputQ7 >> 2) + (stateQ7 >> 2);
-  } else {
-    const uint8_t shift = level - 2;
-    stateQ7 += (inputQ7 >> shift) - (stateQ7 >> shift);
-  }
-  playFilterStateQ7 = stateQ7;
-  return stateQ7;
+  const bool negative = inputQ7 < 0;
+  const uint16_t magnitude = negative ? -inputQ7 : inputQ7;
+  const uint8_t magnitudeHigh = magnitude >> 8;
+  const uint8_t magnitudeLow = magnitude;
+  const uint8_t halfGain = gain >> 1;
+  const uint16_t highProduct =
+    __builtin_avr_fmul(magnitudeHigh, gain) >> 1;
+  const uint16_t lowProduct =
+    __builtin_avr_fmul(magnitudeLow, halfGain);
+  const uint16_t scaled = highProduct + ((lowProduct + 128) >> 8);
+  return negative ? -(int16_t)scaled : scaled;
 }
 
 // Computes value / 64 without slow wide shifts on AVR.
@@ -267,13 +263,15 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
       updatePlayLfos = playLfoDivider == 0;
     }
     if (updatePlayLfos) {
-      const uint32_t filterLfoStep = playFilterLfoFTW;
-      if (filterLfoStep != 0) {
-        playFilterLfoPCW += filterLfoStep;
-        const uint8_t trianglePhase = ((uint8_t*)&playFilterLfoPCW)[3];
+      const uint32_t vcaLfoStep = playVcaLfoFTW;
+      if (vcaLfoStep != 0) {
+        playVcaLfoPCW += vcaLfoStep;
+        const uint8_t trianglePhase = ((uint8_t*)&playVcaLfoPCW)[3];
         const uint8_t triangleAmount = (trianglePhase & 0x80) ?
           (uint8_t)(256U - trianglePhase) : trianglePhase;
-        playFilterAmount = ((uint16_t)playFilterDepth * triangleAmount + 64) >> 7;
+        const uint16_t attenuation =
+          (playVcaAttenuationDepth * triangleAmount + 64) >> 7;
+        playVcaGain = 256 - attenuation;
       }
     }
 
@@ -320,7 +318,9 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
         nextScaledVoiceSample(2, AMP[2]) +
         nextScaledVoiceSample(3, AMP[3]);
     }
-    mixQ7 = sourceZeroQ7 + filterPlayMix(liveMixQ7);
+    const uint16_t vcaGain = playVcaGain;
+    mixQ7 = sourceZeroQ7 + (vcaGain >= 256 ? liveMixQ7 :
+      scalePlayMix(liveMixQ7, (uint8_t)vcaGain));
 
     if (!renderDrum || voiceIndex != 0) {
       const uint16_t pitch = PITCH[voiceIndex];
@@ -546,34 +546,32 @@ class synth
       }
     }
 
-    // Configures the live low-pass filter and its optional LFO.
-    void configurePlayFilter(uint8_t level, uint16_t frequencyTenths)
+    // Configures the live VCA's maximum attenuation and optional triangle LFO.
+    void configurePlayVca(uint16_t depth, uint16_t frequencyTenths)
     {
-      if (level > 7) {
-        level = 7;
-      }
-      const uint32_t lfoStep = level == 0 || frequencyTenths == 0 ? 0 :
+      if (depth > 256) depth = 256;
+      const uint32_t lfoStep = depth == 0 || frequencyTenths == 0 ? 0 :
         (uint32_t)frequencyTenths * 171799UL;
 
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        const bool wasActive = playFilterLfoFTW != 0;
-        playFilterDepth = level;
-        playFilterLfoFTW = lfoStep;
+        const bool wasActive = playVcaLfoFTW != 0;
+        playVcaAttenuationDepth = depth;
+        playVcaLfoFTW = lfoStep;
         if (lfoStep == 0) {
-          playFilterAmount = level;
+          playVcaGain = 256 - depth;
         } else if (!wasActive) {
-          playFilterLfoPCW = 0x80000000UL;
-          playFilterAmount = level;
+          playVcaLfoPCW = 0x80000000UL;
+          playVcaGain = 256 - depth;
         }
       }
     }
 
-    void disablePlayFilter()
+    void disablePlayVca()
     {
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        playFilterDepth = 0;
-        playFilterAmount = 0;
-        playFilterLfoFTW = 0;
+        playVcaAttenuationDepth = 0;
+        playVcaGain = 256;
+        playVcaLfoFTW = 0;
       }
     }
 

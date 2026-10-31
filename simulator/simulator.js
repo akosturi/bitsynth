@@ -32,12 +32,12 @@ const OCR1AH = 0x89;
 // 1023 = fully clockwise).
 const TEST_PRESETS = {
   'play-organ': {
-    label: 'PLAY ORGN / CHRD / SIN 2 Hz / filter 4 Hz',
+    label: 'PLAY ORGN / CHRD / SIN 2 Hz / VCA 4 Hz',
     bootSettings: [0, 601, 516, 516],
     // ORGN preset, C root, major scale and CHRD style.
     playSettings: [950, 0, 0, 306],
     steps: [0, 89, 178, 223, 312, 401, 489, 534],
-    // MODE-shifted controls: morph 2 Hz, SIN, full filter, filter LFO 4 Hz.
+    // MODE-shifted controls: morph 2 Hz, SIN, full VCA depth, VCA LFO 4 Hz.
     shiftedSettings: [417, 173, 1023, 832],
   },
 };
@@ -445,9 +445,9 @@ async function applyTestPreset(id) {
     settings[0].setValue(preset.shiftedSettings[0], true);
     await waitForLcd('2 Hz morph', ([, line2]) => line2.includes('L:2.0'));
     settings[2].setValue(preset.shiftedSettings[2], true);
-    await waitForLcd('full filter', ([, line2]) => line2.includes('F:101'));
+    await waitForLcd('full VCA depth', ([, line2]) => line2.includes('V:0%'));
     settings[3].setValue(preset.shiftedSettings[3], true);
-    await waitForLcd('4 Hz filter', ([, line2]) => line2.includes('FL:4.0'));
+    await waitForLcd('4 Hz VCA', ([, line2]) => line2.includes('VL:4.0'));
 
     setModePressed(false);
     await wait(180);

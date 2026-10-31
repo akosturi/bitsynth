@@ -9,7 +9,7 @@ The same firmware runs on the physical instrument and in the browser simulator. 
 - **Hardware:** Arduino Pro Mini, 5 V / 16 MHz, ATmega328P
 - **Firmware build:** PlatformIO environment `hardware`
 - **Browser simulator:** the physical front-panel view in `simulator/hardware.html`
-- **Current `hardware` build footprint:** 29,232 bytes flash (95.2%) and 725 bytes RAM (35.4%)
+- **Current `hardware` build footprint:** 27,886 bytes flash (90.8%) and 724 bytes RAM (35.4%)
 
 An Uno or Nano with the same ATmega328P clock and voltage can also run the firmware if wired to the same pins.
 
@@ -76,7 +76,7 @@ Click the screw in the lower-right corner of the simulated front panel to start 
 
 - `ORGN` live preset, C root, major scale, `CHRD` style, and octave 2
 - sine as the second waveform with a 2.0 Hz morph LFO
-- the strongest shared live filter setting with a 4.0 Hz filter LFO
+- full shared live VCA depth with a 4.0 Hz VCA LFO
 
 The setup follows the normal control path, including MODE-button presses, analog-control filtering, shifted controls, and LCD confirmation. Once every setting has been confirmed, the simulator sounds a short test chord.
 
@@ -192,12 +192,12 @@ Hold **MODE** while moving a parameter pot:
 |---|---|
 | Parameter 1 | Wavetable-morph triangle LFO: off or 0.1-5.0 Hz |
 | Parameter 2 | Second waveform: off, sine, triangle, square, or saw |
-| Parameter 3 | Shared live low-pass filter: off, then approximately 6.6 kHz to 101 Hz |
-| Parameter 4 | Filter triangle LFO: off or 0.1-5.0 Hz |
+| Parameter 3 | Shared live VCA depth: off, then an adjustable 100-0% lower volume endpoint |
+| Parameter 4 | VCA triangle LFO: off or 0.1-5.0 Hz |
 
-With a second waveform but no morph LFO, only the second waveform is used. With the LFO enabled, all three live voices morph between the preset and second waveform at matching phase positions; no extra oscillator is required. The filter and both LFOs affect only the three live voices, never the background sequence.
+With a second waveform but no morph LFO, only the second waveform is used. With the LFO enabled, all three live voices morph between the preset and second waveform at matching phase positions; no extra oscillator is required. The VCA and both LFOs affect only the three live voices, never the background sequence. With its LFO off, the VCA holds the selected lower endpoint; with the LFO enabled, it moves between full volume and that endpoint.
 
-The morph LFO is available only when a second waveform is selected, and the filter LFO only when the filter is enabled.
+The morph LFO is available only when a second waveform is selected, and the VCA LFO only when VCA depth is enabled.
 
 After shifted editing, soft takeover prevents the normal preset, root, scale, and style values from jumping. Each normal function becomes active again only after its knob is moved deliberately.
 
@@ -231,7 +231,7 @@ On Windows, set `RAW_TO_H_OUTPUT_BITS` to `9` near the top of `util/raw_to_h.bat
 - **Real-time audio:** Timer2 runs the audio interrupt at 20 kHz. Timer1 generates 9-bit Fast PWM on `D9` at 31.25 kHz.
 - **Synthesis:** 256-sample wavetables, phase accumulators, four envelope-driven normal voices, and a separate eight-oscillator drone path. Core tables and drum data live in flash.
 - **Resource-aware mixing:** the drone engine recalculates one oscillator pair per audio interrupt. Each pair is therefore updated at 5 kHz while the PWM output remains at 20 kHz. This is an intentional quality/CPU trade-off for the 80-600 Hz range.
-- **PLAY isolation:** morphing, its 2.5 kHz control-rate LFOs, and the shared one-pole low-pass filter operate only on live voices 1-3. Voice 0 remains a clean background sequencer voice.
+- **PLAY isolation:** morphing, its 2.5 kHz control-rate LFOs, and the shared 9-bit linear VCA operate only on live voices 1-3. Voice 0 remains a clean background sequencer voice.
 - **PWM quality:** the internal mix uses additional fixed-point precision before conversion to 9-bit PWM, with quantization-error feedback and dither where appropriate.
 - **Stable controls:** multiplexed analog inputs use settling reads, median sampling, smoothing, movement confirmation, and hysteresis. Buttons are debounced in software.
 - **Efficient LCD updates:** a two-line shadow buffer writes only changed characters, avoiding visible flicker and unnecessary time in the control loop.
@@ -241,7 +241,7 @@ On Windows, set `RAW_TO_H_OUTPUT_BITS` to `9` near the top of `util/raw_to_h.bat
 
 - Settings and patterns are not saved to EEPROM; reset restores the compiled defaults.
 - The normal synth engine has four voices. PLAY permanently assigns one to the background sequence.
-- The PLAY filter is a shared, non-resonant one-pole filter.
+- The PLAY VCA is a shared digital amplitude stage; it does not replace the required passive PWM output filter.
 - DRONE uses the pair-wise update strategy described above and has no normal per-note envelopes.
 - Flash is intentionally used very tightly; check the PlatformIO size report after adding code or samples.
 

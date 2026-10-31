@@ -18,7 +18,6 @@ const uint8_t kStepPotsPerLoop = 2;
 const uint8_t kDroneWaveCount = 4;
 const uint8_t kPlayMorphWaveCount = 4;
 const uint8_t kPlayMorphOff = 255;
-const uint8_t kPlayFilterLevelCount = 8;
 const uint8_t kSeqPresetCount = 8;
 const uint8_t kLivePresetCount = 7;
 const uint8_t kDrumCount = DRUM_SAMPLE_COUNT;
@@ -113,10 +112,6 @@ const char kDroneWaveLabels[kDroneWaveCount][4] PROGMEM = {"SIN", "TRI", "SQR", 
 const char kRootLabels[12][3] PROGMEM = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
 const char kScaleLabels[kScaleCount][4] PROGMEM = {"MAJ", "MIN", "PEN", "BLU"};
 const char kStyleLabels[kPlayStyleCount][5] PROGMEM = {"POLY", "CHRD", "UP", "DOWN", "UPDN"};
-const char kPlayFilterLabels[kPlayFilterLevelCount][5] PROGMEM = {
-  "OFF", "6K6", "4K4", "2K2", "916", "425", "205", "101"
-};
-
 synth edgar;
 InstrumentMode instrumentMode = MODE_SEQ;
 SeqControls seqControls = {PRESET_SUB, 126, 64, 64};
@@ -135,12 +130,12 @@ uint8_t playMorphWave = kPlayMorphOff;
 uint16_t playMorphLfoRateTenths = 0;
 uint16_t playMorphShiftRaw[2] = {0, 0};
 bool playMorphControlLocked[2] = {false, false};
-uint8_t playFilterLevel = 0;
-uint16_t playFilterShiftRaw = 0;
-bool playFilterControlLocked = false;
-uint16_t playFilterLfoRateTenths = 0;
-uint16_t playFilterLfoShiftRaw = 0;
-bool playFilterLfoControlLocked = false;
+uint16_t playVcaDepth = 0;
+uint16_t playVcaShiftRaw = 0;
+bool playVcaControlLocked = false;
+uint16_t playVcaLfoRateTenths = 0;
+uint16_t playVcaLfoShiftRaw = 0;
+bool playVcaLfoControlLocked = false;
 
 uint8_t currentStep = 0;
 uint8_t playingStep = 255;
@@ -483,15 +478,14 @@ void readPlayControls(const uint16_t values[], unsigned long now) {
       }
     }
 
-    if (values[2] != playFilterShiftRaw) {
-      playFilterShiftRaw = values[2];
-      playFilterControlLocked = true;
+    if (values[2] != playVcaShiftRaw) {
+      playVcaShiftRaw = values[2];
+      playVcaControlLocked = true;
       modeButtonChordUsed = true;
-      const uint8_t nextLevel = mapIndexHysteresis(
-        values[2], playFilterLevel, kPlayFilterLevelCount);
-      if (nextLevel != playFilterLevel) {
-        playFilterLevel = nextLevel;
-        edgar.configurePlayFilter(playFilterLevel, playFilterLfoRateTenths);
+      const uint16_t nextDepth = mapWithHysteresis(values[2], playVcaDepth, 256, 0);
+      if (nextDepth != playVcaDepth) {
+        playVcaDepth = nextDepth;
+        edgar.configurePlayVca(playVcaDepth, playVcaLfoRateTenths);
         editedPlayShift = 3;
         editedStep = 255;
         editedDrone = 255;
@@ -501,19 +495,19 @@ void readPlayControls(const uint16_t values[], unsigned long now) {
       }
     }
 
-    if (values[3] != playFilterLfoShiftRaw) {
-      playFilterLfoShiftRaw = values[3];
-      playFilterLfoControlLocked = true;
+    if (values[3] != playVcaLfoShiftRaw) {
+      playVcaLfoShiftRaw = values[3];
+      playVcaLfoControlLocked = true;
       modeButtonChordUsed = true;
-      if (playFilterLevel == 0) {
+      if (playVcaDepth == 0) {
         editedPlayShift = 3;
         inlineEditUntilMs = now + kEditViewMs;
         displayDirty = true;
       } else {
         const uint16_t nextRate = lfoRateForRaw(values[3]);
-        if (nextRate != playFilterLfoRateTenths) {
-          playFilterLfoRateTenths = nextRate;
-          edgar.configurePlayFilter(playFilterLevel, playFilterLfoRateTenths);
+        if (nextRate != playVcaLfoRateTenths) {
+          playVcaLfoRateTenths = nextRate;
+          edgar.configurePlayVca(playVcaDepth, playVcaLfoRateTenths);
           editedPlayShift = 4;
           editedStep = 255;
           editedDrone = 255;
@@ -551,24 +545,24 @@ void readPlayControls(const uint16_t values[], unsigned long now) {
     }
   }
 
-  if (playFilterControlLocked) {
-    if (abs((int16_t)values[2] - (int16_t)playFilterShiftRaw) >= kSettingMovementThreshold) {
-      playFilterControlLocked = false;
+  if (playVcaControlLocked) {
+    if (abs((int16_t)values[2] - (int16_t)playVcaShiftRaw) >= kSettingMovementThreshold) {
+      playVcaControlLocked = false;
     }
   }
   uint8_t next;
-  if (!playFilterControlLocked) {
+  if (!playVcaControlLocked) {
     next = mapIndexHysteresis(values[2], playControls.scale, kScaleCount);
     if (next != playControls.scale) {
       playControls.scale = next; revoiceHeldButtons(); displayDirty = true;
     }
   }
-  if (playFilterLfoControlLocked) {
-    if (abs((int16_t)values[3] - (int16_t)playFilterLfoShiftRaw) >= kSettingMovementThreshold) {
-      playFilterLfoControlLocked = false;
+  if (playVcaLfoControlLocked) {
+    if (abs((int16_t)values[3] - (int16_t)playVcaLfoShiftRaw) >= kSettingMovementThreshold) {
+      playVcaLfoControlLocked = false;
     }
   }
-  if (!playFilterLfoControlLocked) {
+  if (!playVcaLfoControlLocked) {
     next = mapIndexHysteresis(values[3], playControls.style, kPlayStyleCount);
     if (next != playControls.style) {
       playControls.style = next; arpPosition = 0; arpDirection = 1; revoiceHeldButtons();
@@ -682,8 +676,8 @@ void scanModeButton(unsigned long now) {
       if (instrumentMode == MODE_PLAY) {
         playMorphShiftRaw[0] = settingValues[0];
         playMorphShiftRaw[1] = settingValues[1];
-        playFilterShiftRaw = settingValues[2];
-        playFilterLfoShiftRaw = settingValues[3];
+        playVcaShiftRaw = settingValues[2];
+        playVcaLfoShiftRaw = settingValues[3];
       } else if (instrumentMode == MODE_DRONE) {
         for (uint8_t pair = 0; pair < kSettingCount; ++pair) {
           droneLfoShiftRaw[pair] = settingValues[pair];
@@ -750,7 +744,7 @@ void changeMode(InstrumentMode nextMode, unsigned long now) {
   if (previous == MODE_PLAY) {
     clearHeldNotes();
     edgar.disablePlayMorph();
-    edgar.disablePlayFilter();
+    edgar.disablePlayVca();
   }
   edgar.stopDrum();
   stopNormalVoices();
@@ -926,7 +920,7 @@ void applyLiveConfiguration() {
   const uint8_t secondaryWave = secondaryEnabled ? playMorphWave : SINE;
   edgar.configurePlayMorph(
     preset.wave, secondaryWave, playMorphLfoRateTenths, secondaryEnabled);
-  edgar.configurePlayFilter(playFilterLevel, playFilterLfoRateTenths);
+  edgar.configurePlayVca(playVcaDepth, playVcaLfoRateTenths);
   for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) {
     edgar.setEnvelope(voice, preset.envelope);
     edgar.setLength(voice, preset.length); edgar.setMod(voice, preset.modulation);
@@ -1200,12 +1194,18 @@ void renderPlayDashboard(bool inlineEditVisible) {
     if (playMorphLfoRateTenths == 0) frameText(1, 11, F("OFF"));
     else frameTenths(1, 11, playMorphLfoRateTenths);
   } else if (editedPlayShift == 3) {
-    frameText(1, 9, F("F:"));
-    frameProgmemText(1, 11, kPlayFilterLabels[playFilterLevel]);
+    frameText(1, 9, F("V:"));
+    if (playVcaDepth == 0) frameText(1, 11, F("OFF"));
+    else {
+      const uint8_t endpointPercent =
+        ((256 - playVcaDepth) * 100UL + 128) >> 8;
+      frameNumber(1, 11, endpointPercent);
+      frameChar(1, 12 + (endpointPercent >= 10) + (endpointPercent >= 100), '%');
+    }
   } else {
-    frameText(1, 9, F("FL:"));
-    if (playFilterLfoRateTenths == 0) frameText(1, 12, F("OFF"));
-    else frameTenths(1, 12, playFilterLfoRateTenths);
+    frameText(1, 9, F("VL:"));
+    if (playVcaLfoRateTenths == 0) frameText(1, 12, F("OFF"));
+    else frameTenths(1, 12, playVcaLfoRateTenths);
   }
 }
 
