@@ -35,7 +35,7 @@ const TEST_PRESETS = {
     label: 'PLAY ORGN / CHRD / SIN 2 Hz / filter 4 Hz',
     bootSettings: [0, 601, 516, 516],
     // ORGN preset, C root, major scale and CHRD style.
-    playSettings: [831, 0, 0, 306],
+    playSettings: [950, 0, 0, 306],
     steps: [0, 89, 178, 223, 312, 401, 489, 534],
     // MODE-shifted controls: morph 2 Hz, SIN, full filter, filter LFO 4 Hz.
     shiftedSettings: [417, 173, 1023, 832],

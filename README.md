@@ -151,10 +151,9 @@ The LCD shows the preset, BPM, `COLOR`/`SHAPE`, and the gate pattern. `x` is an 
 | `BAS` | Saw + square sub-octave | Pitch sweep | Decay |
 | `PLK` | Triangle + square octave | Detune | Decay |
 | `BEL` | Sine harmonics + triangle | Inharmonic offset | Ring length |
-| `LED` | Saw + reverse saw | Detune/spread | Glide |
+| `LED` | Two saw waves | Detune/spread | Glide |
 | `CRD` | Four-layer chord | Minor / major / sus2 / sus4 | Decay |
 | `CIP` | Two square waves one octave apart | Sample-and-hold / crush | Decay |
-| `PRC` | Noise + low sine | Noise pitch and pitch sweep | Decay |
 | `DRM` | Monophonic PCM drum engine | Playback tuning | Decay |
 
 #### DRUM preset
@@ -177,7 +176,7 @@ PLAY reserves voice 0 for the monophonic background sequence and uses voices 1-3
 | Step pots 2-8 | Unused |
 | Step buttons 1-8 | Consecutive notes of the selected scale |
 
-Live presets are `PURE`, `SOFT`, `KEYS`, `PLUK`, `BASS`, `LEAD`, `ORGN`, and `LOFI`.
+Live presets are `PURE`, `SOFT`, `KEYS`, `PLUK`, `BASS`, `LEAD`, and `ORGN`.
 
 - `POLY` allows three simultaneous live notes. A fourth note steals the oldest voice.
 - `CHRD` plays a scale-derived 1-3-5 chord from the most recently held button.

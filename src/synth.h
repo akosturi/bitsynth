@@ -18,8 +18,6 @@
 #define TRIANGLE 1
 #define SQUARE   2
 #define SAW      3
-#define RAMP     4
-#define NOISE    5
 
 #define ENVELOPE0 0
 #define ENVELOPE1 1
@@ -59,8 +57,6 @@ static_assert(sizeof(SinTable) / sizeof(SinTable[0]) == (1U << SYNTH_WAVETABLE_I
 static_assert(sizeof(TriangleTable) / sizeof(TriangleTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid triangle table size");
 static_assert(sizeof(SquareTable) / sizeof(SquareTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid square table size");
 static_assert(sizeof(SawTable) / sizeof(SawTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid saw table size");
-static_assert(sizeof(RampTable) / sizeof(RampTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid ramp table size");
-static_assert(sizeof(NoiseTable) / sizeof(NoiseTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid noise table size");
 
 volatile uint16_t PCW[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
 volatile uint16_t FTW[SYNTH_VOICE_COUNT] = {1000, 200, 300, 400};
@@ -76,7 +72,6 @@ volatile uint16_t envs[SYNTH_VOICE_COUNT] = {
 volatile uint16_t EPCW[SYNTH_VOICE_COUNT] = {0x8000, 0x8000, 0x8000, 0x8000};
 volatile uint16_t EFTW[SYNTH_VOICE_COUNT] = {10, 10, 10, 10};
 volatile uint8_t divider = 4;
-volatile uint8_t noiseVoiceMask = 0;
 volatile int16_t pwmQuantizationError = 0;
 volatile uint8_t pwmDitherLfsr = 0xA5;
 volatile uint8_t sampleHoldFrames = 1;
@@ -102,7 +97,6 @@ volatile uint16_t droneWavs[SYNTH_DRONE_COUNT] = {
 };
 volatile uint8_t droneAmp[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
 volatile uint8_t droneTargetAmp[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
-volatile uint8_t droneNoiseMask = 0;
 volatile uint8_t droneRampVoice = 0;
 volatile uint8_t droneMixPair = 0;
 volatile int16_t dronePairMixQ7[SYNTH_DRONE_COUNT / 2] = {0, 0, 0, 0};
@@ -349,23 +343,17 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
   }
 
   uint16_t pwmSample = heldPwmSample;
-  const bool shapeOutput = renderDrone ? !droneNoiseMask : !noiseVoiceMask;
-
   if (updateOutput) {
-    if (shapeOutput) {
-      const uint8_t feedback = (pwmDitherLfsr & 0x01) ? 0xB8 : 0x00;
-      const uint8_t lfsr = (pwmDitherLfsr >> 1) ^ feedback;
-      pwmDitherLfsr = lfsr;
-      const uint8_t highNibble = lfsr / 16U;
-      const int16_t dither =
-        ((int8_t)(lfsr & 0x0F) - (int8_t)highNibble) << 2;
-      mixQ7 += pwmQuantizationError + dither;
-    } else {
-      pwmQuantizationError = 0;
-    }
+    const uint8_t feedback = (pwmDitherLfsr & 0x01) ? 0xB8 : 0x00;
+    const uint8_t lfsr = (pwmDitherLfsr >> 1) ^ feedback;
+    pwmDitherLfsr = lfsr;
+    const uint8_t highNibble = lfsr / 16U;
+    const int16_t dither =
+      ((int8_t)(lfsr & 0x0F) - (int8_t)highNibble) << 2;
+    mixQ7 += pwmQuantizationError + dither;
 
     const int16_t quantizedMix = (mixQ7 + 64) >> 7;
-    pwmQuantizationError = shapeOutput ? mixQ7 - (quantizedMix << 7) : 0;
+    pwmQuantizationError = mixQ7 - (quantizedMix << 7);
 
     int16_t nextPwmSample = 256 + quantizedMix;
     if (nextPwmSample < 0) {
@@ -376,8 +364,6 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
 
     pwmSample = (uint16_t)nextPwmSample;
     heldPwmSample = pwmSample;
-  } else if (!shapeOutput) {
-    pwmQuantizationError = 0;
   }
 
 #if defined(SYNTH_FIXED_OUTPUT_MODE)
@@ -407,10 +393,6 @@ class synth
           return (uint16_t)SquareTable;
         case SAW:
           return (uint16_t)SawTable;
-        case RAMP:
-          return (uint16_t)RampTable;
-        case NOISE:
-          return (uint16_t)NoiseTable;
         case SINE:
         default:
           return (uint16_t)SinTable;
@@ -524,11 +506,6 @@ class synth
 
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         wavs[voice] = selectedWave;
-        if (wave == NOISE) {
-          noiseVoiceMask |= (1 << voice);
-        } else {
-          noiseVoiceMask &= ~(1 << voice);
-        }
       }
     }
 
@@ -542,16 +519,12 @@ class synth
         (uint32_t)frequencyTenths * 171799UL;
       const bool active = secondaryEnabled && lfoStep != 0;
       const uint16_t outputPointer = secondaryEnabled && !active ? secondaryPointer : primaryPointer;
-      const bool noisy = active ?
-        (primaryWave == NOISE || secondaryWave == NOISE) :
-        ((secondaryEnabled ? secondaryWave : primaryWave) == NOISE);
 
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         const bool wasActive = playMorphActive;
         for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) {
           wavs[voice] = outputPointer;
         }
-        noiseVoiceMask = (noiseVoiceMask & 0x01) | (noisy ? 0x0E : 0x00);
         playMorphWavPtr = secondaryPointer;
         playMorphLfoFTW = lfoStep;
         if (active && !wasActive) {
@@ -807,11 +780,6 @@ class synth
       const uint16_t selectedWave = wavePointer(wave);
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         droneWavs[voice] = selectedWave;
-        if (wave == NOISE) {
-          droneNoiseMask |= (1 << voice);
-        } else {
-          droneNoiseMask &= ~(1 << voice);
-        }
       }
     }
 

@@ -19,8 +19,8 @@ const uint8_t kDroneWaveCount = 4;
 const uint8_t kPlayMorphWaveCount = 4;
 const uint8_t kPlayMorphOff = 255;
 const uint8_t kPlayFilterLevelCount = 8;
-const uint8_t kSeqPresetCount = 9;
-const uint8_t kLivePresetCount = 8;
+const uint8_t kSeqPresetCount = 8;
+const uint8_t kLivePresetCount = 7;
 const uint8_t kDrumCount = DRUM_SAMPLE_COUNT;
 const uint8_t kScaleCount = 4;
 const uint8_t kPlayStyleCount = 5;
@@ -49,7 +49,7 @@ const uint16_t kLfoFrequencyMaxTenths = 50;
 enum InstrumentMode : uint8_t { MODE_SEQ = 0, MODE_PLAY = 1, MODE_DRONE = 2 };
 enum ScaleMode : uint8_t { SCALE_MAJOR = 0, SCALE_MINOR = 1, SCALE_PENTATONIC = 2, SCALE_BLUES = 3 };
 enum PlayStyle : uint8_t { STYLE_POLY = 0, STYLE_CHORD = 1, STYLE_ARP_UP = 2, STYLE_ARP_DOWN = 3, STYLE_ARP_UPDOWN = 4 };
-enum SeqPresetId : uint8_t { PRESET_SUB = 0, PRESET_BASS, PRESET_PLUCK, PRESET_BELL, PRESET_LEAD, PRESET_CHORD, PRESET_CHIP, PRESET_PERC, PRESET_DRUM };
+enum SeqPresetId : uint8_t { PRESET_SUB = 0, PRESET_BASS, PRESET_PLUCK, PRESET_BELL, PRESET_LEAD, PRESET_CHORD, PRESET_CHIP, PRESET_DRUM };
 enum DrumId : uint8_t { DRUM_KICK = 0, DRUM_SNARE, DRUM_CLOSED_HAT };
 
 struct VoiceRecipe {
@@ -89,10 +89,9 @@ const SeqPreset kSeqPresets[kSeqPresetCount] PROGMEM = {
   {"BAS", 2, {{SAW, 0, ENVELOPE1, 64}, {SQUARE, -12, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}},
   {"PLK", 2, {{TRIANGLE, 0, ENVELOPE1, 64}, {SQUARE, 12, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}},
   {"BEL", 3, {{SINE, 0, ENVELOPE2, 64}, {SINE, 12, ENVELOPE2, 64}, {TRIANGLE, 19, ENVELOPE2, 64}, {SINE, 0, 0, 64}}},
-  {"LED", 2, {{SAW, 0, ENVELOPE0, 64}, {RAMP, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}},
+  {"LED", 2, {{SAW, 0, ENVELOPE0, 64}, {SAW, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}},
   {"CRD", 4, {{TRIANGLE, 0, ENVELOPE0, 64}, {TRIANGLE, 4, ENVELOPE0, 64}, {TRIANGLE, 7, ENVELOPE0, 64}, {SINE, 12, ENVELOPE0, 64}}},
   {"CIP", 2, {{SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 12, ENVELOPE3, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}},
-  {"PRC", 2, {{NOISE, 12, ENVELOPE1, 64}, {SINE, -12, ENVELOPE1, 42}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}},
   {"DRM", 1, {{SINE, 0, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}}
 };
 
@@ -100,7 +99,7 @@ const LivePreset kLivePresets[kLivePresetCount] PROGMEM = {
   {"PURE", SINE, ENVELOPE3, 116, 64, 1}, {"SOFT", SINE, ENVELOPE0, 102, 64, 1},
   {"KEYS", TRIANGLE, ENVELOPE2, 82, 64, 1}, {"PLUK", SQUARE, ENVELOPE1, 46, 64, 1},
   {"BASS", SAW, ENVELOPE0, 92, 58, 1}, {"LEAD", SAW, ENVELOPE3, 116, 68, 1},
-  {"ORGN", SQUARE, ENVELOPE3, 116, 64, 1}, {"LOFI", RAMP, ENVELOPE2, 88, 60, 3}
+  {"ORGN", SQUARE, ENVELOPE3, 116, 64, 1}
 };
 
 const char kDrumLabels[kDrumCount][5] PROGMEM = {"KICK", "SNAR", "CHH"};
@@ -840,7 +839,6 @@ uint8_t seqShapeLength(uint8_t preset, uint8_t shape) {
     case PRESET_BELL: return map(shape, 0, 127, 28, 112);
     case PRESET_CHORD: return map(shape, 0, 127, 20, 108);
     case PRESET_CHIP: return map(shape, 0, 127, 8, 100);
-    case PRESET_PERC: return map(shape, 0, 127, 2, 62);
     case PRESET_SUB: return map(shape, 0, 127, 24, 110);
     default: return 102;
   }
@@ -878,10 +876,6 @@ void triggerSequencerNote(uint8_t note, bool backgroundOnly) {
       const int16_t spread = map(seqControls.color, 0, 127, 0, 18);
       fine = voice == 0 ? -(spread / 2) : spread; glide = seqControls.shape;
     } else if (seqControls.preset == PRESET_CHORD) semitone = chordIntervalForVoice(voice, seqControls.color);
-    else if (seqControls.preset == PRESET_PERC) {
-      if (voice == 0) semitone = map(seqControls.color, 0, 127, -12, 24);
-      else modulation = map(seqControls.color, 0, 127, 30, 58);
-    }
     edgar.setWave(voice, recipe.wave); edgar.setEnvelope(voice, recipe.envelope);
     edgar.setLength(voice, length); edgar.setMod(voice, modulation);
     triggerNormalVoice(voice, detunePitch(pitchForNote((int16_t)note + semitone), fine), glide);
