@@ -45,9 +45,9 @@ A Pro Mini normally needs a suitable 5 V USB-to-serial adapter. If PlatformIO ca
 
 ## Browser simulator
 
-The simulator executes the compiled ATmega328P firmware locally in the browser using AVR8js. It is buildless, but it must be opened through HTTP because it fetches the firmware and hardware description.
+The simulator executes the compiled ATmega328P firmware locally in the browser using AVR8js. It is buildless; open `simulator/hardware.html` directly in a browser.
 
-From the repository root:
+Alternatively, serve the repository over HTTP from its root:
 
 ```sh
 python -m http.server 8000
@@ -59,7 +59,7 @@ Then open:
 http://localhost:8000/simulator/hardware.html
 ```
 
-The page automatically loads `.pio/build/hardware/firmware.hex`. If that file is unavailable, click the LCD and select an ELF, Intel HEX, or raw BIN firmware file. Click or press a key once if the browser has suspended audio playback. The simulator imports the pinned AVR8js module from jsDelivr, so the first load requires an internet connection.
+The page automatically loads `.pio/build/hardware/firmware.hex`. If that file is unavailable or the browser blocks local file access, click the LCD and select an ELF, Intel HEX, or raw BIN firmware file. Click or press a key once if the browser has suspended audio playback. The simulator imports the pinned AVR8js module from jsDelivr, so the first load requires an internet connection.
 
 Simulator controls:
 
@@ -220,6 +220,12 @@ Available waveforms are sine, triangle, square, and saw. Gates use short amplitu
 While holding **MODE**, parameter pots 1-4 set independent VCA triangle-LFO rates for oscillator pairs 1-2, 3-4, 5-6, and 7-8. Each ranges from off to 0.1-5.0 Hz. Soft takeover also applies when returning to waveform selection.
 
 Leaving DRONE returns to SEQ and restarts the sequence from step 1.
+
+## Wavetable utilities
+
+The wavetables in `src/tables.h` can be replaced with custom waveforms. Audacity is recommended for preparing them: use a mono track with exactly 256 samples and export it as headerless little-endian signed 16-bit PCM RAW.
+
+On Windows, set `RAW_TO_H_OUTPUT_BITS` to `9` near the top of `util/raw_to_h.bat`, then drag the `.raw` file onto the script. It creates a flash-ready `.h` file beside the source. Drag that generated header onto `util/sample_player.bat` to audition it. When copying the array into `src/tables.h`, retain the required table name, `PROGMEM` storage, 256-sample length, and signed 9-bit range.
 
 ## Architecture and critical implementation details
 
