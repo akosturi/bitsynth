@@ -40,6 +40,15 @@ const TEST_PRESETS = {
     // MODE-shifted controls: morph 2 Hz, SIN, full VCA depth, VCA LFO 4 Hz.
     shiftedSettings: [417, 173, 1023, 832],
   },
+  'drone-stress': {
+    label: 'DRONE 8x SAW / four VCA LFOs at 5 Hz',
+    bootSettings: [0, 420, 511, 511],
+    // Values below the endpoint still select SAW and deliberately release
+    // soft takeover after the shifted 5 Hz endpoint has been selected.
+    droneSettings: [900, 900, 900, 900],
+    lfoSettings: [1023, 1023, 1023, 1023],
+    steps: [1023, 1023, 1023, 1023, 1023, 1023, 1023, 1023],
+  },
 };
 
 const FALLBACK_HARDWARE = {
@@ -402,7 +411,7 @@ async function waitForLcd(label, predicate, timeout = 2500) {
   throw new Error(`${label} timed out (LCD: ${lcdText.join(' / ').trim()})`);
 }
 
-async function applyTestPreset(id) {
+async function applyPlayTestPreset(id) {
   const preset = TEST_PRESETS[id];
   if (!preset || preset.bootSettings.length !== settings.length ||
       preset.playSettings.length !== settings.length ||
@@ -468,6 +477,78 @@ async function applyTestPreset(id) {
     steps.forEach((_, index) => setStepPressed(index, false));
     button.disabled = false;
   }
+}
+
+async function tapModeAndWait(mode) {
+  setModePressed(true);
+  await wait(450);
+  setModePressed(false);
+  await waitForLcd(`${mode} mode`, ([line1, line2]) =>
+    line1.trim() === 'MODE' && line2.trim() === mode);
+}
+
+async function applyDroneTestPreset(id) {
+  const preset = TEST_PRESETS[id];
+  if (!preset || preset.bootSettings.length !== settings.length ||
+      preset.droneSettings.length !== settings.length ||
+      preset.lfoSettings.length !== settings.length || preset.steps.length !== steps.length) return;
+  const button = ui.presetButtons.find((item) => item.dataset.testPreset === id);
+  if (!firmwareImage || !machine) {
+    ui.presetStatus.textContent = 'Load firmware first';
+    return;
+  }
+
+  button.disabled = true;
+  ui.presetStatus.textContent = 'Configuring DRONE stress test...';
+
+  try {
+    preset.bootSettings.forEach((value, index) => settings[index].setValue(value, true));
+    preset.steps.forEach((value, index) => steps[index].setValue(value, true));
+    await resetMachine();
+    if (!running) await startAudio();
+    await wait(300);
+
+    await tapModeAndWait('PLAY');
+    await tapModeAndWait('DRONE');
+    await wait(180);
+
+    setModePressed(true);
+    await wait(450);
+    for (let pair = 0; pair < settings.length; pair++) {
+      settings[pair].setValue(preset.lfoSettings[pair], true);
+      await waitForLcd(`pair ${pair + 1} VCA LFO`, ([, line2]) =>
+        line2.includes(`L${pair + 1}:5.0`), 5000);
+    }
+    setModePressed(false);
+    await wait(180);
+
+    preset.droneSettings.forEach((value, index) => settings[index].setValue(value, true));
+    await waitForLcd('four SAW pairs', ([line1]) => line1.startsWith('DRN SA SA SA SA'));
+
+    machine.audioIsrCycles = 0;
+    machine.audioIsrMaxCycles = 0;
+    machine.audioIsrBlockMax = 0;
+    steps.forEach((_, index) => setStepPressed(index, true));
+    await wait(120);
+    steps.forEach((_, index) => setStepPressed(index, false));
+    await waitForLcd('eight active drones', ([, line2]) => line2.startsWith('xxxxxxxx'));
+    await wait(700);
+
+    ui.presetButtons.forEach((item) => {
+      const selected = item.dataset.testPreset === id;
+      item.classList.toggle('active', selected);
+      item.setAttribute('aria-pressed', String(selected));
+    });
+    ui.presetStatus.textContent = `${preset.label} ready`;
+  } finally {
+    setModePressed(false);
+    steps.forEach((_, index) => setStepPressed(index, false));
+    button.disabled = false;
+  }
+}
+
+function applyTestPreset(id) {
+  return id === 'drone-stress' ? applyDroneTestPreset(id) : applyPlayTestPreset(id);
 }
 
 class HD44780 {

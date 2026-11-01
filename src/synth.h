@@ -239,9 +239,13 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
     if (lfoStep != 0) {
       const uint32_t lfoPhase = droneLfoPCW[pair] + lfoStep;
       droneLfoPCW[pair] = lfoPhase;
-      const uint8_t trianglePhase = (uint8_t)(lfoPhase >> 24) >> 1;
-      const uint8_t gain = (trianglePhase & 0x40) ? 127 - trianglePhase : trianglePhase;
-      pairMixQ7 = (((pairMixQ7 >> 4) * gain) >> 2);
+      const uint8_t trianglePhase = (uint8_t)(lfoPhase >> 24);
+      const uint8_t triangleAmount = (trianglePhase & 0x80) ?
+        (uint8_t)(256U - trianglePhase) : trianglePhase;
+      const uint16_t gain = (uint16_t)triangleAmount << 1;
+      if (gain < 256) {
+        pairMixQ7 = scalePlayMix(pairMixQ7, (uint8_t)gain);
+      }
     }
     dronePairMixQ7[pair] = pairMixQ7;
     mixQ7 = dronePairMixQ7[0] + dronePairMixQ7[1] +
@@ -257,12 +261,14 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
       AMP[voiceIndex] = (envelopeIndex & 0x80) ? 0 : pgm_read_byte(envs[voiceIndex] + envelopeIndex);
     }
 
-    bool updatePlayLfos = false;
+    bool updatePlayVcaLfo = false;
+    bool updatePlayMorphLfo = false;
     if (voiceIndex == 0) {
       playLfoDivider ^= 1;
-      updatePlayLfos = playLfoDivider == 0;
+      updatePlayVcaLfo = playLfoDivider == 0;
+      updatePlayMorphLfo = !updatePlayVcaLfo;
     }
-    if (updatePlayLfos) {
+    if (updatePlayVcaLfo) {
       const uint32_t vcaLfoStep = playVcaLfoFTW;
       if (vcaLfoStep != 0) {
         playVcaLfoPCW += vcaLfoStep;
@@ -299,7 +305,7 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
 
     int16_t liveMixQ7;
     if (playMorphActive) {
-      if (updatePlayLfos) {
+      if (updatePlayMorphLfo) {
         const uint32_t morphLfoStep = playMorphLfoFTW;
         playMorphLfoPCW += morphLfoStep;
         const uint8_t trianglePhase = ((uint8_t*)&playMorphLfoPCW)[3];

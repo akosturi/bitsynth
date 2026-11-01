@@ -211,6 +211,7 @@ uint16_t pitchWordForFrequency(uint16_t frequency) {
 
 // Maps the reversed control range to LFO rate, reserving the endpoint for off.
 uint16_t lfoRateForRaw(uint16_t raw) {
+  if (raw <= kAnalogEndpointMargin) return kLfoFrequencyMaxTenths;
   if (raw >= 1023 - kAnalogEndpointMargin) return 0;
   const uint16_t travel = 1023 - kAnalogEndpointMargin;
   const uint16_t position = 1023 - raw - kAnalogEndpointMargin;

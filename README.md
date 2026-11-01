@@ -9,7 +9,7 @@ The same firmware runs on the physical instrument and in the browser simulator. 
 - **Hardware:** Arduino Pro Mini, 5 V / 16 MHz, ATmega328P
 - **Firmware build:** PlatformIO environment `hardware`
 - **Browser simulator:** the physical front-panel view in `simulator/hardware.html`
-- **Current `hardware` build footprint:** 27,886 bytes flash (90.8%) and 724 bytes RAM (35.4%)
+- **Current `hardware` build footprint:** 27,796 bytes flash (90.5%) and 724 bytes RAM (35.4%)
 
 An Uno or Nano with the same ATmega328P clock and voltage can also run the firmware if wired to the same pins.
 
@@ -72,7 +72,7 @@ The simulator models the real 9-bit, 31.25 kHz PWM signal and the documented pas
 
 ### Test and service mode
 
-Click the screw in the lower-right corner of the simulated front panel to start the hidden test and service mode. This resets the simulated firmware and automatically configures a demanding PLAY setup:
+Click either lower screw on the simulated front panel to start a hidden test and service setup. The lower-right screw resets the simulated firmware and automatically configures a demanding PLAY setup:
 
 - `ORGN` live preset, C root, major scale, `CHRD` style, and octave 2
 - sine as the second waveform with a 2.0 Hz morph LFO
@@ -80,10 +80,13 @@ Click the screw in the lower-right corner of the simulated front panel to start 
 
 The setup follows the normal control path, including MODE-button presses, analog-control filtering, shifted controls, and LCD confirmation. Once every setting has been confirmed, the simulator sounds a short test chord.
 
-Activating the mode also reveals the audio ISR cycle meter in the lower-right corner, for example:
+The lower-left screw configures a DRONE stress test with all eight oscillators active as SAW waves at 600 Hz and all four pair VCA LFOs running at 5.0 Hz. Its cycle measurement is reset immediately before the drone gates open, so the displayed maximum covers the fully active DRONE path.
+
+Activating either setup also reveals the audio ISR cycle meter in the lower-right corner. With the current build, the automated headless runs measured:
 
 ```text
-ISR 878 / 800 cycles (110%) · MAX 910
+PLAY:  ISR 763 / 800 cycles (95%) · MAX 780
+DRONE: ISR 550 / 800 cycles (69%) · MAX 554
 ```
 
 ## Hardware
@@ -216,7 +219,7 @@ DRONE stops the sequencer and switches to a dedicated eight-oscillator mixer.
 
 Available waveforms are sine, triangle, square, and saw. Gates use short amplitude ramps to reduce switching clicks.
 
-While holding **MODE**, parameter pots 1-4 set independent VCA triangle-LFO rates for oscillator pairs 1-2, 3-4, 5-6, and 7-8. Each ranges from off to 0.1-5.0 Hz. Soft takeover also applies when returning to waveform selection.
+While holding **MODE**, parameter pots 1-4 set independent VCA triangle-LFO rates for oscillator pairs 1-2, 3-4, 5-6, and 7-8. Each ranges from off to 0.1-5.0 Hz. The four pair VCAs use the same fine 9-bit linear amplitude scaling as PLAY. Soft takeover also applies when returning to waveform selection.
 
 Leaving DRONE returns to SEQ and restarts the sequence from step 1.
 
