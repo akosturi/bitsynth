@@ -193,10 +193,10 @@ Hold **MODE** while moving a parameter pot:
 
 | Control | Shifted function |
 |---|---|
-| Parameter 1 | Wavetable-morph triangle LFO: off or 0.1-5.0 Hz |
+| Parameter 1 | Wavetable-morph triangle LFO: off, then 0.05-0.20 Hz in 0.01 Hz steps, 0.2-5.0 Hz in 0.1 Hz steps, and 5-20 Hz in 0.5 Hz steps |
 | Parameter 2 | Second waveform: off, sine, triangle, square, or saw |
 | Parameter 3 | Shared live VCA depth: off, then an adjustable 100-0% lower volume endpoint |
-| Parameter 4 | VCA triangle LFO: off or 0.1-5.0 Hz |
+| Parameter 4 | VCA triangle LFO: off, then 0.05-0.20 Hz in 0.01 Hz steps, 0.2-5.0 Hz in 0.1 Hz steps, and 5-20 Hz in 0.5 Hz steps |
 
 With a second waveform but no morph LFO, only the second waveform is used. With the LFO enabled, all three live voices morph between the preset and second waveform at matching phase positions; no extra oscillator is required. The VCA and both LFOs affect only the three live voices, never the background sequence. With its LFO off, the VCA holds the selected lower endpoint; with the LFO enabled, it moves between full volume and that endpoint.
 
@@ -219,7 +219,7 @@ DRONE stops the sequencer and switches to a dedicated eight-oscillator mixer.
 
 Available waveforms are sine, triangle, square, and saw. Gates use short amplitude ramps to reduce switching clicks.
 
-While holding **MODE**, parameter pots 1-4 set independent VCA triangle-LFO rates for oscillator pairs 1-2, 3-4, 5-6, and 7-8. Each ranges from off to 0.1-5.0 Hz. The four pair VCAs use the same fine 9-bit linear amplitude scaling as PLAY. Soft takeover also applies when returning to waveform selection.
+While holding **MODE**, parameter pots 1-4 set independent VCA triangle-LFO rates for oscillator pairs 1-2, 3-4, 5-6, and 7-8. Each offers off plus 94 rates: 0.05-0.20 Hz in 0.01 Hz steps, 0.2-5.0 Hz in 0.1 Hz steps, and 5-20 Hz in 0.5 Hz steps. The four pair VCAs use the same fine 9-bit linear amplitude scaling as PLAY. Soft takeover also applies when returning to waveform selection.
 
 Leaving DRONE returns to SEQ and restarts the sequence from step 1.
 

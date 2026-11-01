@@ -525,12 +525,12 @@ class synth
 
     // Configures LFO-driven waveform morphing for the live voices.
     void configurePlayMorph(
-      uint8_t primaryWave, uint8_t secondaryWave, uint16_t frequencyTenths, bool secondaryEnabled)
+      uint8_t primaryWave, uint8_t secondaryWave, uint16_t frequencyHundredths, bool secondaryEnabled)
     {
       const uint16_t primaryPointer = wavePointer(primaryWave);
       const uint16_t secondaryPointer = wavePointer(secondaryWave);
-      const uint32_t lfoStep = frequencyTenths == 0 ? 0 :
-        (uint32_t)frequencyTenths * 171799UL;
+      const uint32_t lfoStep = frequencyHundredths == 0 ? 0 :
+        (uint32_t)frequencyHundredths * 17180UL;
       const bool active = secondaryEnabled && lfoStep != 0;
       const uint16_t outputPointer = secondaryEnabled && !active ? secondaryPointer : primaryPointer;
 
@@ -561,11 +561,11 @@ class synth
     }
 
     // Configures the live VCA's maximum attenuation and optional triangle LFO.
-    void configurePlayVca(uint16_t depth, uint16_t frequencyTenths)
+    void configurePlayVca(uint16_t depth, uint16_t frequencyHundredths)
     {
       if (depth > 256) depth = 256;
-      const uint32_t lfoStep = depth == 0 || frequencyTenths == 0 ? 0 :
-        (uint32_t)frequencyTenths * 171799UL;
+      const uint32_t lfoStep = depth == 0 || frequencyHundredths == 0 ? 0 :
+        (uint32_t)frequencyHundredths * 17180UL;
 
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         const bool wasActive = playVcaLfoFTW != 0;
@@ -827,14 +827,14 @@ class synth
       }
     }
 
-    void setDroneLfoRate(uint8_t pair, uint16_t frequencyTenths)
+    void setDroneLfoRate(uint8_t pair, uint16_t frequencyHundredths)
     {
       if (pair >= SYNTH_DRONE_COUNT / 2) {
         return;
       }
 
-      const uint32_t step = frequencyTenths == 0 ? 0 :
-        (uint32_t)frequencyTenths * 85899UL;
+      const uint32_t step = frequencyHundredths == 0 ? 0 :
+        (uint32_t)frequencyHundredths * 8590UL;
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         if (step == 0 || droneLfoFTW[pair] == 0) {
           droneLfoPCW[pair] = 0;

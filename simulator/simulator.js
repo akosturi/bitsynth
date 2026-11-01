@@ -38,15 +38,15 @@ const TEST_PRESETS = {
     playSettings: [950, 0, 0, 306],
     steps: [0, 89, 178, 223, 312, 401, 489, 534],
     // MODE-shifted controls: morph 2 Hz, SIN, full VCA depth, VCA LFO 4 Hz.
-    shiftedSettings: [417, 173, 1023, 832],
+    shiftedSettings: [363, 173, 1023, 587],
   },
   'drone-stress': {
     label: 'DRONE 8x SAW / four VCA LFOs at 5 Hz',
     bootSettings: [0, 420, 511, 511],
     // Values below the endpoint still select SAW and deliberately release
-    // soft takeover after the shifted 5 Hz endpoint has been selected.
+    // soft takeover after the shifted 5 Hz rate has been selected.
     droneSettings: [900, 900, 900, 900],
-    lfoSettings: [1023, 1023, 1023, 1023],
+    lfoSettings: [696, 696, 696, 696],
     steps: [1023, 1023, 1023, 1023, 1023, 1023, 1023, 1023],
   },
 };
@@ -1200,6 +1200,14 @@ function reportRuntimeError(error) {
   ui.runtimeNote.textContent = error instanceof Error ? error.message : String(error);
 }
 
+// A service preset uses the normal, deliberately filtered control path. A failed
+// LCD confirmation must not turn a recoverable preset timeout into an engine fault.
+function reportServicePresetError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  ui.presetStatus.textContent = `Service setup failed: ${message}`;
+  ui.runtimeNote.textContent = `Service setup failed; the simulator is still running. ${message}`;
+}
+
 async function resetMachine() {
   if (!firmwareImage) return;
   const wasRunning = running;
@@ -1323,7 +1331,7 @@ ui.presetButtons.forEach((button) => {
   button.addEventListener('click', () => {
     ui.cycleMeter.hidden = false;
     cycleMeterUpdatedAt = 0;
-    applyTestPreset(button.dataset.testPreset).catch(reportRuntimeError);
+    applyTestPreset(button.dataset.testPreset).catch(reportServicePresetError);
   });
 });
 drawScope();
