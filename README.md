@@ -156,7 +156,6 @@ The LCD shows the preset, BPM, `COLOR`/`SHAPE`, and the gate pattern. `x` is an 
 | `BEL` | Sine harmonics + triangle | Inharmonic offset | Ring length |
 | `LED` | Two saw waves | Detune/spread | Glide |
 | `CRD` | Four-layer chord | Minor / major / sus2 / sus4 | Decay |
-| `CIP` | Two square waves one octave apart | Sample-and-hold / crush | Decay |
 | `DRM` | Monophonic PCM drum engine | Playback tuning | Decay |
 
 #### DRUM preset

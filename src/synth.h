@@ -82,9 +82,6 @@ volatile uint16_t EFTW[SYNTH_VOICE_COUNT] = {10, 10, 10, 10};
 volatile uint8_t divider = 4;
 volatile int16_t pwmQuantizationError = 0;
 volatile uint8_t pwmDitherLfsr = 0xA5;
-volatile uint8_t sampleHoldFrames = 1;
-volatile uint8_t sampleHoldCounter = 0;
-volatile uint16_t heldPwmSample = 256;
 volatile bool playMorphActive = false;
 volatile uint16_t playMorphWavPtr = (uint16_t)SinTable;
 volatile uint32_t playMorphLfoPCW = 0x80000000UL;
@@ -345,40 +342,24 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
     }
   }
 
-  const uint8_t holdFrames = sampleHoldFrames;
-  bool updateOutput = true;
-  if (holdFrames > 1) {
-    if (sampleHoldCounter == 0) {
-      sampleHoldCounter = holdFrames - 1;
-    } else {
-      --sampleHoldCounter;
-      updateOutput = false;
-    }
+  const uint8_t feedback = (pwmDitherLfsr & 0x01) ? 0xB8 : 0x00;
+  const uint8_t lfsr = (pwmDitherLfsr >> 1) ^ feedback;
+  pwmDitherLfsr = lfsr;
+  const uint8_t highNibble = lfsr / 16U;
+  const int16_t dither =
+    ((int8_t)(lfsr & 0x0F) - (int8_t)highNibble) << 2;
+  mixQ7 += pwmQuantizationError + dither;
+
+  const int16_t quantizedMix = (mixQ7 + 64) >> 7;
+  pwmQuantizationError = mixQ7 - (quantizedMix << 7);
+
+  int16_t nextPwmSample = 256 + quantizedMix;
+  if (nextPwmSample < 0) {
+    nextPwmSample = 0;
+  } else if (nextPwmSample > 511) {
+    nextPwmSample = 511;
   }
-
-  uint16_t pwmSample = heldPwmSample;
-  if (updateOutput) {
-    const uint8_t feedback = (pwmDitherLfsr & 0x01) ? 0xB8 : 0x00;
-    const uint8_t lfsr = (pwmDitherLfsr >> 1) ^ feedback;
-    pwmDitherLfsr = lfsr;
-    const uint8_t highNibble = lfsr / 16U;
-    const int16_t dither =
-      ((int8_t)(lfsr & 0x0F) - (int8_t)highNibble) << 2;
-    mixQ7 += pwmQuantizationError + dither;
-
-    const int16_t quantizedMix = (mixQ7 + 64) >> 7;
-    pwmQuantizationError = mixQ7 - (quantizedMix << 7);
-
-    int16_t nextPwmSample = 256 + quantizedMix;
-    if (nextPwmSample < 0) {
-      nextPwmSample = 0;
-    } else if (nextPwmSample > 511) {
-      nextPwmSample = 511;
-    }
-
-    pwmSample = (uint16_t)nextPwmSample;
-    heldPwmSample = pwmSample;
-  }
+  const uint16_t pwmSample = (uint16_t)nextPwmSample;
 
 #if defined(SYNTH_FIXED_OUTPUT_MODE)
   #if SYNTH_FIXED_OUTPUT_MODE == CHA
@@ -694,20 +675,6 @@ class synth
       }
     }
 
-    void setSampleHold(uint8_t frames)
-    {
-      if (frames < 1) {
-        frames = 1;
-      } else if (frames > 16) {
-        frames = 16;
-      }
-
-      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        sampleHoldFrames = frames;
-        sampleHoldCounter = 0;
-      }
-    }
-
     void trigger(uint8_t voice)
     {
       if (!validVoice(voice)) {
@@ -798,8 +765,6 @@ class synth
           dronePairMixQ7[pair] = 0;
           droneLfoPCW[pair] = 0;
         }
-        sampleHoldCounter = 0;
-        heldPwmSample = 256;
         pwmQuantizationError = 0;
       }
     }

@@ -18,7 +18,7 @@ const uint8_t kStepPotsPerLoop = 2;
 const uint8_t kDroneWaveCount = 4;
 const uint8_t kPlayMorphWaveCount = 4;
 const uint8_t kPlayMorphOff = 255;
-const uint8_t kSeqPresetCount = 8;
+const uint8_t kSeqPresetCount = 7;
 const uint8_t kLivePresetCount = 7;
 const uint8_t kDrumCount = DRUM_SAMPLE_COUNT;
 const uint8_t kScaleCount = 4;
@@ -49,7 +49,7 @@ const uint8_t kLfoRateCount = 94;
 enum InstrumentMode : uint8_t { MODE_SEQ = 0, MODE_PLAY = 1, MODE_DRONE = 2 };
 enum ScaleMode : uint8_t { SCALE_MAJOR = 0, SCALE_MINOR = 1, SCALE_PENTATONIC = 2, SCALE_BLUES = 3 };
 enum PlayStyle : uint8_t { STYLE_POLY = 0, STYLE_CHORD = 1, STYLE_ARP_UP = 2, STYLE_ARP_DOWN = 3, STYLE_ARP_UPDOWN = 4 };
-enum SeqPresetId : uint8_t { PRESET_SUB = 0, PRESET_BASS, PRESET_PLUCK, PRESET_BELL, PRESET_LEAD, PRESET_CHORD, PRESET_CHIP, PRESET_DRUM };
+enum SeqPresetId : uint8_t { PRESET_SUB = 0, PRESET_BASS, PRESET_PLUCK, PRESET_BELL, PRESET_LEAD, PRESET_CHORD, PRESET_DRUM };
 enum DrumId : uint8_t { DRUM_KICK = 0, DRUM_SNARE, DRUM_CLOSED_HAT };
 
 struct VoiceRecipe {
@@ -71,7 +71,6 @@ struct LivePreset {
   uint8_t envelope;
   uint8_t length;
   uint8_t modulation;
-  uint8_t sampleHold;
 };
 
 struct SeqControls { uint8_t preset; uint8_t bpm; uint8_t color; uint8_t shape; };
@@ -91,18 +90,17 @@ const SeqPreset kSeqPresets[kSeqPresetCount] PROGMEM = {
   {"BEL", 3, {{SINE, 0, ENVELOPE2, 64}, {SINE, 12, ENVELOPE2, 64}, {TRIANGLE, 19, ENVELOPE2, 64}, {SINE, 0, 0, 64}}},
   {"LED", 2, {{SAW, 0, ENVELOPE0, 64}, {SAW, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}},
   {"CRD", 4, {{TRIANGLE, 0, ENVELOPE0, 64}, {TRIANGLE, 4, ENVELOPE0, 64}, {TRIANGLE, 7, ENVELOPE0, 64}, {SINE, 12, ENVELOPE0, 64}}},
-  {"CIP", 2, {{SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 12, ENVELOPE3, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}},
   {"DRM", 1, {{SINE, 0, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}}
 };
 
 const LivePreset kLivePresets[kLivePresetCount] PROGMEM = {
-  {"PURE", SINE, ENVELOPE3, 116, 64, 1},
-  {"SOFT", SINE, ENVELOPE0, 102, 64, 1},
-  {"KEYS", TRIANGLE, ENVELOPE2, 82, 64, 1},
-  {"PLUK", SQUARE, ENVELOPE1, 46, 64, 1},
-  {"BASS", SAW, ENVELOPE0, 92, 58, 1},
-  {"LEAD", SAW, ENVELOPE3, 116, 68, 1},
-  {"ORGN", SQUARE, ENVELOPE3, 116, 64, 1}
+  {"PURE", SINE, ENVELOPE3, 116, 64},
+  {"SOFT", SINE, ENVELOPE0, 102, 64},
+  {"KEYS", TRIANGLE, ENVELOPE2, 82, 64},
+  {"PLUK", SQUARE, ENVELOPE1, 46, 64},
+  {"BASS", SAW, ENVELOPE0, 92, 58},
+  {"LEAD", SAW, ENVELOPE3, 116, 68},
+  {"ORGN", SQUARE, ENVELOPE3, 116, 64}
 };
 
 const char kDrumLabels[kDrumCount][5] PROGMEM = {"KICK", "SNAR", "CHH"};
@@ -768,7 +766,6 @@ void changeMode(InstrumentMode nextMode, unsigned long now) {
   instrumentMode = nextMode;
 
   if (nextMode == MODE_DRONE) {
-    edgar.setSampleHold(1);
     for (uint8_t pair = 0; pair < kSettingCount; ++pair) {
       edgar.setDroneWave(pair * 2, dronePairWave[pair]);
       edgar.setDroneWave(pair * 2 + 1, dronePairWave[pair]);
@@ -791,7 +788,6 @@ void changeMode(InstrumentMode nextMode, unsigned long now) {
       lastStepMs = now;
       nextStepIntervalMs = bpmStepMs();
     }
-    edgar.setSampleHold(seqControls.preset == PRESET_CHIP ? map(seqControls.color, 0, 127, 1, 8) : 1);
     setEditText(F("MODE"), F("SEQ"), now);
   }
   displayDirty = true;
@@ -849,7 +845,6 @@ uint8_t seqShapeLength(uint8_t preset, uint8_t shape) {
     case PRESET_PLUCK: return map(shape, 0, 127, 4, 76);
     case PRESET_BELL: return map(shape, 0, 127, 28, 112);
     case PRESET_CHORD: return map(shape, 0, 127, 20, 108);
-    case PRESET_CHIP: return map(shape, 0, 127, 8, 100);
     case PRESET_SUB: return map(shape, 0, 127, 24, 110);
     default: return 102;
   }
@@ -860,16 +855,10 @@ int8_t chordIntervalForVoice(uint8_t voice, uint8_t color) {
   return (int8_t)pgm_read_byte(&intervals[min((uint8_t)(color >> 5), (uint8_t)3)][voice]);
 }
 
-uint8_t effectiveSampleHold() {
-  uint8_t hold = seqControls.preset == PRESET_CHIP ? map(seqControls.color, 0, 127, 1, 8) : 1;
-  if (instrumentMode == MODE_PLAY) { LivePreset live; readLivePreset(playControls.preset, live); hold = max(hold, live.sampleHold); }
-  return hold;
-}
-
 // Builds a sequencer voice stack from the preset and macro controls.
 void triggerSequencerNote(uint8_t note, bool backgroundOnly) {
   edgar.stopDrum();
-  SeqPreset preset; readSeqPreset(seqControls.preset, preset); edgar.setSampleHold(effectiveSampleHold());
+  SeqPreset preset; readSeqPreset(seqControls.preset, preset);
   const uint8_t voiceCount = backgroundOnly ? 1 : preset.voiceCount;
   const uint8_t length = seqShapeLength(seqControls.preset, seqControls.shape);
 
@@ -897,7 +886,6 @@ void triggerSequencerNote(uint8_t note, bool backgroundOnly) {
 void triggerDrum(uint8_t drum, bool backgroundOnly) {
   if (backgroundOnly) stopNormalVoice(0);
   else stopNormalVoices();
-  edgar.setSampleHold(effectiveSampleHold());
   normalCurrentPitch[0] = 0;
   normalTargetPitch[0] = 0;
   normalGlide[0] = 0;
@@ -942,7 +930,6 @@ void applyLiveConfiguration() {
     edgar.setEnvelope(voice, preset.envelope);
     edgar.setLength(voice, preset.length); edgar.setMod(voice, preset.modulation);
   }
-  edgar.setSampleHold(effectiveSampleHold());
 }
 
 uint8_t liveNoteForButton(uint8_t button) {
