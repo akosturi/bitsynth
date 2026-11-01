@@ -95,9 +95,12 @@ const SeqPreset kSeqPresets[kSeqPresetCount] PROGMEM = {
 };
 
 const LivePreset kLivePresets[kLivePresetCount] PROGMEM = {
-  {"PURE", SINE, ENVELOPE3, 116, 64, 1}, {"SOFT", SINE, ENVELOPE0, 102, 64, 1},
-  {"KEYS", TRIANGLE, ENVELOPE2, 82, 64, 1}, {"PLUK", SQUARE, ENVELOPE1, 46, 64, 1},
-  {"BASS", SAW, ENVELOPE0, 92, 58, 1}, {"LEAD", SAW, ENVELOPE3, 116, 68, 1},
+  {"PURE", SINE, ENVELOPE3, 116, 64, 1},
+  {"SOFT", SINE, ENVELOPE0, 102, 64, 1},
+  {"KEYS", TRIANGLE, ENVELOPE2, 82, 64, 1},
+  {"PLUK", SQUARE, ENVELOPE1, 46, 64, 1},
+  {"BASS", SAW, ENVELOPE0, 92, 58, 1},
+  {"LEAD", SAW, ENVELOPE3, 116, 68, 1},
   {"ORGN", SQUARE, ENVELOPE3, 116, 64, 1}
 };
 

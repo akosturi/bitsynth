@@ -23,6 +23,13 @@
 #define ENVELOPE1 1
 #define ENVELOPE2 2
 #define ENVELOPE3 3
+#define ENVELOPE4 4
+#define ENVELOPE5 5
+#define ENVELOPE6 6
+#define ENVELOPE7 7
+#define ENVELOPE8 8
+#define ENVELOPE9 9
+#define ENVELOPE10 10
 
 #define FS 20000UL
 
@@ -50,6 +57,7 @@ const uint8_t SYNTH_VOICE_COUNT = 4;
 const uint8_t SYNTH_DRONE_COUNT = 8;
 const uint8_t SYNTH_MIDI_NOTE_MAX = 127;
 const uint8_t SYNTH_LENGTH_MAX = 127;
+const uint8_t SYNTH_ENVELOPE_COUNT = 11;
 const uint8_t SYNTH_WAVETABLE_INDEX_BITS = 8;
 const uint8_t SYNTH_WAVETABLE_SHIFT = 16 - SYNTH_WAVETABLE_INDEX_BITS;
 
@@ -625,6 +633,27 @@ class synth
           break;
         case ENVELOPE3:
           selectedEnvelope = (uint16_t)Env3;
+          break;
+        case ENVELOPE4:
+          selectedEnvelope = (uint16_t)Env4;
+          break;
+        case ENVELOPE5:
+          selectedEnvelope = (uint16_t)Env5;
+          break;
+        case ENVELOPE6:
+          selectedEnvelope = (uint16_t)Env6;
+          break;
+        case ENVELOPE7:
+          selectedEnvelope = (uint16_t)Env7;
+          break;
+        case ENVELOPE8:
+          selectedEnvelope = (uint16_t)Env8;
+          break;
+        case ENVELOPE9:
+          selectedEnvelope = (uint16_t)Env9;
+          break;
+        case ENVELOPE10:
+          selectedEnvelope = (uint16_t)Env10;
           break;
       }
 
