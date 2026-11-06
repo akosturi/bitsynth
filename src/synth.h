@@ -55,15 +55,19 @@ static_assert(sizeof(hihatSample) == (hihatSampleLength * 9U + 7U) / 8U, "invali
 
 const uint8_t SYNTH_VOICE_COUNT = 4;
 const uint8_t SYNTH_DRONE_COUNT = 8;
-const uint8_t SYNTH_MIDI_NOTE_MAX = 127;
+const uint8_t SYNTH_MIDI_NOTE_MIN = 21;
+const uint8_t SYNTH_MIDI_NOTE_MAX = 108;
+const uint8_t SYNTH_MIDI_NOTE_COUNT = SYNTH_MIDI_NOTE_MAX - SYNTH_MIDI_NOTE_MIN + 1;
 const uint8_t SYNTH_LENGTH_MAX = 127;
 const uint8_t SYNTH_ENVELOPE_COUNT = 11;
 const uint8_t SYNTH_WAVETABLE_INDEX_BITS = 8;
 const uint8_t SYNTH_WAVETABLE_SHIFT = 16 - SYNTH_WAVETABLE_INDEX_BITS;
+const uint16_t SYNTH_GENERATED_SQUARE = 0;
+const uint16_t SYNTH_DEFAULT_PULSE_WIDTH = 0x8000;
 
+static_assert(sizeof(PITCHS) / sizeof(PITCHS[0]) == SYNTH_MIDI_NOTE_COUNT, "invalid MIDI pitch table size");
 static_assert(sizeof(SinTable) / sizeof(SinTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid sine table size");
 static_assert(sizeof(TriangleTable) / sizeof(TriangleTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid triangle table size");
-static_assert(sizeof(SquareTable) / sizeof(SquareTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid square table size");
 static_assert(sizeof(SawTable) / sizeof(SawTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid saw table size");
 
 volatile uint16_t PCW[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
@@ -71,8 +75,13 @@ volatile uint16_t FTW[SYNTH_VOICE_COUNT] = {1000, 200, 300, 400};
 volatile uint8_t AMP[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
 volatile uint16_t PITCH[SYNTH_VOICE_COUNT] = {500, 500, 500, 500};
 volatile int8_t MOD[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
-volatile uint16_t wavs[SYNTH_VOICE_COUNT] = {
+volatile uint16_t waveSources[SYNTH_VOICE_COUNT] = {
   (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable
+};
+// Full phase resolution makes pulse width independent from wavetable size.
+volatile uint16_t pulseWidths[SYNTH_VOICE_COUNT] = {
+  SYNTH_DEFAULT_PULSE_WIDTH, SYNTH_DEFAULT_PULSE_WIDTH,
+  SYNTH_DEFAULT_PULSE_WIDTH, SYNTH_DEFAULT_PULSE_WIDTH
 };
 volatile uint16_t envs[SYNTH_VOICE_COUNT] = {
   (uint16_t)Env0, (uint16_t)Env0, (uint16_t)Env0, (uint16_t)Env0
@@ -83,7 +92,7 @@ volatile uint8_t divider = 4;
 volatile int16_t pwmQuantizationError = 0;
 volatile uint8_t pwmDitherLfsr = 0xA5;
 volatile bool playMixActive = false;
-volatile uint16_t playMixWavPtr = (uint16_t)SinTable;
+volatile uint16_t playMixSource = (uint16_t)SinTable;
 volatile uint32_t playMixLfoPCW = 0x80000000UL;
 volatile uint32_t playMixLfoFTW = 0;
 volatile uint8_t playMixAmount = 128;
@@ -95,7 +104,7 @@ uint8_t playLfoDivider = 0;
 volatile bool droneMode = false;
 volatile uint16_t dronePCW[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
 volatile uint16_t droneFTW[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
-volatile uint16_t droneWavs[SYNTH_DRONE_COUNT] = {
+volatile uint16_t droneWaveSources[SYNTH_DRONE_COUNT] = {
   (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable,
   (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable
 };
@@ -118,6 +127,12 @@ static inline __attribute__((always_inline)) int16_t readSigned9Sample(
   uint16_t sampleAddress, uint16_t sampleIndex)
 {
   return (int16_t)pgm_read_word(sampleAddress + (sampleIndex << 1));
+}
+
+static inline __attribute__((always_inline)) int16_t generatedSquareSample(
+  uint16_t phase, uint16_t pulseWidth)
+{
+  return phase < pulseWidth ? 255 : -256;
 }
 
 // Decodes a signed 9-bit sample packed across byte boundaries.
@@ -154,13 +169,16 @@ static inline __attribute__((always_inline)) int16_t nextScaledVoiceSample(
   if (gain == 0) {
     return 0;
   }
-  return scaleSigned9Sample(
-    readSigned9Sample(wavs[voice], phase >> SYNTH_WAVETABLE_SHIFT), gain, 3);
+  const uint16_t source = waveSources[voice];
+  const int16_t sample = source == SYNTH_GENERATED_SQUARE ?
+    generatedSquareSample(phase, pulseWidths[voice]) :
+    readSigned9Sample(source, phase >> SYNTH_WAVETABLE_SHIFT);
+  return scaleSigned9Sample(sample, gain, 3);
 }
 
 // Adds a controllable amount of the secondary wave while preserving mix headroom.
 static inline __attribute__((always_inline)) int16_t nextScaledMixedVoiceSample(
-  uint8_t voice, uint16_t secondaryWave, uint8_t mixAmount, uint8_t gain)
+  uint8_t voice, uint16_t secondarySource, uint8_t mixAmount, uint8_t gain)
 {
   const uint16_t phase = PCW[voice] + FTW[voice];
   PCW[voice] = phase;
@@ -168,9 +186,12 @@ static inline __attribute__((always_inline)) int16_t nextScaledMixedVoiceSample(
     return 0;
   }
 
+  const uint16_t primarySource = waveSources[voice];
   const uint16_t index = phase >> SYNTH_WAVETABLE_SHIFT;
-  const int16_t sampleA = readSigned9Sample(wavs[voice], index);
-  const int16_t sampleB = readSigned9Sample(secondaryWave, index);
+  const int16_t sampleA = primarySource == SYNTH_GENERATED_SQUARE ?
+    generatedSquareSample(phase, pulseWidths[voice]) : readSigned9Sample(primarySource, index);
+  const int16_t sampleB = secondarySource == SYNTH_GENERATED_SQUARE ?
+    generatedSquareSample(phase, pulseWidths[voice]) : readSigned9Sample(secondarySource, index);
   const int16_t secondarySample = (sampleB * mixAmount) >> 7;
   // Halve before gain scaling: the summed 9-bit range would overflow its
   // deliberately 16-bit product at full envelope gain.
@@ -234,9 +255,11 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
     for (uint8_t voice = firstVoice; voice < firstVoice + 2; ++voice) {
       amplitude = droneAmp[voice];
       if (amplitude != 0) {
-        const uint16_t index =
-          (dronePCW[voice] += droneFTW[voice] << 2) >> SYNTH_WAVETABLE_SHIFT;
-        const int16_t sample = readSigned9Sample(droneWavs[voice], index);
+        const uint16_t phase = dronePCW[voice] += droneFTW[voice] << 2;
+        const uint16_t source = droneWaveSources[voice];
+        const int16_t sample = source == SYNTH_GENERATED_SQUARE ?
+          generatedSquareSample(phase, SYNTH_DEFAULT_PULSE_WIDTH) :
+          readSigned9Sample(source, phase >> SYNTH_WAVETABLE_SHIFT);
         pairMixQ7 += scaleSigned9Sample(sample, amplitude, 4);
       }
     }
@@ -318,7 +341,7 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
         playMixAmount = (trianglePhase & 0x80) ?
           (uint8_t)(256U - trianglePhase) : trianglePhase;
       }
-      const uint16_t secondaryWave = playMixWavPtr;
+      const uint16_t secondaryWave = playMixSource;
       const uint8_t mixAmount = playMixAmount;
       liveMixQ7 =
         nextScaledMixedVoiceSample(1, secondaryWave, mixAmount, AMP[1]) +
@@ -379,14 +402,14 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
 class synth
 {
   private:
-    uint16_t wavePointer(uint8_t wave) const
+    uint16_t waveSource(uint8_t wave) const
     {
       switch (wave)
       {
         case TRIANGLE:
           return (uint16_t)TriangleTable;
         case SQUARE:
-          return (uint16_t)SquareTable;
+          return SYNTH_GENERATED_SQUARE;
         case SAW:
           return (uint16_t)SawTable;
         case SINE:
@@ -498,10 +521,19 @@ class synth
         return;
       }
 
-      const uint16_t selectedWave = wavePointer(wave);
+      const uint16_t selectedWave = waveSource(wave);
 
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        wavs[voice] = selectedWave;
+        waveSources[voice] = selectedWave;
+      }
+    }
+
+    // Pulse width is the high portion of the 16-bit oscillator phase.
+    void setPulseWidth(uint8_t voice, uint16_t pulseWidth)
+    {
+      if (!validVoice(voice)) return;
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        pulseWidths[voice] = pulseWidth;
       }
     }
 
@@ -509,18 +541,18 @@ class synth
     void configurePlayMix(
       uint8_t primaryWave, uint8_t secondaryWave, uint16_t frequencyHundredths, bool secondaryEnabled)
     {
-      const uint16_t primaryPointer = wavePointer(primaryWave);
-      const uint16_t secondaryPointer = wavePointer(secondaryWave);
+      const uint16_t primarySource = waveSource(primaryWave);
+      const uint16_t secondarySource = waveSource(secondaryWave);
       const uint32_t lfoStep = !secondaryEnabled || frequencyHundredths == 0 ? 0 :
         (uint32_t)frequencyHundredths * 17180UL;
-      const bool lfoActive = secondaryEnabled && lfoStep != 0;
+      const bool lfoActive = secondaryEnabled && primaryWave != secondaryWave && lfoStep != 0;
 
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         const bool wasLfoActive = playMixLfoFTW != 0;
         for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) {
-          wavs[voice] = primaryPointer;
+          waveSources[voice] = primarySource;
         }
-        playMixWavPtr = secondaryPointer;
+        playMixSource = secondarySource;
         playMixLfoFTW = lfoStep;
         if (lfoActive && !wasLfoActive) {
           playMixLfoPCW = 0x80000000UL;
@@ -576,11 +608,13 @@ class synth
         return;
       }
 
-      if (midiNote > SYNTH_MIDI_NOTE_MAX) {
+      if (midiNote < SYNTH_MIDI_NOTE_MIN) {
+        midiNote = SYNTH_MIDI_NOTE_MIN;
+      } else if (midiNote > SYNTH_MIDI_NOTE_MAX) {
         midiNote = SYNTH_MIDI_NOTE_MAX;
       }
 
-      const uint16_t pitch = pgm_read_word(&PITCHS[midiNote]);
+      const uint16_t pitch = pgm_read_word(&PITCHS[midiNote - SYNTH_MIDI_NOTE_MIN]);
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         PITCH[voice] = pitch;
       }
@@ -775,9 +809,9 @@ class synth
         return;
       }
 
-      const uint16_t selectedWave = wavePointer(wave);
+      const uint16_t selectedWave = waveSource(wave);
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        droneWavs[voice] = selectedWave;
+        droneWaveSources[voice] = selectedWave;
       }
     }
 
