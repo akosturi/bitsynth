@@ -82,11 +82,11 @@ volatile uint16_t EFTW[SYNTH_VOICE_COUNT] = {10, 10, 10, 10};
 volatile uint8_t divider = 4;
 volatile int16_t pwmQuantizationError = 0;
 volatile uint8_t pwmDitherLfsr = 0xA5;
-volatile bool playMorphActive = false;
-volatile uint16_t playMorphWavPtr = (uint16_t)SinTable;
-volatile uint32_t playMorphLfoPCW = 0x80000000UL;
-volatile uint32_t playMorphLfoFTW = 0;
-volatile uint8_t playMorphAmount = 128;
+volatile bool playMixActive = false;
+volatile uint16_t playMixWavPtr = (uint16_t)SinTable;
+volatile uint32_t playMixLfoPCW = 0x80000000UL;
+volatile uint32_t playMixLfoFTW = 0;
+volatile uint8_t playMixAmount = 128;
 volatile uint16_t playVcaGain = 256;
 volatile uint16_t playVcaAttenuationDepth = 0;
 volatile uint32_t playVcaLfoPCW = 0x80000000UL;
@@ -158,9 +158,9 @@ static inline __attribute__((always_inline)) int16_t nextScaledVoiceSample(
     readSigned9Sample(wavs[voice], phase >> SYNTH_WAVETABLE_SHIFT), gain, 3);
 }
 
-// The silent fast path still advances phase, matching the normal renderer.
-static inline __attribute__((always_inline)) int16_t nextScaledMorphedVoiceSample(
-  uint8_t voice, uint16_t secondaryWave, uint8_t morphAmount, uint8_t gain)
+// Adds a controllable amount of the secondary wave while preserving mix headroom.
+static inline __attribute__((always_inline)) int16_t nextScaledMixedVoiceSample(
+  uint8_t voice, uint16_t secondaryWave, uint8_t mixAmount, uint8_t gain)
 {
   const uint16_t phase = PCW[voice] + FTW[voice];
   PCW[voice] = phase;
@@ -171,10 +171,11 @@ static inline __attribute__((always_inline)) int16_t nextScaledMorphedVoiceSampl
   const uint16_t index = phase >> SYNTH_WAVETABLE_SHIFT;
   const int16_t sampleA = readSigned9Sample(wavs[voice], index);
   const int16_t sampleB = readSigned9Sample(secondaryWave, index);
-  const uint8_t primaryAmount = 128 - morphAmount;
-  const int16_t sample =
-    ((sampleA * primaryAmount) + (sampleB * morphAmount)) >> 7;
-  return scaleSigned9Sample(sample, gain, 3);
+  const int16_t secondarySample = (sampleB * mixAmount) >> 7;
+  // Halve before gain scaling: the summed 9-bit range would overflow its
+  // deliberately 16-bit product at full envelope gain.
+  const int16_t mixedSample = (sampleA + secondarySample) >> 1;
+  return scaleSigned9Sample(mixedSample, gain, 3);
 }
 
 // Applies a 9-bit linear gain with error far below one PWM output step.
@@ -267,11 +268,11 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
     }
 
     bool updatePlayVcaLfo = false;
-    bool updatePlayMorphLfo = false;
+    bool updatePlayMixLfo = false;
     if (voiceIndex == 0) {
       playLfoDivider ^= 1;
       updatePlayVcaLfo = playLfoDivider == 0;
-      updatePlayMorphLfo = !updatePlayVcaLfo;
+      updatePlayMixLfo = !updatePlayVcaLfo;
     }
     if (updatePlayVcaLfo) {
       const uint32_t vcaLfoStep = playVcaLfoFTW;
@@ -309,20 +310,20 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
     }
 
     int16_t liveMixQ7;
-    if (playMorphActive) {
-      if (updatePlayMorphLfo) {
-        const uint32_t morphLfoStep = playMorphLfoFTW;
-        playMorphLfoPCW += morphLfoStep;
-        const uint8_t trianglePhase = ((uint8_t*)&playMorphLfoPCW)[3];
-        playMorphAmount = (trianglePhase & 0x80) ?
+    if (playMixActive) {
+      if (updatePlayMixLfo) {
+        const uint32_t mixLfoStep = playMixLfoFTW;
+        playMixLfoPCW += mixLfoStep;
+        const uint8_t trianglePhase = ((uint8_t*)&playMixLfoPCW)[3];
+        playMixAmount = (trianglePhase & 0x80) ?
           (uint8_t)(256U - trianglePhase) : trianglePhase;
       }
-      const uint16_t secondaryWave = playMorphWavPtr;
-      const uint8_t morphAmount = playMorphAmount;
+      const uint16_t secondaryWave = playMixWavPtr;
+      const uint8_t mixAmount = playMixAmount;
       liveMixQ7 =
-        nextScaledMorphedVoiceSample(1, secondaryWave, morphAmount, AMP[1]) +
-        nextScaledMorphedVoiceSample(2, secondaryWave, morphAmount, AMP[2]) +
-        nextScaledMorphedVoiceSample(3, secondaryWave, morphAmount, AMP[3]);
+        nextScaledMixedVoiceSample(1, secondaryWave, mixAmount, AMP[1]) +
+        nextScaledMixedVoiceSample(2, secondaryWave, mixAmount, AMP[2]) +
+        nextScaledMixedVoiceSample(3, secondaryWave, mixAmount, AMP[3]);
     } else {
       liveMixQ7 =
         nextScaledVoiceSample(1, AMP[1]) +
@@ -504,40 +505,39 @@ class synth
       }
     }
 
-    // Configures LFO-driven waveform morphing for the live voices.
-    void configurePlayMorph(
+    // Configures the secondary-wave mix and its optional triangle LFO.
+    void configurePlayMix(
       uint8_t primaryWave, uint8_t secondaryWave, uint16_t frequencyHundredths, bool secondaryEnabled)
     {
       const uint16_t primaryPointer = wavePointer(primaryWave);
       const uint16_t secondaryPointer = wavePointer(secondaryWave);
-      const uint32_t lfoStep = frequencyHundredths == 0 ? 0 :
+      const uint32_t lfoStep = !secondaryEnabled || frequencyHundredths == 0 ? 0 :
         (uint32_t)frequencyHundredths * 17180UL;
-      const bool active = secondaryEnabled && lfoStep != 0;
-      const uint16_t outputPointer = secondaryEnabled && !active ? secondaryPointer : primaryPointer;
+      const bool lfoActive = secondaryEnabled && lfoStep != 0;
 
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        const bool wasActive = playMorphActive;
+        const bool wasLfoActive = playMixLfoFTW != 0;
         for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) {
-          wavs[voice] = outputPointer;
+          wavs[voice] = primaryPointer;
         }
-        playMorphWavPtr = secondaryPointer;
-        playMorphLfoFTW = lfoStep;
-        if (active && !wasActive) {
-          playMorphLfoPCW = 0x80000000UL;
-          playMorphAmount = 128;
-        } else if (!active) {
-          playMorphAmount = 128;
+        playMixWavPtr = secondaryPointer;
+        playMixLfoFTW = lfoStep;
+        if (lfoActive && !wasLfoActive) {
+          playMixLfoPCW = 0x80000000UL;
+          playMixAmount = 128;
+        } else if (secondaryEnabled) {
+          playMixAmount = 128;
         }
-        playMorphActive = active;
+        playMixActive = secondaryEnabled;
       }
     }
 
-    void disablePlayMorph()
+    void disablePlayMix()
     {
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        playMorphActive = false;
-        playMorphLfoFTW = 0;
-        playMorphAmount = 128;
+        playMixActive = false;
+        playMixLfoFTW = 0;
+        playMixAmount = 128;
       }
     }
 

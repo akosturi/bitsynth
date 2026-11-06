@@ -16,8 +16,8 @@ const uint8_t kStepCount = 8;
 const uint8_t kSettingCount = 4;
 const uint8_t kStepPotsPerLoop = 2;
 const uint8_t kDroneWaveCount = 4;
-const uint8_t kPlayMorphWaveCount = 4;
-const uint8_t kPlayMorphOff = 255;
+const uint8_t kPlayMixWaveCount = 4;
+const uint8_t kPlayMixOff = 255;
 const uint8_t kSeqPresetCount = 7;
 const uint8_t kLivePresetCount = 7;
 const uint8_t kDrumCount = DRUM_SAMPLE_COUNT;
@@ -128,10 +128,10 @@ uint16_t droneLfoRateHundredths[kSettingCount] = {0, 0, 0, 0};
 uint16_t droneLfoShiftRaw[kSettingCount] = {0, 0, 0, 0};
 bool droneWaveLocked[kSettingCount] = {false, false, false, false};
 uint16_t dronePitchWord[kStepCount] = {0};
-uint8_t playMorphWave = kPlayMorphOff;
-uint16_t playMorphLfoRateHundredths = 0;
-uint16_t playMorphShiftRaw[2] = {0, 0};
-bool playMorphControlLocked[2] = {false, false};
+uint8_t playMixWave = kPlayMixOff;
+uint16_t playMixLfoRateHundredths = 0;
+uint16_t playMixShiftRaw[2] = {0, 0};
+bool playMixControlLocked[2] = {false, false};
 uint16_t playVcaDepth = 0;
 uint16_t playVcaShiftRaw = 0;
 bool playVcaControlLocked = false;
@@ -379,18 +379,18 @@ uint8_t mapIndexHysteresis(uint16_t raw, uint8_t current, uint8_t count) {
   return current;
 }
 
-// Maps the morph control while keeping its upper endpoint as the off state.
-uint8_t playMorphWaveForRaw(uint16_t raw) {
+// Maps the secondary-wave control while keeping its upper endpoint as off.
+uint8_t playMixWaveForRaw(uint16_t raw) {
   const uint16_t offBoundary = 1023 - kAnalogEndpointMargin;
-  if (playMorphWave == kPlayMorphOff) {
-    if (raw + kAnalogHysteresis >= offBoundary) return kPlayMorphOff;
+  if (playMixWave == kPlayMixOff) {
+    if (raw + kAnalogHysteresis >= offBoundary) return kPlayMixOff;
   } else if (raw >= offBoundary) {
-    return kPlayMorphOff;
+    return kPlayMixOff;
   }
 
   const uint16_t scaled = ((uint32_t)min(raw, offBoundary) * 1023UL) / offBoundary;
-  const uint8_t current = playMorphWave == kPlayMorphOff ? 0 : playMorphWave;
-  return mapIndexHysteresis(scaled, current, kPlayMorphWaveCount);
+  const uint8_t current = playMixWave == kPlayMixOff ? 0 : playMixWave;
+  return mapIndexHysteresis(scaled, current, kPlayMixWaveCount);
 }
 
 void setEditText(const __FlashStringHelper *title, const __FlashStringHelper *value, unsigned long now) {
@@ -453,13 +453,13 @@ void revoiceHeldButtons();
 // Handles normal play controls and mode-button secondary functions.
 void readPlayControls(const uint16_t values[], unsigned long now) {
   if (modeButtonStable == LOW) {
-    if (values[1] != playMorphShiftRaw[1]) {
-      playMorphShiftRaw[1] = values[1];
-      playMorphControlLocked[1] = true;
+    if (values[1] != playMixShiftRaw[1]) {
+      playMixShiftRaw[1] = values[1];
+      playMixControlLocked[1] = true;
       modeButtonChordUsed = true;
-      const uint8_t nextWave = playMorphWaveForRaw(values[1]);
-      if (nextWave != playMorphWave) {
-        playMorphWave = nextWave;
+      const uint8_t nextWave = playMixWaveForRaw(values[1]);
+      if (nextWave != playMixWave) {
+        playMixWave = nextWave;
         applyLiveConfiguration();
         editedPlayShift = 1;
         editedStep = 255;
@@ -470,18 +470,18 @@ void readPlayControls(const uint16_t values[], unsigned long now) {
       }
     }
 
-    if (values[0] != playMorphShiftRaw[0]) {
-      playMorphShiftRaw[0] = values[0];
-      playMorphControlLocked[0] = true;
+    if (values[0] != playMixShiftRaw[0]) {
+      playMixShiftRaw[0] = values[0];
+      playMixControlLocked[0] = true;
       modeButtonChordUsed = true;
-      if (playMorphWave == kPlayMorphOff) {
+      if (playMixWave == kPlayMixOff) {
         editedPlayShift = 1;
         inlineEditUntilMs = now + kEditViewMs;
         displayDirty = true;
       } else {
-        const uint16_t nextRate = lfoRateForRaw(values[0], playMorphLfoRateHundredths);
-        if (nextRate != playMorphLfoRateHundredths) {
-          playMorphLfoRateHundredths = nextRate;
+        const uint16_t nextRate = lfoRateForRaw(values[0], playMixLfoRateHundredths);
+        if (nextRate != playMixLfoRateHundredths) {
+          playMixLfoRateHundredths = nextRate;
           applyLiveConfiguration();
           editedPlayShift = 2;
           editedStep = 255;
@@ -535,12 +535,12 @@ void readPlayControls(const uint16_t values[], unsigned long now) {
     return;
   }
 
-  if (playMorphControlLocked[0]) {
-    if (abs((int16_t)values[0] - (int16_t)playMorphShiftRaw[0]) >= kSettingMovementThreshold) {
-      playMorphControlLocked[0] = false;
+  if (playMixControlLocked[0]) {
+    if (abs((int16_t)values[0] - (int16_t)playMixShiftRaw[0]) >= kSettingMovementThreshold) {
+      playMixControlLocked[0] = false;
     }
   }
-  if (!playMorphControlLocked[0]) {
+  if (!playMixControlLocked[0]) {
     const uint8_t next = mapIndexHysteresis(values[0], playControls.preset, kLivePresetCount);
     if (next != playControls.preset) {
       playControls.preset = next; applyLiveConfiguration(); revoiceHeldButtons();
@@ -548,12 +548,12 @@ void readPlayControls(const uint16_t values[], unsigned long now) {
     }
   }
 
-  if (playMorphControlLocked[1]) {
-    if (abs((int16_t)values[1] - (int16_t)playMorphShiftRaw[1]) >= kSettingMovementThreshold) {
-      playMorphControlLocked[1] = false;
+  if (playMixControlLocked[1]) {
+    if (abs((int16_t)values[1] - (int16_t)playMixShiftRaw[1]) >= kSettingMovementThreshold) {
+      playMixControlLocked[1] = false;
     }
   }
-  if (!playMorphControlLocked[1]) {
+  if (!playMixControlLocked[1]) {
     const uint8_t next = mapIndexHysteresis(values[1], playControls.root, 12);
     if (next != playControls.root) {
       playControls.root = next; revoiceHeldButtons(); displayDirty = true;
@@ -689,8 +689,8 @@ void scanModeButton(unsigned long now) {
       modeButtonLongHandled = false;
       modeButtonChordUsed = false;
       if (instrumentMode == MODE_PLAY) {
-        playMorphShiftRaw[0] = settingValues[0];
-        playMorphShiftRaw[1] = settingValues[1];
+        playMixShiftRaw[0] = settingValues[0];
+        playMixShiftRaw[1] = settingValues[1];
         playVcaShiftRaw = settingValues[2];
         playVcaLfoShiftRaw = settingValues[3];
       } else if (instrumentMode == MODE_DRONE) {
@@ -758,7 +758,7 @@ void changeMode(InstrumentMode nextMode, unsigned long now) {
   if (previous == MODE_DRONE) { edgar.stopAllDrones(); edgar.setDroneMode(false); }
   if (previous == MODE_PLAY) {
     clearHeldNotes();
-    edgar.disablePlayMorph();
+    edgar.disablePlayMix();
     edgar.disablePlayVca();
   }
   edgar.stopDrum();
@@ -921,10 +921,10 @@ void runSequencer(unsigned long now) {
 
 void applyLiveConfiguration() {
   LivePreset preset; readLivePreset(playControls.preset, preset);
-  const bool secondaryEnabled = playMorphWave != kPlayMorphOff;
-  const uint8_t secondaryWave = secondaryEnabled ? playMorphWave : SINE;
-  edgar.configurePlayMorph(
-    preset.wave, secondaryWave, playMorphLfoRateHundredths, secondaryEnabled);
+  const bool secondaryEnabled = playMixWave != kPlayMixOff;
+  const uint8_t secondaryWave = secondaryEnabled ? playMixWave : SINE;
+  edgar.configurePlayMix(
+    preset.wave, secondaryWave, playMixLfoRateHundredths, secondaryEnabled);
   edgar.configurePlayVca(playVcaDepth, playVcaLfoRateHundredths);
   for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) {
     edgar.setEnvelope(voice, preset.envelope);
@@ -1194,14 +1194,14 @@ void renderPlayDashboard(bool inlineEditVisible) {
     frameText(1, 9, playSequencerEnabled ? F("SEQ+") : F("SEQ-"));
   } else if (editedPlayShift == 1) {
     frameText(1, 9, F("B:"));
-    if (playMorphWave == kPlayMorphOff) frameText(1, 11, F("OFF"));
+    if (playMixWave == kPlayMixOff) frameText(1, 11, F("OFF"));
     else {
-      frameProgmemText(1, 11, kDroneWaveLabels[playMorphWave]);
+      frameProgmemText(1, 11, kDroneWaveLabels[playMixWave]);
     }
   } else if (editedPlayShift == 2) {
     frameText(1, 9, F("L:"));
-    if (playMorphLfoRateHundredths == 0) frameText(1, 11, F("OFF"));
-    else frameHundredths(1, 11, playMorphLfoRateHundredths);
+    if (playMixLfoRateHundredths == 0) frameText(1, 11, F("OFF"));
+    else frameHundredths(1, 11, playMixLfoRateHundredths);
   } else if (editedPlayShift == 3) {
     frameText(1, 9, F("V:"));
     if (playVcaDepth == 0) frameText(1, 11, F("OFF"));

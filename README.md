@@ -75,14 +75,14 @@ The simulator models the real 9-bit, 31.25 kHz PWM signal and the documented pas
 Click either lower screw on the simulated front panel to start a hidden test and service setup. The lower-right screw resets the simulated firmware and automatically configures a demanding PLAY setup:
 
 - `ORGN` live preset, C root, major scale, `CHRD` style, and octave 2
-- sine as the second waveform with a 2.0 Hz morph LFO
+- sine as the second waveform with a 2.0 Hz mix LFO
 - full shared live VCA depth with a 4.0 Hz VCA LFO
 
 The setup follows the normal control path, including MODE-button presses, analog-control filtering, shifted controls, and LCD confirmation. Once every setting has been confirmed, the simulator sounds a short test chord.
 
 The lower-left screw configures a DRONE stress test with all eight oscillators active as SAW waves at 600 Hz and all four pair VCA LFOs running at 5.0 Hz. Its cycle measurement is reset immediately before the drone gates open, so the displayed maximum covers the fully active DRONE path.
 
-Activating either setup also reveals the audio ISR cycle meter in the lower-right corner. With the current build, the automated headless runs measured:
+Activating either setup also reveals the audio ISR cycle meter in the lower-right corner. Use it to verify that the 800-cycle audio deadline is met after firmware changes. Historical pre-mix measurements were:
 
 ```text
 PLAY:  ISR 763 / 800 cycles (95%) · MAX 780
@@ -192,14 +192,14 @@ Hold **MODE** while moving a parameter pot:
 
 | Control | Shifted function |
 |---|---|
-| Parameter 1 | Wavetable-morph triangle LFO: off, then 0.05-0.20 Hz in 0.01 Hz steps, 0.2-5.0 Hz in 0.1 Hz steps, and 5-20 Hz in 0.5 Hz steps |
+| Parameter 1 | Secondary-wave mix triangle LFO: off, then 0.05-0.20 Hz in 0.01 Hz steps, 0.2-5.0 Hz in 0.1 Hz steps, and 5-20 Hz in 0.5 Hz steps |
 | Parameter 2 | Second waveform: off, sine, triangle, square, or saw |
 | Parameter 3 | Shared live VCA depth: off, then an adjustable 100-0% lower volume endpoint |
 | Parameter 4 | VCA triangle LFO: off, then 0.05-0.20 Hz in 0.01 Hz steps, 0.2-5.0 Hz in 0.1 Hz steps, and 5-20 Hz in 0.5 Hz steps |
 
-With a second waveform but no morph LFO, only the second waveform is used. With the LFO enabled, all three live voices morph between the preset and second waveform at matching phase positions; no extra oscillator is required. The VCA and both LFOs affect only the three live voices, never the background sequence. With its LFO off, the VCA holds the selected lower endpoint; with the LFO enabled, it moves between full volume and that endpoint.
+The second waveform is added to the preset waveform at matching phase positions. With its LFO off, it is mixed at its full amount; with the LFO enabled, the triangle LFO moves its contribution from silent to full. The two waveforms share headroom so their sum does not overload the PWM output. The VCA and both LFOs affect only the three live voices, never the background sequence. With its LFO off, the VCA holds the selected lower endpoint; with the LFO enabled, it moves between full volume and that endpoint.
 
-The morph LFO is available only when a second waveform is selected, and the VCA LFO only when VCA depth is enabled.
+The mix LFO is available only when a second waveform is selected, and the VCA LFO only when VCA depth is enabled.
 
 After shifted editing, soft takeover prevents the normal preset, root, scale, and style values from jumping. Each normal function becomes active again only after its knob is moved deliberately.
 
@@ -233,7 +233,7 @@ On Windows, set `RAW_TO_H_OUTPUT_BITS` to `9` near the top of `util/raw_to_h.bat
 - **Real-time audio:** Timer2 runs the audio interrupt at 20 kHz. Timer1 generates 9-bit Fast PWM on `D9` at 31.25 kHz.
 - **Synthesis:** 256-sample wavetables, phase accumulators, four envelope-driven normal voices, and a separate eight-oscillator drone path. Core tables and drum data live in flash.
 - **Resource-aware mixing:** the drone engine recalculates one oscillator pair per audio interrupt. Each pair is therefore updated at 5 kHz while the PWM output remains at 20 kHz. This is an intentional quality/CPU trade-off for the 80-600 Hz range.
-- **PLAY isolation:** morphing, its 2.5 kHz control-rate LFOs, and the shared 9-bit linear VCA operate only on live voices 1-3. Voice 0 remains a clean background sequencer voice.
+- **PLAY isolation:** secondary-wave mixing, its 2.5 kHz control-rate LFOs, and the shared 9-bit linear VCA operate only on live voices 1-3. Voice 0 remains a clean background sequencer voice.
 - **PWM quality:** the internal mix uses additional fixed-point precision before conversion to 9-bit PWM, with quantization-error feedback and dither where appropriate.
 - **Stable controls:** multiplexed analog inputs use settling reads, median sampling, smoothing, movement confirmation, and hysteresis. Buttons are debounced in software.
 - **Efficient LCD updates:** a two-line shadow buffer writes only changed characters, avoiding visible flicker and unnecessary time in the control loop.

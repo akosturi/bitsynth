@@ -32,12 +32,12 @@ const OCR1AH = 0x89;
 // 1023 = fully clockwise).
 const TEST_PRESETS = {
   'play-organ': {
-    label: 'PLAY ORGN / CHRD / SIN 2 Hz / VCA 4 Hz',
+    label: 'PLAY ORGN / CHRD / SIN MIX 2 Hz / VCA 4 Hz',
     bootSettings: [0, 601, 516, 516],
     // ORGN preset, C root, major scale and CHRD style.
     playSettings: [950, 0, 0, 306],
     steps: [0, 89, 178, 223, 312, 401, 489, 534],
-    // MODE-shifted controls: morph 2 Hz, SIN, full VCA depth, VCA LFO 4 Hz.
+    // MODE-shifted controls: mix 2 Hz, SIN, full VCA depth, VCA LFO 4 Hz.
     shiftedSettings: [363, 173, 1023, 587],
   },
   'drone-stress': {
@@ -450,9 +450,9 @@ async function applyPlayTestPreset(id) {
     await wait(450);
 
     settings[1].setValue(preset.shiftedSettings[1], true);
-    await waitForLcd('SIN morph', ([, line2]) => line2.includes('B:SIN'));
+    await waitForLcd('SIN mix', ([, line2]) => line2.includes('B:SIN'));
     settings[0].setValue(preset.shiftedSettings[0], true);
-    await waitForLcd('2 Hz morph', ([, line2]) => line2.includes('L:2.0'));
+    await waitForLcd('2 Hz mix', ([, line2]) => line2.includes('L:2.0'));
     settings[2].setValue(preset.shiftedSettings[2], true);
     await waitForLcd('full VCA depth', ([, line2]) => line2.includes('V:0%'));
     settings[3].setValue(preset.shiftedSettings[3], true);
