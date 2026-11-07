@@ -73,6 +73,7 @@ struct LivePreset {
   uint8_t envelope;
   uint8_t length;
   uint8_t modulation;
+  int8_t unisonCents;
 };
 
 struct SeqControls { uint8_t preset; uint8_t bpm; uint8_t color; uint8_t shape; };
@@ -96,13 +97,13 @@ const SeqPreset kSeqPresets[kSeqPresetCount] PROGMEM = {
 };
 
 const LivePreset kLivePresets[kLivePresetCount] PROGMEM = {
-  {"PURE", SINE, ENVELOPE3, 116, 64},
-  {"SOFT", SINE, ENVELOPE0, 102, 64},
-  {"KEYS", TRIANGLE, ENVELOPE2, 82, 64},
-  {"PLUK", SQUARE, ENVELOPE1, 46, 64},
-  {"BASS", SAW, ENVELOPE0, 92, 58},
-  {"LEAD", SAW, ENVELOPE3, 116, 68},
-  {"ORGN", SQUARE, ENVELOPE3, 116, 64}
+  {"PURE", SINE, ENVELOPE3, 116, 64, 0},
+  {"SOFT", SINE, ENVELOPE0, 102, 64, -5},
+  {"KEYS", TRIANGLE, ENVELOPE2, 82, 64, 4},
+  {"PLUK", SQUARE, ENVELOPE1, 46, 64, 0},
+  {"BASS", SAW, ENVELOPE0, 92, 58, -7},
+  {"LEAD", SAW, ENVELOPE3, 116, 68, 12},
+  {"ORGN", SQUARE, ENVELOPE3, 116, 64, -9}
 };
 
 const char kDrumLabels[kDrumCount][5] PROGMEM = {"KICK", "SNAR", "CHH"};
@@ -762,6 +763,7 @@ void changeMode(InstrumentMode nextMode, unsigned long now) {
     clearHeldNotes();
     edgar.disablePlayMix();
     edgar.disablePlayVca();
+    edgar.disablePlayUnison();
   }
   edgar.stopDrum();
   stopNormalVoices();
@@ -930,10 +932,13 @@ void runSequencer(unsigned long now) {
 
 void applyLiveConfiguration() {
   LivePreset preset; readLivePreset(playControls.preset, preset);
-  const bool secondaryEnabled = playMixWave != kPlayMixOff;
+  // A unison pair already needs two table reads per live voice.  Keeping it
+  // exclusive with the secondary-wave path preserves the 20 kHz ISR margin.
+  const bool secondaryEnabled = preset.unisonCents == 0 && playMixWave != kPlayMixOff;
   const uint8_t secondaryWave = secondaryEnabled ? playMixWave : SINE;
   edgar.configurePlayMix(
     preset.wave, secondaryWave, playMixLfoRateHundredths, secondaryEnabled);
+  edgar.configurePlayUnison(preset.unisonCents);
   edgar.configurePlayVca(playVcaDepth, playVcaLfoRateHundredths);
   for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) {
     edgar.setEnvelope(voice, preset.envelope);

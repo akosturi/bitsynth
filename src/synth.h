@@ -108,6 +108,12 @@ volatile uint16_t playVcaGain = 256;
 volatile uint16_t playVcaAttenuationDepth = 0;
 volatile uint32_t playVcaLfoPCW = 0x80000000UL;
 volatile uint32_t playVcaLfoFTW = 0;
+// PLAY unison has a second phase accumulator per live voice.  The detune is
+// stored as an additive FTW offset so the existing vibrato moves both layers.
+volatile bool playUnisonActive = false;
+volatile int8_t playUnisonCents = 0;
+volatile uint16_t playUnisonPCW[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
+volatile int16_t playUnisonOffset[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
 uint8_t playLfoDivider = 0;
 volatile bool droneMode = false;
 volatile uint16_t dronePCW[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
@@ -205,6 +211,30 @@ static inline __attribute__((always_inline)) int16_t nextScaledMixedVoiceSample(
   // deliberately 16-bit product at full envelope gain.
   const int16_t mixedSample = (sampleA + secondarySample) >> 1;
   return scaleSigned9Sample(mixedSample, gain, 3);
+}
+
+// Renders the primary oscillator plus a detuned copy from its own phase
+// accumulator. This is PLAY-only; it retains the three live voice slots.
+static inline __attribute__((always_inline)) int16_t nextScaledUnisonVoiceSample(
+  uint8_t voice, uint8_t gain)
+{
+  const uint16_t phase = PCW[voice] + FTW[voice];
+  PCW[voice] = phase;
+  const uint16_t unisonPhase = playUnisonPCW[voice] +
+    FTW[voice] + playUnisonOffset[voice];
+  playUnisonPCW[voice] = unisonPhase;
+  if (gain == 0) {
+    return 0;
+  }
+
+  const uint16_t source = waveSources[voice];
+  const int16_t sampleA = source == SYNTH_GENERATED_SQUARE ?
+    generatedSquareSample(phase, pulseWidths[voice]) :
+    readSigned9Sample(source, phase >> SYNTH_WAVETABLE_SHIFT);
+  const int16_t sampleB = source == SYNTH_GENERATED_SQUARE ?
+    generatedSquareSample(unisonPhase, pulseWidths[voice]) :
+    readSigned9Sample(source, unisonPhase >> SYNTH_WAVETABLE_SHIFT);
+  return scaleSigned9Sample((sampleA + sampleB) >> 1, gain, 3);
 }
 
 // Applies a 9-bit linear gain with error far below one PWM output step.
@@ -365,7 +395,12 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
     }
 
     int16_t liveMixQ7;
-    if (playMixActive) {
+    if (playUnisonActive) {
+      liveMixQ7 =
+        nextScaledUnisonVoiceSample(1, AMP[1]) +
+        nextScaledUnisonVoiceSample(2, AMP[2]) +
+        nextScaledUnisonVoiceSample(3, AMP[3]);
+    } else if (playMixActive) {
       if (updatePlayMixLfo) {
         const uint32_t mixLfoStep = playMixLfoFTW;
         playMixLfoPCW += mixLfoStep;
@@ -443,6 +478,16 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
 class synth
 {
   private:
+    // 2^(cents / 1200) is approximated by 1 + cents * ln(2) / 1200.
+    // The experimental preset range is deliberately limited to +/- 25 cents;
+    // this keeps the approximation error below a quarter-cent while
+    // doing all division outside the audio ISR.
+    int16_t unisonPitchOffset(uint16_t pitch, int8_t cents) const
+    {
+      const int32_t numerator = (int32_t)pitch * cents * 578L;
+      return numerator / 1000000L;
+    }
+
     uint16_t waveSource(uint8_t wave) const
     {
       switch (wave)
@@ -614,6 +659,45 @@ class synth
       }
     }
 
+    // Configures the detuned phase accumulator used by PLAY voices 1-3.
+    // Positive cents make the copied oscillator sharp; negative cents flatten
+    // it. The original oscillator stays at the requested note pitch.
+    void configurePlayUnison(int8_t cents)
+    {
+      if (cents > 25) cents = 25;
+      else if (cents < -25) cents = -25;
+
+      uint16_t pitches[SYNTH_VOICE_COUNT - 1];
+      int16_t offsets[SYNTH_VOICE_COUNT - 1];
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) {
+          pitches[voice - 1] = PITCH[voice];
+        }
+      }
+      for (uint8_t voice = 0; voice < SYNTH_VOICE_COUNT - 1; ++voice) {
+        offsets[voice] = unisonPitchOffset(pitches[voice], cents);
+      }
+
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        playUnisonCents = cents;
+        playUnisonActive = cents != 0;
+        for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) {
+          playUnisonOffset[voice] = offsets[voice - 1];
+        }
+      }
+    }
+
+    void disablePlayUnison()
+    {
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        playUnisonActive = false;
+        playUnisonCents = 0;
+        for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) {
+          playUnisonOffset[voice] = 0;
+        }
+      }
+    }
+
     // Configures the live VCA's maximum attenuation and optional triangle LFO.
     void configurePlayVca(uint16_t depth, uint16_t frequencyHundredths)
     {
@@ -655,10 +739,7 @@ class synth
         midiNote = SYNTH_MIDI_NOTE_MAX;
       }
 
-      const uint16_t pitch = pgm_read_word(&PITCHS[midiNote - SYNTH_MIDI_NOTE_MIN]);
-      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        PITCH[voice] = pitch;
-      }
+      setPitchWord(voice, pgm_read_word(&PITCHS[midiNote - SYNTH_MIDI_NOTE_MIN]));
     }
 
     void setPitchWord(uint8_t voice, uint16_t pitch)
@@ -667,8 +748,10 @@ class synth
         return;
       }
 
+      const int16_t unisonOffset = unisonPitchOffset(pitch, playUnisonCents);
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         PITCH[voice] = pitch;
+        playUnisonOffset[voice] = unisonOffset;
       }
     }
 
@@ -760,6 +843,11 @@ class synth
         EPCW[voice] = 0;
         voiceGateTarget[voice] = 255;
         FTW[voice] = PITCH[voice];
+        if (playUnisonActive && voice != 0) {
+          // Start the copy a quarter-cycle apart; the gate ramp hides the
+          // reset while making the unison character immediate on note-on.
+          playUnisonPCW[voice] = PCW[voice] + 0x4000;
+        }
       }
     }
 

@@ -32,7 +32,7 @@ const OCR1AH = 0x89;
 // 1023 = fully clockwise).
 const TEST_PRESETS = {
   'play-organ': {
-    label: 'PLAY ORGN / CHRD / SIN MIX 2 Hz / VCA 4 Hz',
+    label: 'PLAY ORGN UNISON / CHRD / VCA 4 Hz',
     bootSettings: [0, 601, 516, 516],
     // ORGN preset, C root, major scale and CHRD style.
     playSettings: [950, 0, 0, 306],
