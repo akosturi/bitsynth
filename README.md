@@ -173,7 +173,7 @@ PLAY reserves voice 0 for the monophonic background sequence and uses voices 1-3
 | Parameter 1 | Live preset |
 | Parameter 2 | Root note, C-B |
 | Parameter 3 | Scale: `MAJ`, `MIN`, `PEN`, or `BLU` |
-| Parameter 4 | Style: `POLY`, `CHRD`, `UP`, `DOWN`, or `UPDN` |
+| Parameter 4 | Style: `POLY`, `CHRD`, `UP`, `DOWN`, `UPDN`, `CUP`, `CDWN`, or `CUDN` |
 | Step pot 1 | Octave range, O0-O6; root, scale, and chord results are constrained to the piano range A0-C8 |
 | Step pots 2-8 | Unused |
 | Step buttons 1-8 | Consecutive notes of the selected scale |
@@ -183,6 +183,7 @@ Live presets are `PURE`, `SOFT`, `KEYS`, `PLUK`, `BASS`, `LEAD`, and `ORGN`.
 - `POLY` allows three simultaneous live notes. A fourth note steals the oldest voice.
 - `CHRD` plays a scale-derived 1-3-5 chord from the most recently held button.
 - `UP`, `DOWN`, and `UPDN` arpeggiate held buttons on the sequencer's sixteenth-note clock.
+- `CUP`, `CDWN`, and `CUDN` arpeggiate the 1-3-5 chord of the most recently held button upward, downward, or up then down, respectively, on that same clock.
 
 The background sequence keeps its position when entering PLAY. Hold **MODE** and press step button 1 to toggle it; the LCD shows `SEQ+` or `SEQ-`. Its clock continues while muted, so arpeggiators remain synchronized. A `DRUM` sequence uses the same reserved background slot and does not reduce the three live voices.
 

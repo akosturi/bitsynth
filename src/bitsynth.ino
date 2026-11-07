@@ -22,7 +22,7 @@ const uint8_t kSeqPresetCount = 7;
 const uint8_t kLivePresetCount = 7;
 const uint8_t kDrumCount = DRUM_SAMPLE_COUNT;
 const uint8_t kScaleCount = 4;
-const uint8_t kPlayStyleCount = 5;
+const uint8_t kPlayStyleCount = 8;
 const uint8_t kAnalogSamples = 5;
 const uint8_t kAnalogDiscardSamples = 2;
 const uint8_t kAnalogFilterFractionBits = 4;
@@ -49,7 +49,8 @@ const uint8_t kLfoRateCount = 94;
 
 enum InstrumentMode : uint8_t { MODE_SEQ = 0, MODE_PLAY = 1, MODE_DRONE = 2 };
 enum ScaleMode : uint8_t { SCALE_MAJOR = 0, SCALE_MINOR = 1, SCALE_PENTATONIC = 2, SCALE_BLUES = 3 };
-enum PlayStyle : uint8_t { STYLE_POLY = 0, STYLE_CHORD = 1, STYLE_ARP_UP = 2, STYLE_ARP_DOWN = 3, STYLE_ARP_UPDOWN = 4 };
+enum PlayStyle : uint8_t { STYLE_POLY = 0, STYLE_CHORD = 1, STYLE_ARP_UP = 2, STYLE_ARP_DOWN = 3, STYLE_ARP_UPDOWN = 4,
+                           STYLE_CHORD_ARP_UP = 5, STYLE_CHORD_ARP_DOWN = 6, STYLE_CHORD_ARP_UPDOWN = 7 };
 enum SeqPresetId : uint8_t { PRESET_SUB = 0, PRESET_BASS, PRESET_PLUCK, PRESET_BELL, PRESET_LEAD, PRESET_CHORD, PRESET_DRUM };
 enum DrumId : uint8_t { DRUM_KICK = 0, DRUM_SNARE, DRUM_CLOSED_HAT };
 
@@ -114,7 +115,7 @@ const uint8_t kScaleLengths[kScaleCount] PROGMEM = {7, 7, 5, 6};
 const char kDroneWaveLabels[kDroneWaveCount][4] PROGMEM = {"SIN", "TRI", "SQR", "SAW"};
 const char kRootLabels[12][3] PROGMEM = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
 const char kScaleLabels[kScaleCount][4] PROGMEM = {"MAJ", "MIN", "PEN", "BLU"};
-const char kStyleLabels[kPlayStyleCount][5] PROGMEM = {"POLY", "CHRD", "UP", "DOWN", "UPDN"};
+const char kStyleLabels[kPlayStyleCount][5] PROGMEM = {"POLY", "CHRD", "UP", "DOWN", "UPDN", "CUP", "CDWN", "CUDN"};
 synth edgar;
 InstrumentMode instrumentMode = MODE_SEQ;
 SeqControls seqControls = {PRESET_SUB, 126, 64, 64};
@@ -999,12 +1000,35 @@ uint8_t collectHeldButtons(uint8_t buttons[kStepCount]) {
   return count;
 }
 
-// Advances the current arpeggio pattern across held buttons.
+// Advances the current arpeggio pattern across held buttons, or the latest held chord.
 void advanceArpeggio() {
   uint8_t buttons[kStepCount];
   const uint8_t count = collectHeldButtons(buttons);
   stopNormalVoice(2); stopNormalVoice(3);
   if (count == 0) { stopNormalVoice(1); arpPosition = 0; arpDirection = 1; return; }
+
+  const bool chordArpeggio = playControls.style >= STYLE_CHORD_ARP_UP;
+  const uint8_t noteCount = chordArpeggio ? 3 : count;
+  const int8_t chordButton = chordArpeggio ? latestHeldButton() : -1;
+  const int16_t chordRoot = (playControls.octave + 1) * 12 + playControls.root;
+
+  if (chordArpeggio) {
+    arpPosition %= noteCount;
+    uint8_t chordVoice = arpPosition;
+    if (playControls.style == STYLE_CHORD_ARP_DOWN) chordVoice = noteCount - 1 - arpPosition;
+    else if (playControls.style == STYLE_CHORD_ARP_UPDOWN && noteCount > 1) {
+      if (arpPosition >= noteCount) arpPosition = noteCount - 1;
+      chordVoice = arpPosition;
+      if (arpDirection > 0 && arpPosition >= noteCount - 1) arpDirection = -1;
+      else if (arpDirection < 0 && arpPosition == 0) arpDirection = 1;
+      arpPosition += arpDirection;
+      triggerNormalVoice(1, pitchForNote(chordRoot + scaleDegreeOffset(playControls.scale, chordButton + chordVoice * 2)), 0);
+      return;
+    }
+    triggerNormalVoice(1, pitchForNote(chordRoot + scaleDegreeOffset(playControls.scale, chordButton + chordVoice * 2)), 0);
+    arpPosition = (arpPosition + 1) % noteCount;
+    return;
+  }
 
   if (playControls.style == STYLE_ARP_DOWN) {
     arpPosition %= count;
