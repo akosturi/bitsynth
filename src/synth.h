@@ -64,6 +64,8 @@ const uint8_t SYNTH_WAVETABLE_INDEX_BITS = 8;
 const uint8_t SYNTH_WAVETABLE_SHIFT = 16 - SYNTH_WAVETABLE_INDEX_BITS;
 const uint16_t SYNTH_GENERATED_SQUARE = 0;
 const uint16_t SYNTH_DEFAULT_PULSE_WIDTH = 0x8000;
+// Updated once per four audio frames (5 kHz), giving a fixed 5 Hz vibrato.
+const uint32_t SYNTH_VIBRATO_LFO_STEP = 4294967UL;
 
 static_assert(sizeof(PITCHS) / sizeof(PITCHS[0]) == SYNTH_MIDI_NOTE_COUNT, "invalid MIDI pitch table size");
 static_assert(sizeof(SinTable) / sizeof(SinTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid sine table size");
@@ -75,6 +77,7 @@ volatile uint16_t FTW[SYNTH_VOICE_COUNT] = {1000, 200, 300, 400};
 volatile uint8_t AMP[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
 volatile uint16_t PITCH[SYNTH_VOICE_COUNT] = {500, 500, 500, 500};
 volatile int8_t MOD[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
+volatile uint32_t vibratoLfoPCW = 0x40000000UL;
 volatile uint16_t waveSources[SYNTH_VOICE_COUNT] = {
   (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable
 };
@@ -280,6 +283,15 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
     mixQ7 = dronePairMixQ7[0] + dronePairMixQ7[1] +
       dronePairMixQ7[2] + dronePairMixQ7[3];
   } else {
+    if (voiceIndex == 0) {
+      vibratoLfoPCW += SYNTH_VIBRATO_LFO_STEP;
+    }
+    const uint8_t vibratoPhase = ((uint8_t*)&vibratoLfoPCW)[3];
+    const uint8_t vibratoTriangle = (vibratoPhase & 0x80) ?
+      (uint8_t)(256U - vibratoPhase) : vibratoPhase;
+    // Center the triangle at zero and halve it to keep the pitch math 16-bit.
+    const int8_t vibratoLfo = (int8_t)(vibratoTriangle >> 1) - 32;
+
     const uint16_t envelopePhase = EPCW[voiceIndex];
     if (envelopePhase & 0x8000) {
       AMP[voiceIndex] = 0;
@@ -360,9 +372,18 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
     if (!renderDrum || voiceIndex != 0) {
       const uint16_t pitch = PITCH[voiceIndex];
       const int8_t modulation = MOD[voiceIndex];
-      FTW[voiceIndex] = modulation == 0 ? pitch :
-        pitch + (int16_t)(((modulationCoarse(pitch) *
-          modulationCoarse(EPCW[voiceIndex])) / 128) * modulation);
+      const uint8_t vibratoDepth = modulation < 0 ? -modulation : modulation;
+      if (vibratoDepth == 0) {
+        FTW[voiceIndex] = pitch;
+      } else {
+        // Full depth is about +/- 6% of pitch.  MOD is a depth, so values on
+        // either side of 64 produce the same centered, continuous vibrato.
+        const uint16_t peakOffset =
+          (modulationCoarse(pitch) * vibratoDepth) >> 4;
+        const int16_t pitchOffset =
+          ((int16_t)peakOffset * (int16_t)vibratoLfo) >> 5;
+        FTW[voiceIndex] = pitch + pitchOffset;
+      }
     }
   }
 
@@ -693,7 +714,7 @@ class synth
       }
     }
 
-    // Sets bipolar modulation with 64 as the neutral value.
+    // Sets vibrato depth with 64 as neutral; either direction has equal depth.
     void setMod(uint8_t voice, uint8_t mod)
     {
       if (!validVoice(voice)) {

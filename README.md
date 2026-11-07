@@ -151,7 +151,7 @@ The LCD shows the preset, BPM, `COLOR`/`SHAPE`, and the gate pattern. `x` is an 
 | Preset | Voice structure | `COLOR` | `SHAPE` |
 |---|---|---|---|
 | `SUB` | Sine + square sub-octave | Detune | Decay |
-| `BAS` | Saw + square sub-octave | Pitch sweep | Decay |
+| `BAS` | Saw + square sub-octave | Vibrato depth | Decay |
 | `PLK` | Triangle + square octave | Detune | Decay |
 | `BEL` | Sine harmonics + triangle | Inharmonic offset | Ring length |
 | `LED` | Two saw waves | Detune/spread | Glide |
@@ -179,6 +179,11 @@ PLAY reserves voice 0 for the monophonic background sequence and uses voices 1-3
 | Step buttons 1-8 | Consecutive notes of the selected scale |
 
 Live presets are `PURE`, `SOFT`, `KEYS`, `PLUK`, `BASS`, `LEAD`, and `ORGN`.
+
+Preset modulation is a fixed 5 Hz triangle vibrato. Its stored `MOD` value is
+neutral at 64; distance from 64 selects depth, so values above and below 64
+produce the same centered pitch movement rather than an envelope-driven pitch
+sweep.
 
 - `POLY` allows three simultaneous live notes. A fourth note steals the oldest voice.
 - `CHRD` plays a scale-derived 1-3-5 chord from the most recently held button.
