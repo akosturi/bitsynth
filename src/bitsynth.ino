@@ -796,7 +796,14 @@ void changeMode(InstrumentMode nextMode, unsigned long now) {
 }
 
 void panicAll() {
-  edgar.stopDrum(); stopNormalVoices(); heldButtonMask = 0; resetLiveAssignments();
+  edgar.stopDrum();
+  for (uint8_t voice = 0; voice < SYNTH_VOICE_COUNT; ++voice) {
+    edgar.killVoice(voice);
+    normalCurrentPitch[voice] = 0;
+    normalTargetPitch[voice] = 0;
+    normalGlide[voice] = 0;
+  }
+  heldButtonMask = 0; resetLiveAssignments();
   if (instrumentMode == MODE_DRONE) { droneGateMask = 0; edgar.stopAllDrones(); }
   displayDirty = true;
 }

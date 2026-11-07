@@ -91,6 +91,11 @@ volatile uint16_t envs[SYNTH_VOICE_COUNT] = {
 };
 volatile uint16_t EPCW[SYNTH_VOICE_COUNT] = {0x8000, 0x8000, 0x8000, 0x8000};
 volatile uint16_t EFTW[SYNTH_VOICE_COUNT] = {10, 10, 10, 10};
+// A short gate ramp removes discontinuities from envelopes that start at full
+// level and from manual note releases. It is time-sliced with the envelopes:
+// 32 counts per 5 kHz voice update gives a 1.6 ms full fade.
+volatile uint8_t voiceGateGain[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
+volatile uint8_t voiceGateTarget[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
 volatile uint8_t divider = 4;
 volatile int16_t pwmQuantizationError = 0;
 volatile uint8_t pwmDitherLfsr = 0xA5;
@@ -293,13 +298,28 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
     const int8_t vibratoLfo = (int8_t)(vibratoTriangle >> 1) - 32;
 
     const uint16_t envelopePhase = EPCW[voiceIndex];
-    if (envelopePhase & 0x8000) {
-      AMP[voiceIndex] = 0;
-    } else {
+    uint8_t envelopeAmplitude = 0;
+    if (!(envelopePhase & 0x8000)) {
       const uint16_t nextEnvelopePhase = envelopePhase + EFTW[voiceIndex];
       EPCW[voiceIndex] = nextEnvelopePhase;
       const uint8_t envelopeIndex = nextEnvelopePhase >> 8;
-      AMP[voiceIndex] = (envelopeIndex & 0x80) ? 0 : pgm_read_byte(envs[voiceIndex] + envelopeIndex);
+      envelopeAmplitude = (envelopeIndex & 0x80) ? 0 :
+        pgm_read_byte(envs[voiceIndex] + envelopeIndex);
+    }
+
+    uint8_t gateGain = voiceGateGain[voiceIndex];
+    const uint8_t gateTarget = voiceGateTarget[voiceIndex];
+    if (gateGain < gateTarget) {
+      gateGain = (gateTarget - gateGain > 31) ? gateGain + 32 : gateTarget;
+    } else if (gateGain > gateTarget) {
+      gateGain = (gateGain - gateTarget > 31) ? gateGain - 32 : gateTarget;
+    }
+    voiceGateGain[voiceIndex] = gateGain;
+    AMP[voiceIndex] = envelopeAmplitude < gateGain ? envelopeAmplitude : gateGain;
+    if (gateGain == 0 && gateTarget == 0) {
+      // Stop oscillator work only after its output has faded to silence.
+      EPCW[voiceIndex] = 0x8000;
+      FTW[voiceIndex] = 0;
     }
 
     bool updatePlayVcaLfo = false;
@@ -738,6 +758,7 @@ class synth
 
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         EPCW[voice] = 0;
+        voiceGateTarget[voice] = 255;
         FTW[voice] = PITCH[voice];
       }
     }
@@ -749,6 +770,20 @@ class synth
       }
 
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        voiceGateTarget[voice] = 0;
+      }
+    }
+
+    // Used by PANIC: unlike a normal release, this silences immediately.
+    void killVoice(uint8_t voice)
+    {
+      if (!validVoice(voice)) {
+        return;
+      }
+
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        voiceGateGain[voice] = 0;
+        voiceGateTarget[voice] = 0;
         EPCW[voice] = 0x8000;
         AMP[voice] = 0;
         FTW[voice] = 0;

@@ -167,6 +167,9 @@ The samples are signed 9-bit mono PCM at 20 kHz, losslessly bit-packed in flash.
 ### PLAY - scale-quantized live performance
 
 PLAY reserves voice 0 for the monophonic background sequence and uses voices 1-3 for live notes.
+Live-note gates use a short 1.6 ms amplitude ramp on both press and release,
+which suppresses phase-discontinuity clicks without changing the selected
+sound envelope.
 
 | Control | Function |
 |---|---|
