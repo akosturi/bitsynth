@@ -38,9 +38,8 @@ const uint8_t kMuxSettleUs = 50;
 const uint8_t kButtonDebounceMs = 25;
 const uint16_t kPanicHoldMs = 1000;
 const uint16_t kEditViewMs = 900;
-const uint8_t kStepNoteMin = SYNTH_MIDI_NOTE_MIN;
-const uint8_t kStepNoteMax = SYNTH_MIDI_NOTE_MAX;
-const uint8_t kPlayOctaveCount = 7;
+const uint8_t kStepNoteMin = 36;
+const uint8_t kStepNoteMax = 59;
 const uint16_t kDroneFrequencyMin = 80;
 const uint16_t kDroneFrequencyMax = 600;
 const uint16_t kLfoFrequencyMinHundredths = 5;
@@ -120,7 +119,7 @@ const char kStyleLabels[kPlayStyleCount][5] PROGMEM = {"POLY", "CHRD", "UP", "DO
 synth edgar;
 InstrumentMode instrumentMode = MODE_SEQ;
 SeqControls seqControls = {PRESET_SUB, 126, 64, 64};
-PlayControls playControls = {0, 0, SCALE_MAJOR, STYLE_POLY, 2};
+PlayControls playControls = {0, 0, SCALE_MAJOR, STYLE_POLY, 0};
 uint8_t stepNotes[kStepCount] = {36, 38, 40, 41, 43, 45, 47, 48};
 uint8_t stepDrums[kStepCount] = {DRUM_KICK, DRUM_CLOSED_HAT, DRUM_SNARE, DRUM_CLOSED_HAT,
                                  DRUM_KICK, DRUM_CLOSED_HAT, DRUM_SNARE, DRUM_CLOSED_HAT};
@@ -651,7 +650,7 @@ void readPlayOctavePot(unsigned long now) {
   selectMuxChannel(0);
   const uint16_t filtered = filterAnalog(readMedianAnalog(kStepAnalogPin), filteredStepRaw[0], stepFilterReady[0]);
   const uint16_t raw = acceptAnalogMovement(filtered, stepMotion[0], kStepMovementThreshold);
-  const uint8_t next = mapIndexHysteresis(raw, playControls.octave, kPlayOctaveCount);
+  const uint8_t next = mapIndexHysteresis(raw, playControls.octave, 4);
   if (next != playControls.octave) {
     playControls.octave = next; revoiceHeldButtons(); displayDirty = true;
   }
@@ -819,8 +818,8 @@ void stopNormalVoices() {
 }
 
 uint16_t pitchForNote(int16_t note) {
-  note = constrain(note, SYNTH_MIDI_NOTE_MIN, SYNTH_MIDI_NOTE_MAX);
-  return pgm_read_word(&PITCHS[note - SYNTH_MIDI_NOTE_MIN]);
+  note = constrain(note, 0, SYNTH_MIDI_NOTE_MAX);
+  return pgm_read_word(&PITCHS[note]);
 }
 
 uint16_t detunePitch(uint16_t pitch, int16_t permille) {
@@ -948,8 +947,7 @@ void applyLiveConfiguration() {
 
 uint8_t liveNoteForButton(uint8_t button) {
   const int8_t offset = pgm_read_byte(&kScaleOffsets[playControls.scale][button]);
-  return constrain((playControls.octave + 1) * 12 + playControls.root + offset,
-    SYNTH_MIDI_NOTE_MIN, SYNTH_MIDI_NOTE_MAX);
+  return constrain(36 + playControls.octave * 12 + playControls.root + offset, 0, 127);
 }
 
 int8_t scaleDegreeOffset(uint8_t scale, uint8_t degree) {
@@ -999,7 +997,7 @@ void triggerHeldChord() {
     for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
     return;
   }
-  const int16_t root = (playControls.octave + 1) * 12 + playControls.root;
+  const int16_t root = 36 + playControls.octave * 12 + playControls.root;
   for (uint8_t chordVoice = 0; chordVoice < 3; ++chordVoice) {
     const int8_t offset = scaleDegreeOffset(playControls.scale, button + chordVoice * 2);
     triggerNormalVoice(chordVoice + 1, pitchForNote(root + offset), 0);
@@ -1227,7 +1225,7 @@ void renderPlayDashboard(bool inlineEditVisible) {
   frameProgmemText(0, 9, kRootLabels[playControls.root]);
   frameProgmemText(0, 12, kScaleLabels[playControls.scale]);
   frameProgmemText(1, 0, kStyleLabels[playControls.style]);
-  frameChar(1, 5, 'O'); frameChar(1, 6, '0' + playControls.octave);
+  frameChar(1, 5, 'O'); frameChar(1, 6, '2' + playControls.octave);
   if (!inlineEditVisible) {
     frameText(1, 9, playSequencerEnabled ? F("SEQ+") : F("SEQ-"));
   } else if (editedPlayShift == 1) {

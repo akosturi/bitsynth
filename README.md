@@ -144,7 +144,7 @@ The sequence runs in sixteenth notes.
 | Parameter 2 | Tempo, 60-220 BPM |
 | Parameter 3 | Preset-specific `COLOR` |
 | Parameter 4 | Preset-specific `SHAPE`; glide for `LEAD` |
-| Step pots 1-8 | Chromatic pitch across the 88-key piano range, A0-C8; drum selection in `DRUM` |
+| Step pots 1-8 | Chromatic pitch from C2 to B3; drum selection in `DRUM` |
 | Step buttons 1-8 | Toggle the corresponding step on or off |
 
 The LCD shows the preset, BPM, `COLOR`/`SHAPE`, and the gate pattern. `x` is an enabled step, `-` is disabled, and `O`/`o` marks the current enabled/disabled step.
@@ -178,7 +178,7 @@ sound envelope.
 | Parameter 2 | Root note, C-B |
 | Parameter 3 | Scale: `MAJ`, `MIN`, `PEN`, or `BLU` |
 | Parameter 4 | Style: `POLY`, `CHRD`, `UP`, `DOWN`, `UPDN`, `CUP`, `CDWN`, or `CUDN` |
-| Step pot 1 | Octave range, O0-O6; root, scale, and chord results are constrained to the piano range A0-C8 |
+| Step pot 1 | Octave range, C2-C5 |
 | Step pots 2-8 | Unused |
 | Step buttons 1-8 | Consecutive notes of the selected scale |
 

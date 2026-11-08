@@ -55,9 +55,7 @@ static_assert(sizeof(hihatSample) == (hihatSampleLength * 9U + 7U) / 8U, "invali
 
 const uint8_t SYNTH_VOICE_COUNT = 4;
 const uint8_t SYNTH_DRONE_COUNT = 8;
-const uint8_t SYNTH_MIDI_NOTE_MIN = 21;
-const uint8_t SYNTH_MIDI_NOTE_MAX = 108;
-const uint8_t SYNTH_MIDI_NOTE_COUNT = SYNTH_MIDI_NOTE_MAX - SYNTH_MIDI_NOTE_MIN + 1;
+const uint8_t SYNTH_MIDI_NOTE_MAX = 127;
 const uint8_t SYNTH_LENGTH_MAX = 127;
 const uint8_t SYNTH_ENVELOPE_COUNT = 11;
 const uint8_t SYNTH_WAVETABLE_INDEX_BITS = 8;
@@ -67,7 +65,6 @@ const uint16_t SYNTH_DEFAULT_PULSE_WIDTH = 0x8000;
 // Updated once per four audio frames (5 kHz), giving a fixed 5 Hz vibrato.
 const uint32_t SYNTH_VIBRATO_LFO_STEP = 4294967UL;
 
-static_assert(sizeof(PITCHS) / sizeof(PITCHS[0]) == SYNTH_MIDI_NOTE_COUNT, "invalid MIDI pitch table size");
 static_assert(sizeof(SinTable) / sizeof(SinTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid sine table size");
 static_assert(sizeof(TriangleTable) / sizeof(TriangleTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid triangle table size");
 static_assert(sizeof(SawTable) / sizeof(SawTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid saw table size");
@@ -733,13 +730,11 @@ class synth
         return;
       }
 
-      if (midiNote < SYNTH_MIDI_NOTE_MIN) {
-        midiNote = SYNTH_MIDI_NOTE_MIN;
-      } else if (midiNote > SYNTH_MIDI_NOTE_MAX) {
+      if (midiNote > SYNTH_MIDI_NOTE_MAX) {
         midiNote = SYNTH_MIDI_NOTE_MAX;
       }
 
-      setPitchWord(voice, pgm_read_word(&PITCHS[midiNote - SYNTH_MIDI_NOTE_MIN]));
+      setPitchWord(voice, pgm_read_word(&PITCHS[midiNote]));
     }
 
     void setPitchWord(uint8_t voice, uint16_t pitch)
