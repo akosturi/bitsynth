@@ -18,8 +18,7 @@ const uint8_t kStepPotsPerLoop = 2;
 const uint8_t kDroneWaveCount = 4;
 const uint8_t kPlayMorphWaveCount = 4;
 const uint8_t kPlayMorphOff = 255;
-const uint8_t kSeqPresetCount = 7;
-const uint8_t kLivePresetCount = 7;
+const uint8_t kPresetCount = 5;
 const uint8_t kDrumCount = DRUM_SAMPLE_COUNT;
 const uint8_t kScaleCount = 4;
 const uint8_t kPlayStyleCount = 8;
@@ -45,37 +44,35 @@ const uint16_t kDroneFrequencyMax = 600;
 const uint16_t kLfoFrequencyMinHundredths = 5;
 const uint16_t kLfoFrequencyMaxHundredths = 2000;
 const uint8_t kLfoRateCount = 94;
+const uint8_t kPresetVcaModulationCount = 99;
 
 enum InstrumentMode : uint8_t { MODE_SEQ = 0, MODE_PLAY = 1, MODE_DRONE = 2 };
 enum ScaleMode : uint8_t { SCALE_MAJOR = 0, SCALE_MINOR = 1, SCALE_PENTATONIC = 2, SCALE_BLUES = 3 };
 enum PlayStyle : uint8_t { STYLE_POLY = 0, STYLE_CHORD = 1, STYLE_ARP_UP = 2, STYLE_ARP_DOWN = 3, STYLE_ARP_UPDOWN = 4,
                            STYLE_CHORD_ARP_UP = 5, STYLE_CHORD_ARP_DOWN = 6, STYLE_CHORD_ARP_UPDOWN = 7 };
-enum SeqPresetId : uint8_t { PRESET_SUB = 0, PRESET_BASS, PRESET_PLUCK, PRESET_BELL, PRESET_LEAD, PRESET_CHORD, PRESET_DRUM };
+enum PresetId : uint8_t { PRESET_SUB = 0, PRESET_BASS, PRESET_PLUCK, PRESET_BELL, PRESET_LEAD, PRESET_CHORD, PRESET_DRUM,
+                          PRESET_PURE, PRESET_SOFT, PRESET_KEYS, PRESET_PLUK, PRESET_LIVE_BASS, PRESET_LIVE_LEAD, PRESET_ORGN };
 enum DrumId : uint8_t { DRUM_KICK = 0, DRUM_SNARE, DRUM_CLOSED_HAT };
 
 struct VoiceRecipe {
   uint8_t wave;
-  int8_t semitone;
+  int16_t detuneCents;
   uint8_t envelope;
   uint8_t modulation;
 };
 
-struct SeqPreset {
+struct Preset {
   char label[5];
   uint8_t voiceCount;
   VoiceRecipe voices[4];
-};
-
-struct LivePreset {
-  char label[5];
-  uint8_t wave;
-  uint8_t envelope;
   uint8_t length;
-  uint8_t modulation;
-  int8_t unisonCents;
+  uint8_t squarePulseWidthPercent;
+  uint16_t vcaDepth;
+  uint8_t vcaModulation;
+  uint8_t glide;
 };
 
-struct SeqControls { uint8_t preset; uint8_t bpm; uint8_t color; uint8_t shape; };
+struct SeqControls { uint8_t preset; uint8_t bpm; uint8_t drumTone; };
 struct PlayControls { uint8_t preset; uint8_t root; uint8_t scale; uint8_t style; uint8_t octave; };
 
 struct AnalogMotionState {
@@ -85,24 +82,29 @@ struct AnalogMotionState {
   bool ready;
 };
 
-const SeqPreset kSeqPresets[kSeqPresetCount] PROGMEM = {
-  {"SUB",  2, {{SINE, 0, ENVELOPE0, 64}, {SQUARE, -12, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}},
-  {"BAS", 2, {{SAW, 0, ENVELOPE1, 64}, {SQUARE, -12, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}},
-  {"PLK", 2, {{TRIANGLE, 0, ENVELOPE1, 64}, {SQUARE, 12, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}},
-  {"BEL", 3, {{SINE, 0, ENVELOPE2, 64}, {SINE, 12, ENVELOPE2, 64}, {TRIANGLE, 19, ENVELOPE2, 64}, {SINE, 0, 0, 64}}},
-  {"LED", 2, {{SAW, 0, ENVELOPE0, 64}, {SAW, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}},
-  {"CRD", 4, {{TRIANGLE, 0, ENVELOPE0, 64}, {TRIANGLE, 4, ENVELOPE0, 64}, {TRIANGLE, 7, ENVELOPE0, 64}, {SINE, 12, ENVELOPE0, 64}}},
-  {"DRM", 1, {{SINE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}}
-};
-
-const LivePreset kLivePresets[kLivePresetCount] PROGMEM = {
-  {"PURE", SINE, ENVELOPE3, 116, 64, 0},
-  {"SOFT", SINE, ENVELOPE0, 102, 64, -5},
-  {"KEYS", TRIANGLE, ENVELOPE2, 82, 64, 4},
-  {"PLUK", SQUARE, ENVELOPE1, 46, 64, 0},
-  {"BASS", SAW, ENVELOPE0, 92, 58, -7},
-  {"LEAD", SAW, ENVELOPE3, 116, 68, 12},
-  {"ORGN", SQUARE, ENVELOPE3, 116, 64, -9}
+// label, voice count, voices {wave, detune cents, envelope, modulation} x4, envelope length, square pulse width, vca depth, vca mod, glide
+//const Preset kPresets[kPresetCount] PROGMEM = {
+//  {"SUB", 2, {{SINE, 0, ENVELOPE0, 64}, {SQUARE, -12, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 0},
+//  {"BA1", 2, {{SAW, 0, ENVELOPE1, 64}, {SQUARE, -12, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 0},
+//  {"PLK", 2, {{TRIANGLE, 0, ENVELOPE1, 64}, {SQUARE, 12, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 0},
+//  {"BEL", 3, {{SINE, 0, ENVELOPE2, 64}, {SINE, 12, ENVELOPE2, 64}, {TRIANGLE, 19, ENVELOPE2, 64}, {SINE, 0, 0, 64}}, 102, 0},
+//  {"LED", 2, {{SAW, 0, ENVELOPE0, 64}, {SAW, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 0},
+//  {"CRD", 4, {{TRIANGLE, 0, ENVELOPE0, 64}, {TRIANGLE, 4, ENVELOPE0, 64}, {TRIANGLE, 7, ENVELOPE0, 64}, {SINE, 12, ENVELOPE0, 64}}, 102, 0},
+//  {"PUR", 3, {{SINE, 0, ENVELOPE3, 64}, {SINE, 0, ENVELOPE3, 64}, {SINE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}}, 116, 0},
+//  {"SOF", 3, {{SINE, 0, ENVELOPE0, 64}, {SINE, 0, ENVELOPE0, 64}, {SINE, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}}, 102, -5},
+//  {"KEY", 3, {{TRIANGLE, 0, ENVELOPE2, 64}, {TRIANGLE, 0, ENVELOPE2, 64}, {TRIANGLE, 0, ENVELOPE2, 64}, {SINE, 0, 0, 64}}, 82, 4},
+//  {"PLK", 3, {{SQUARE, 0, ENVELOPE1, 64}, {SQUARE, 0, ENVELOPE1, 64}, {SQUARE, 0, ENVELOPE1, 64}, {SINE, 0, 0, 64}}, 46, 0},
+//  {"BA2", 3, {{SAW, 0, ENVELOPE0, 58}, {SAW, 0, ENVELOPE0, 58}, {SAW, 0, ENVELOPE0, 58}, {SINE, 0, 0, 64}}, 92, -7},
+//  {"LEA", 3, {{SAW, 0, ENVELOPE3, 68}, {SAW, 0, ENVELOPE3, 68}, {SAW, 0, ENVELOPE3, 68}, {SINE, 0, 0, 64}}, 116, 12},
+//  {"ORG", 3, {{SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}}, 116, -9},
+//  {"DRM", 1, {{SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 127, 0}
+//};
+const Preset kPresets[kPresetCount] PROGMEM = {
+  {"SIN", 1, {{SINE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 127, 50, 0, 0, 0},
+  {"TRI", 1, {{TRIANGLE, 0, ENVELOPE3, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}}, 127, 50, 0, 0, 0},
+  {"SAW", 1, {{SAW, 0, ENVELOPE3, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}, {SINE, 0, 0, 64}}, 127, 50, 0, 0, 0},
+  {"SQR", 1, {{SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, 0, 64}, {SQUARE, 0, 0, 64}, {SINE, 0, 0, 64}}, 127, 35, 256, 68, 0},
+  {"DRM", 1, {{SINE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 127, 50, 0, 0, 0}
 };
 
 const char kDrumLabels[kDrumCount][5] PROGMEM = {"KICK", "SNAR", "CHH"};
@@ -118,8 +120,8 @@ const char kScaleLabels[kScaleCount][4] PROGMEM = {"MAJ", "MIN", "PEN", "BLU"};
 const char kStyleLabels[kPlayStyleCount][5] PROGMEM = {"POLY", "CHRD", "UP", "DOWN", "UPDN", "CUP", "CDWN", "CUDN"};
 synth edgar;
 InstrumentMode instrumentMode = MODE_SEQ;
-SeqControls seqControls = {PRESET_SUB, 126, 64, 64};
-PlayControls playControls = {0, 0, SCALE_MAJOR, STYLE_POLY, 0};
+SeqControls seqControls = {PRESET_SUB, 126, 64};
+PlayControls playControls = {PRESET_PURE, 0, SCALE_MAJOR, STYLE_POLY, 0};
 uint8_t stepNotes[kStepCount] = {36, 38, 40, 41, 43, 45, 47, 48};
 uint8_t stepDrums[kStepCount] = {DRUM_KICK, DRUM_CLOSED_HAT, DRUM_SNARE, DRUM_CLOSED_HAT,
                                  DRUM_KICK, DRUM_CLOSED_HAT, DRUM_SNARE, DRUM_CLOSED_HAT};
@@ -140,6 +142,7 @@ bool playVcaControlLocked = false;
 uint16_t playVcaLfoRateHundredths = 0;
 uint16_t playVcaLfoShiftRaw = 0;
 bool playVcaLfoControlLocked = false;
+uint8_t playGlide = 0;
 
 uint8_t currentStep = 0;
 uint8_t playingStep = 255;
@@ -206,8 +209,12 @@ void copyProgmemLabel(char *destination, const char *source, uint8_t size) {
   destination[size - 1] = '\0';
 }
 
-void readSeqPreset(uint8_t index, SeqPreset &preset) { memcpy_P(&preset, &kSeqPresets[index], sizeof(SeqPreset)); }
-void readLivePreset(uint8_t index, LivePreset &preset) { memcpy_P(&preset, &kLivePresets[index], sizeof(LivePreset)); }
+void readPreset(uint8_t index, Preset &preset) { memcpy_P(&preset, &kPresets[index], sizeof(Preset)); }
+
+// Keep preset pulse widths musically useful while retaining one-byte storage.
+uint16_t pulseWidthForPercent(uint8_t percent) {
+  return (uint16_t)constrain(percent, 5, 95) * 655U;
+}
 
 uint16_t pitchWordForFrequency(uint16_t frequency) {
   return ((uint32_t)frequency * 65535UL + FS / 2) / FS;
@@ -220,6 +227,16 @@ uint16_t lfoRateForIndex(uint8_t index) {
   if (index < 16) return kLfoFrequencyMinHundredths + index;
   if (index < 64) return 20 + (uint16_t)(index - 15) * 10;
   return 500 + (uint16_t)(index - 63) * 50;
+}
+
+// Preset VCA modulation keeps a compact, editable index while covering the
+// full 0.01-20 Hz range: 0.01-0.20 in 0.01 Hz, 0.3-5.0 in 0.1 Hz, then
+// 5.5-20.0 in 0.5 Hz increments.
+uint16_t presetVcaRateHundredths(uint8_t modulation) {
+  if (modulation == 0) return 0;
+  if (modulation <= 20) return modulation;
+  if (modulation <= 68) return 20 + (uint16_t)(modulation - 20) * 10;
+  return 500 + (uint16_t)(min(modulation, (uint8_t)(kPresetVcaModulationCount - 1)) - 68) * 50;
 }
 
 uint8_t lfoRateIndexForHundredths(uint16_t rate) {
@@ -367,7 +384,10 @@ uint8_t mapIndexHysteresis(uint16_t raw, uint8_t current, uint8_t count) {
   if (raw <= kAnalogEndpointMargin) return count - 1;
   if (raw >= 1023 - kAnalogEndpointMargin) return 0;
 
-  const uint8_t forwardBin = min((uint8_t)((raw * count) >> 10), (uint8_t)(count - 1));
+  // raw and count are 16-bit on the ATmega328P.  Keep this product wide: the
+  // LFO's 94 bins otherwise overflow above roughly two thirds of the pot,
+  // making its 0.05-0.20 Hz range unreachable.
+  const uint8_t forwardBin = min((uint8_t)(((uint32_t)raw * count) >> 10), (uint8_t)(count - 1));
   const uint8_t candidate = count - 1 - forwardBin;
   if (current >= count || candidate == current) return candidate;
 
@@ -433,7 +453,7 @@ void readControls(unsigned long now) {
 
 void readSequencerControls(const uint16_t values[], unsigned long now) {
   (void)now;
-  uint8_t next = mapIndexHysteresis(values[0], seqControls.preset, kSeqPresetCount);
+  uint8_t next = mapIndexHysteresis(values[0], seqControls.preset, kPresetCount);
   if (next != seqControls.preset) {
     if (seqControls.preset == PRESET_DRUM || next == PRESET_DRUM) {
       edgar.stopDrum();
@@ -444,10 +464,8 @@ void readSequencerControls(const uint16_t values[], unsigned long now) {
   }
   next = mapByteHysteresis(values[1], seqControls.bpm, 60, 220);
   if (next != seqControls.bpm) { seqControls.bpm = next; displayDirty = true; }
-  next = mapByteHysteresis(values[2], seqControls.color, 127, 0);
-  if (next != seqControls.color) { seqControls.color = next; displayDirty = true; }
-  next = mapByteHysteresis(values[3], seqControls.shape, 127, 0);
-  if (next != seqControls.shape) { seqControls.shape = next; displayDirty = true; }
+  next = mapByteHysteresis(values[2], seqControls.drumTone, 127, 0);
+  if (next != seqControls.drumTone) { seqControls.drumTone = next; displayDirty = true; }
 }
 
 void revoiceHeldButtons();
@@ -543,7 +561,7 @@ void readPlayControls(const uint16_t values[], unsigned long now) {
     }
   }
   if (!playMorphControlLocked[0]) {
-    const uint8_t next = mapIndexHysteresis(values[0], playControls.preset, kLivePresetCount);
+    const uint8_t next = mapIndexHysteresis(values[0], playControls.preset, kPresetCount);
     if (next != playControls.preset) {
       playControls.preset = next; applyLiveConfiguration(); revoiceHeldButtons();
       displayDirty = true;
@@ -762,7 +780,6 @@ void changeMode(InstrumentMode nextMode, unsigned long now) {
     clearHeldNotes();
     edgar.disablePlayMorph();
     edgar.disablePlayVca();
-    edgar.disablePlayUnison();
   }
   edgar.stopDrum();
   stopNormalVoices();
@@ -797,14 +814,7 @@ void changeMode(InstrumentMode nextMode, unsigned long now) {
 }
 
 void panicAll() {
-  edgar.stopDrum();
-  for (uint8_t voice = 0; voice < SYNTH_VOICE_COUNT; ++voice) {
-    edgar.killVoice(voice);
-    normalCurrentPitch[voice] = 0;
-    normalTargetPitch[voice] = 0;
-    normalGlide[voice] = 0;
-  }
-  heldButtonMask = 0; resetLiveAssignments();
+  edgar.stopDrum(); stopNormalVoices(); heldButtonMask = 0; resetLiveAssignments();
   if (instrumentMode == MODE_DRONE) { droneGateMask = 0; edgar.stopAllDrones(); }
   displayDirty = true;
 }
@@ -822,8 +832,17 @@ uint16_t pitchForNote(int16_t note) {
   return pgm_read_word(&PITCHS[note]);
 }
 
-uint16_t detunePitch(uint16_t pitch, int16_t permille) {
-  int32_t result = pitch + ((int32_t)pitch * permille) / 1000;
+// Presets may specify every integer cent from -1200 to +1200. A nearby pitch
+// table value keeps the control-rate calculation compact; the residual is
+// then applied as a fixed-point detune correction.
+uint16_t pitchForNoteWithDetuneCents(int16_t note, int16_t detuneCents) {
+  detuneCents = constrain(detuneCents, -1200, 1200);
+  const int16_t semitones = detuneCents >= 0 ?
+    (detuneCents + 50) / 100 : (detuneCents - 50) / 100;
+  const int16_t residualCents = detuneCents - semitones * 100;
+  const uint16_t basePitch = pitchForNote(note + semitones);
+  const int32_t result = basePitch +
+    ((int32_t)basePitch * residualCents * 578L) / 1000000L;
   return constrain(result, 1, 65535);
 }
 
@@ -849,46 +868,21 @@ void updateGlide(unsigned long now) {
   }
 }
 
-uint8_t seqShapeLength(uint8_t preset, uint8_t shape) {
-  switch (preset) {
-    case PRESET_BASS: return map(shape, 0, 127, 12, 92);
-    case PRESET_PLUCK: return map(shape, 0, 127, 4, 76);
-    case PRESET_BELL: return map(shape, 0, 127, 28, 112);
-    case PRESET_CHORD: return map(shape, 0, 127, 20, 108);
-    case PRESET_SUB: return map(shape, 0, 127, 24, 110);
-    default: return 102;
-  }
-}
-
-int8_t chordIntervalForVoice(uint8_t voice, uint8_t color) {
-  static const int8_t intervals[4][4] PROGMEM = {{0, 3, 7, 12}, {0, 4, 7, 12}, {0, 2, 7, 12}, {0, 5, 7, 12}};
-  return (int8_t)pgm_read_byte(&intervals[min((uint8_t)(color >> 5), (uint8_t)3)][voice]);
-}
-
-// Builds a sequencer voice stack from the preset and macro controls.
+// Builds a sequencer voice stack from the selected preset.
 void triggerSequencerNote(uint8_t note, bool backgroundOnly) {
   edgar.stopDrum();
-  SeqPreset preset; readSeqPreset(seqControls.preset, preset);
+  Preset preset; readPreset(seqControls.preset, preset);
   const uint8_t voiceCount = backgroundOnly ? 1 : preset.voiceCount;
-  const uint8_t length = seqShapeLength(seqControls.preset, seqControls.shape);
 
   for (uint8_t voice = 0; voice < voiceCount; ++voice) {
     VoiceRecipe recipe = preset.voices[voice];
-    int8_t semitone = recipe.semitone;
-    int16_t fine = 0;
+    int16_t detuneCents = recipe.detuneCents;
     uint8_t modulation = recipe.modulation;
-    uint8_t glide = 0;
-    if (seqControls.preset == PRESET_SUB && voice == 1) fine = map(seqControls.color, 0, 127, 0, 8);
-    else if (seqControls.preset == PRESET_BASS) modulation = map(seqControls.color, 0, 127, 64, 36);
-    else if (seqControls.preset == PRESET_PLUCK && voice == 1) fine = map(seqControls.color, 0, 127, 0, 12);
-    else if (seqControls.preset == PRESET_BELL && voice == 2) fine = map(seqControls.color, 0, 127, -15, 40);
-    else if (seqControls.preset == PRESET_LEAD) {
-      const int16_t spread = map(seqControls.color, 0, 127, 0, 18);
-      fine = voice == 0 ? -(spread / 2) : spread; glide = seqControls.shape;
-    } else if (seqControls.preset == PRESET_CHORD) semitone = chordIntervalForVoice(voice, seqControls.color);
+    const uint8_t glide = preset.glide;
     edgar.setWave(voice, recipe.wave); edgar.setEnvelope(voice, recipe.envelope);
-    edgar.setLength(voice, length); edgar.setMod(voice, modulation);
-    triggerNormalVoice(voice, detunePitch(pitchForNote((int16_t)note + semitone), fine), glide);
+    edgar.setPulseWidth(voice, pulseWidthForPercent(preset.squarePulseWidthPercent));
+    edgar.setLength(voice, preset.length); edgar.setMod(voice, modulation);
+    triggerNormalVoice(voice, pitchForNoteWithDetuneCents(note, detuneCents), glide);
   }
   if (!backgroundOnly) for (uint8_t voice = voiceCount; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
 }
@@ -899,7 +893,8 @@ void triggerDrum(uint8_t drum, bool backgroundOnly) {
   normalCurrentPitch[0] = 0;
   normalTargetPitch[0] = 0;
   normalGlide[0] = 0;
-  edgar.triggerDrum(min(drum, (uint8_t)(kDrumCount - 1)), seqControls.color, seqControls.shape);
+  Preset preset; readPreset(seqControls.preset, preset);
+  edgar.triggerDrum(min(drum, (uint8_t)(kDrumCount - 1)), seqControls.drumTone, preset.length);
 }
 
 void triggerSequencerStep(uint8_t step, bool backgroundOnly) {
@@ -930,18 +925,20 @@ void runSequencer(unsigned long now) {
 }
 
 void applyLiveConfiguration() {
-  LivePreset preset; readLivePreset(playControls.preset, preset);
-  // A unison pair already needs two table reads per live voice.  Keeping it
-  // exclusive with the secondary-wave path preserves the 20 kHz ISR margin.
-  const bool secondaryEnabled = preset.unisonCents == 0 && playMorphWave != kPlayMorphOff;
+  Preset preset; readPreset(playControls.preset, preset);
+  const bool secondaryEnabled = playMorphWave != kPlayMorphOff;
   const uint8_t secondaryWave = secondaryEnabled ? playMorphWave : SINE;
   edgar.configurePlayMorph(
-    preset.wave, secondaryWave, playMorphLfoRateHundredths, secondaryEnabled);
-  edgar.configurePlayUnison(preset.unisonCents);
+    preset.voices[0].wave, secondaryWave, playMorphLfoRateHundredths, secondaryEnabled);
+  const uint16_t pulseWidth = pulseWidthForPercent(preset.squarePulseWidthPercent);
+  playVcaDepth = preset.vcaDepth;
+  playVcaLfoRateHundredths = presetVcaRateHundredths(preset.vcaModulation);
+  playGlide = preset.glide;
   edgar.configurePlayVca(playVcaDepth, playVcaLfoRateHundredths);
   for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) {
-    edgar.setEnvelope(voice, preset.envelope);
-    edgar.setLength(voice, preset.length); edgar.setMod(voice, preset.modulation);
+    edgar.setEnvelope(voice, preset.voices[0].envelope);
+    edgar.setPulseWidth(voice, pulseWidth);
+    edgar.setLength(voice, preset.length); edgar.setMod(voice, preset.voices[0].modulation);
   }
 }
 
@@ -988,7 +985,7 @@ void triggerPolyButton(uint8_t button) {
   }
   const uint8_t voice = slot + 1;
   liveButtonForVoice[slot] = button; liveVoiceForButton[button] = voice; liveVoiceAge[slot] = buttonPressOrder[button];
-  triggerNormalVoice(voice, pitchForNote(liveNoteForButton(button)), 0);
+  triggerNormalVoice(voice, pitchForNote(liveNoteForButton(button)), playGlide);
 }
 
 void triggerHeldChord() {
@@ -1000,7 +997,7 @@ void triggerHeldChord() {
   const int16_t root = 36 + playControls.octave * 12 + playControls.root;
   for (uint8_t chordVoice = 0; chordVoice < 3; ++chordVoice) {
     const int8_t offset = scaleDegreeOffset(playControls.scale, button + chordVoice * 2);
-    triggerNormalVoice(chordVoice + 1, pitchForNote(root + offset), 0);
+    triggerNormalVoice(chordVoice + 1, pitchForNote(root + offset), playGlide);
   }
 }
 
@@ -1014,13 +1011,14 @@ uint8_t collectHeldButtons(uint8_t buttons[kStepCount]) {
 void advanceArpeggio() {
   uint8_t buttons[kStepCount];
   const uint8_t count = collectHeldButtons(buttons);
-  stopNormalVoice(2); stopNormalVoice(3);
-  if (count == 0) { stopNormalVoice(1); arpPosition = 0; arpDirection = 1; return; }
+  const uint8_t voice = 1;
+  for (uint8_t other = voice + 1; other < SYNTH_VOICE_COUNT; ++other) stopNormalVoice(other);
+  if (count == 0) { stopNormalVoice(voice); arpPosition = 0; arpDirection = 1; return; }
 
   const bool chordArpeggio = playControls.style >= STYLE_CHORD_ARP_UP;
   const uint8_t noteCount = chordArpeggio ? 3 : count;
   const int8_t chordButton = chordArpeggio ? latestHeldButton() : -1;
-  const int16_t chordRoot = (playControls.octave + 1) * 12 + playControls.root;
+  const int16_t chordRoot = 36 + playControls.octave * 12 + playControls.root;
 
   if (chordArpeggio) {
     arpPosition %= noteCount;
@@ -1032,30 +1030,30 @@ void advanceArpeggio() {
       if (arpDirection > 0 && arpPosition >= noteCount - 1) arpDirection = -1;
       else if (arpDirection < 0 && arpPosition == 0) arpDirection = 1;
       arpPosition += arpDirection;
-      triggerNormalVoice(1, pitchForNote(chordRoot + scaleDegreeOffset(playControls.scale, chordButton + chordVoice * 2)), 0);
+      triggerNormalVoice(voice, pitchForNote(chordRoot + scaleDegreeOffset(playControls.scale, chordButton + chordVoice * 2)), playGlide);
       return;
     }
-    triggerNormalVoice(1, pitchForNote(chordRoot + scaleDegreeOffset(playControls.scale, chordButton + chordVoice * 2)), 0);
+    triggerNormalVoice(voice, pitchForNote(chordRoot + scaleDegreeOffset(playControls.scale, chordButton + chordVoice * 2)), playGlide);
     arpPosition = (arpPosition + 1) % noteCount;
     return;
   }
 
   if (playControls.style == STYLE_ARP_DOWN) {
     arpPosition %= count;
-    triggerNormalVoice(1, pitchForNote(liveNoteForButton(buttons[count - 1 - arpPosition])), 0);
+    triggerNormalVoice(voice, pitchForNote(liveNoteForButton(buttons[count - 1 - arpPosition])), playGlide);
     arpPosition = (arpPosition + 1) % count;
     return;
   }
   if (playControls.style == STYLE_ARP_UPDOWN && count > 1) {
     if (arpPosition >= count) arpPosition = count - 1;
-    triggerNormalVoice(1, pitchForNote(liveNoteForButton(buttons[arpPosition])), 0);
+    triggerNormalVoice(voice, pitchForNote(liveNoteForButton(buttons[arpPosition])), playGlide);
     if (arpDirection > 0 && arpPosition >= count - 1) arpDirection = -1;
     else if (arpDirection < 0 && arpPosition == 0) arpDirection = 1;
     arpPosition += arpDirection;
     return;
   }
   arpPosition %= count;
-  triggerNormalVoice(1, pitchForNote(liveNoteForButton(buttons[arpPosition])), 0);
+  triggerNormalVoice(voice, pitchForNote(liveNoteForButton(buttons[arpPosition])), playGlide);
   arpPosition = (arpPosition + 1) % count;
 }
 
@@ -1198,12 +1196,12 @@ void renderDisplay(unsigned long now) {
 }
 
 void renderSequencerDashboard(bool inlineEditVisible) {
-  frameProgmemText(0, 0, kSeqPresets[seqControls.preset].label);
+  frameProgmemText(0, 0, kPresets[seqControls.preset].label);
   frameChar(0, 4, 'B'); frameNumber(0, 5, seqControls.bpm);
-  frameChar(0, 9, seqControls.preset == PRESET_DRUM ? 'T' : 'C');
-  frameNumber(0, 10, map(seqControls.color, 0, 127, 0, 99));
-  frameChar(0, 13, seqControls.preset == PRESET_DRUM ? 'D' : 'S');
-  frameNumber(0, 14, map(seqControls.shape, 0, 127, 0, 99));
+  if (seqControls.preset == PRESET_DRUM) {
+    frameChar(0, 9, 'T');
+    frameNumber(0, 10, map(seqControls.drumTone, 0, 127, 0, 99));
+  }
   for (uint8_t step = 0; step < kStepCount; ++step) {
     const bool enabled = bitRead(seqGateMask, step);
     if (step == playingStep) frameChar(1, step, enabled ? 'O' : 'o');
@@ -1221,7 +1219,7 @@ void renderSequencerDashboard(bool inlineEditVisible) {
 
 void renderPlayDashboard(bool inlineEditVisible) {
   frameText(0, 0, F("PLY "));
-  frameProgmemText(0, 4, kLivePresets[playControls.preset].label);
+  frameProgmemText(0, 4, kPresets[playControls.preset].label);
   frameProgmemText(0, 9, kRootLabels[playControls.root]);
   frameProgmemText(0, 12, kScaleLabels[playControls.scale]);
   frameProgmemText(1, 0, kStyleLabels[playControls.style]);

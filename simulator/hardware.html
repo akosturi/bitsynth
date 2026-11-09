@@ -204,7 +204,7 @@
     .pad .keycap, .pad .step-number { display: none; }
     .pad::after { display: none; }
 
-    #preset-screw, #drone-preset-screw {
+    #preset-screw {
       position: absolute;
       z-index: 4;
       left: 97%;
@@ -221,9 +221,7 @@
       transform: translate(-50%, -50%);
     }
 
-    #drone-preset-screw { left: 3%; }
-    #preset-screw:disabled, #drone-preset-screw:disabled { cursor: wait; }
-    #preset-screw:focus-visible, #drone-preset-screw:focus-visible { box-shadow: 0 0 0 2px #fff; }
+    #preset-screw:focus-visible { box-shadow: 0 0 0 2px #fff; }
 
     #cycle-meter {
       position: absolute;
@@ -258,7 +256,6 @@
       <button id="reset-button" disabled>Reset</button>
       <button id="run-button" type="button" disabled>Start audio</button>
       <span id="runtime-note">Waiting for firmware.</span>
-      <span id="preset-status" role="status" aria-live="polite"></span>
     </div>
 
     <div class="panel-scroll">
@@ -272,8 +269,7 @@
         <button id="mode-button" aria-label="Mode or panic, key M"><span class="keycap">M</span><strong>MODE</strong></button>
         <div id="steps-grid"></div>
         <output id="cycle-meter" title="Smoothed audio ISR load and highest measured ISR duration" hidden>ISR -- / 800 cycles · MAX --</output>
-        <button id="drone-preset-screw" type="button" data-test-preset="drone-stress" aria-label="Apply DRONE stress test preset"></button>
-        <button id="preset-screw" type="button" data-test-preset="play-organ" aria-label="Apply PLAY organ test preset"></button>
+        <button id="preset-screw" type="button" aria-label="Show audio ISR cycle meter"></button>
       </section>
     </div>
   </main>

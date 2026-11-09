@@ -17,8 +17,8 @@
     { "type": "wokwi-potentiometer", "id": "setting4", "top": 278.4, "left": 614.4, "attrs": { "value": "511" } },
     { "type": "wokwi-text", "id": "settingText1", "top": 355.2, "left": 259.2, "attrs": { "text": "P1 PRESET" } },
     { "type": "wokwi-text", "id": "settingText2", "top": 355.2, "left": 384, "attrs": { "text": "P2 BPM" } },
-    { "type": "wokwi-text", "id": "settingText3", "top": 355.2, "left": 489.6, "attrs": { "text": "P3 COLOR" } },
-    { "type": "wokwi-text", "id": "settingText4", "top": 355.2, "left": 604.8, "attrs": { "text": "P4 SHAPE" } },
+    { "type": "wokwi-text", "id": "settingText3", "top": 355.2, "left": 489.6, "attrs": { "text": "P3 TUNE" } },
+    { "type": "wokwi-text", "id": "settingText4", "top": 355.2, "left": 604.8, "attrs": { "text": "P4 UNUSED" } },
 
     { "type": "board-cd74hc4067", "id": "buttonMux", "top": 432, "left": 0, "attrs": { "digitalMux": "1" } },
     { "type": "wokwi-text", "id": "buttonLabel", "top": 403.2, "left": 9.6, "attrs": { "text": "STEP BUTTONS (A1)" } },

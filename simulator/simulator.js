@@ -28,34 +28,11 @@ const TCCR1B = 0x81;
 const OCR1AL = 0x88;
 const OCR1AH = 0x89;
 
-// Values use the visible knob direction (0 = fully counter-clockwise,
-// 1023 = fully clockwise).
-const TEST_PRESETS = {
-  'play-organ': {
-    label: 'PLAY ORGN UNISON / CHRD / VCA 4 Hz',
-    bootSettings: [0, 601, 516, 516],
-    // ORGN preset, C root, major scale and CHRD style.
-    playSettings: [950, 0, 0, 306],
-    steps: [0, 89, 178, 223, 312, 401, 489, 534],
-    // MODE-shifted controls: morph 2 Hz, SIN, full VCA depth, VCA LFO 4 Hz.
-    shiftedSettings: [363, 173, 1023, 587],
-  },
-  'drone-stress': {
-    label: 'DRONE 8x SAW / four VCA LFOs at 5 Hz',
-    bootSettings: [0, 420, 511, 511],
-    // Values below the endpoint still select SAW and deliberately release
-    // soft takeover after the shifted 5 Hz rate has been selected.
-    droneSettings: [900, 900, 900, 900],
-    lfoSettings: [696, 696, 696, 696],
-    steps: [1023, 1023, 1023, 1023, 1023, 1023, 1023, 1023],
-  },
-};
-
 const FALLBACK_HARDWARE = {
   source: 'embedded fallback',
   settings: [0, 420, 511, 511].map((value, index) => ({
     id: `setting${index + 1}`,
-    label: ['P1 PRESET', 'P2 BPM', 'P3 COLOR', 'P4 SHAPE'][index],
+    label: ['P1 PRESET', 'P2 BPM', 'P3 TUNE', 'P4 UNUSED'][index],
     value,
   })),
   steps: [0, 89, 178, 223, 312, 401, 489, 534].map((value, index) => ({
@@ -91,9 +68,8 @@ const ui = {
   volume: $('#volume'),
   runtimeNote: $('#runtime-note'),
   scope: $('#scope'),
-  presetButtons: [...document.querySelectorAll('[data-test-preset]')],
-  presetStatus: $('#preset-status'),
   cycleMeter: $('#cycle-meter'),
+  cycleMeterScrew: $('#preset-screw'),
 };
 const hardwareView = document.body.classList.contains('hardware-ui');
 
@@ -301,10 +277,9 @@ function makeKnob(control, small = false) {
     value.textContent = `${Math.round((control.value / 1023) * 100)}%`;
     machine?.updateInputs();
   };
-  const setValue = (next, fromPreset = false) => {
+  const setValue = (next) => {
     control.value = Math.max(0, Math.min(1023, Math.round(next)));
     render();
-    if (!fromPreset) clearTestPresetSelection();
   };
   control.setValue = setValue;
 
@@ -390,165 +365,6 @@ function buildControls() {
   });
   ui.stepsGrid.replaceChildren(...cards);
   bindMomentary(ui.modeButton, setModePressed);
-}
-
-function clearTestPresetSelection() {
-  ui.presetButtons.forEach((button) => {
-    button.classList.remove('active');
-    button.setAttribute('aria-pressed', 'false');
-  });
-  ui.presetStatus.textContent = '';
-}
-
-const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
-
-async function waitForLcd(label, predicate, timeout = 2500) {
-  const deadline = performance.now() + timeout;
-  while (performance.now() < deadline) {
-    if (predicate(lcdText)) return;
-    await wait(40);
-  }
-  throw new Error(`${label} timed out (LCD: ${lcdText.join(' / ').trim()})`);
-}
-
-async function applyPlayTestPreset(id) {
-  const preset = TEST_PRESETS[id];
-  if (!preset || preset.bootSettings.length !== settings.length ||
-      preset.playSettings.length !== settings.length ||
-      preset.shiftedSettings.length !== settings.length || preset.steps.length !== steps.length) return;
-  const button = ui.presetButtons.find((item) => item.dataset.testPreset === id);
-  if (!firmwareImage || !machine) {
-    ui.presetStatus.textContent = 'Load firmware first';
-    return;
-  }
-
-  button.disabled = true;
-  ui.presetStatus.textContent = 'Configuring...';
-
-  try {
-    // Boot with normal sequencer positions, then make real analog movements
-    // after PLAY is confirmed. This satisfies the firmware's movement filter.
-    preset.bootSettings.forEach((value, index) => settings[index].setValue(value, true));
-    preset.steps.forEach((value, index) => steps[index].setValue(value, true));
-    await resetMachine();
-    if (!running) await startAudio();
-    await wait(300);
-
-    // A short MODE tap changes the freshly reset firmware from SEQ to PLAY.
-    setModePressed(true);
-    await wait(450);
-    setModePressed(false);
-    await waitForLcd('PLAY mode', ([line1, line2]) =>
-      line1.trim() === 'MODE' && line2.trim() === 'PLAY');
-
-    preset.playSettings.forEach((value, index) => settings[index].setValue(value, true));
-    await waitForLcd('ORGN / CHRD', ([line1, line2]) =>
-      line1.startsWith('PLY ORGN') && line2.startsWith('CHRD'));
-
-    // Hold MODE and verify each shifted parameter on the emulated LCD.
-    setModePressed(true);
-    await wait(450);
-
-    settings[1].setValue(preset.shiftedSettings[1], true);
-    await waitForLcd('SIN morph', ([, line2]) => line2.includes('B:SIN'));
-    settings[0].setValue(preset.shiftedSettings[0], true);
-    await waitForLcd('2 Hz morph', ([, line2]) => line2.includes('L:2.0'));
-    settings[2].setValue(preset.shiftedSettings[2], true);
-    await waitForLcd('full VCA depth', ([, line2]) => line2.includes('V:0%'));
-    settings[3].setValue(preset.shiftedSettings[3], true);
-    await waitForLcd('4 Hz VCA', ([, line2]) => line2.includes('VL:4.0'));
-
-    setModePressed(false);
-    await wait(180);
-
-    // Sound one chord immediately so the resulting configuration is audible.
-    setStepPressed(0, true);
-    await wait(700);
-    setStepPressed(0, false);
-
-    ui.presetButtons.forEach((item) => {
-      const selected = item.dataset.testPreset === id;
-      item.classList.toggle('active', selected);
-      item.setAttribute('aria-pressed', String(selected));
-    });
-    ui.presetStatus.textContent = `${preset.label} ready`;
-  } finally {
-    setModePressed(false);
-    steps.forEach((_, index) => setStepPressed(index, false));
-    button.disabled = false;
-  }
-}
-
-async function tapModeAndWait(mode) {
-  setModePressed(true);
-  await wait(450);
-  setModePressed(false);
-  await waitForLcd(`${mode} mode`, ([line1, line2]) =>
-    line1.trim() === 'MODE' && line2.trim() === mode);
-}
-
-async function applyDroneTestPreset(id) {
-  const preset = TEST_PRESETS[id];
-  if (!preset || preset.bootSettings.length !== settings.length ||
-      preset.droneSettings.length !== settings.length ||
-      preset.lfoSettings.length !== settings.length || preset.steps.length !== steps.length) return;
-  const button = ui.presetButtons.find((item) => item.dataset.testPreset === id);
-  if (!firmwareImage || !machine) {
-    ui.presetStatus.textContent = 'Load firmware first';
-    return;
-  }
-
-  button.disabled = true;
-  ui.presetStatus.textContent = 'Configuring DRONE stress test...';
-
-  try {
-    preset.bootSettings.forEach((value, index) => settings[index].setValue(value, true));
-    preset.steps.forEach((value, index) => steps[index].setValue(value, true));
-    await resetMachine();
-    if (!running) await startAudio();
-    await wait(300);
-
-    await tapModeAndWait('PLAY');
-    await tapModeAndWait('DRONE');
-    await wait(180);
-
-    setModePressed(true);
-    await wait(450);
-    for (let pair = 0; pair < settings.length; pair++) {
-      settings[pair].setValue(preset.lfoSettings[pair], true);
-      await waitForLcd(`pair ${pair + 1} VCA LFO`, ([, line2]) =>
-        line2.includes(`L${pair + 1}:5.0`), 5000);
-    }
-    setModePressed(false);
-    await wait(180);
-
-    preset.droneSettings.forEach((value, index) => settings[index].setValue(value, true));
-    await waitForLcd('four SAW pairs', ([line1]) => line1.startsWith('DRN SA SA SA SA'));
-
-    machine.audioIsrCycles = 0;
-    machine.audioIsrMaxCycles = 0;
-    machine.audioIsrBlockMax = 0;
-    steps.forEach((_, index) => setStepPressed(index, true));
-    await wait(120);
-    steps.forEach((_, index) => setStepPressed(index, false));
-    await waitForLcd('eight active drones', ([, line2]) => line2.startsWith('xxxxxxxx'));
-    await wait(700);
-
-    ui.presetButtons.forEach((item) => {
-      const selected = item.dataset.testPreset === id;
-      item.classList.toggle('active', selected);
-      item.setAttribute('aria-pressed', String(selected));
-    });
-    ui.presetStatus.textContent = `${preset.label} ready`;
-  } finally {
-    setModePressed(false);
-    steps.forEach((_, index) => setStepPressed(index, false));
-    button.disabled = false;
-  }
-}
-
-function applyTestPreset(id) {
-  return id === 'drone-stress' ? applyDroneTestPreset(id) : applyPlayTestPreset(id);
 }
 
 class HD44780 {
@@ -1200,14 +1016,6 @@ function reportRuntimeError(error) {
   ui.runtimeNote.textContent = error instanceof Error ? error.message : String(error);
 }
 
-// A service preset uses the normal, deliberately filtered control path. A failed
-// LCD confirmation must not turn a recoverable preset timeout into an engine fault.
-function reportServicePresetError(error) {
-  const message = error instanceof Error ? error.message : String(error);
-  ui.presetStatus.textContent = `Service setup failed: ${message}`;
-  ui.runtimeNote.textContent = `Service setup failed; the simulator is still running. ${message}`;
-}
-
 async function resetMachine() {
   if (!firmwareImage) return;
   const wasRunning = running;
@@ -1327,12 +1135,9 @@ ui.resetButton.addEventListener('click', () => resetMachine().catch(reportRuntim
 
 await readDiagram();
 buildControls();
-ui.presetButtons.forEach((button) => {
-  button.addEventListener('click', () => {
-    ui.cycleMeter.hidden = false;
-    cycleMeterUpdatedAt = 0;
-    applyTestPreset(button.dataset.testPreset).catch(reportServicePresetError);
-  });
+ui.cycleMeterScrew?.addEventListener('click', () => {
+  ui.cycleMeter.hidden = false;
+  cycleMeterUpdatedAt = 0;
 });
 drawScope();
 scheduleLcdDotMatrix();

@@ -70,25 +70,9 @@ Simulator controls:
 
 The simulator models the real 9-bit, 31.25 kHz PWM signal and the documented passive output filter, not just the synth's digital sample stream. Firmware execution, LCD output, multiplexed controls, audio generation, and filtering all run in the browser.
 
-### Test and service mode
+### Audio ISR cycle meter
 
-Click either lower screw on the simulated front panel to start a hidden test and service setup. The lower-right screw resets the simulated firmware and automatically configures a demanding PLAY setup:
-
-- `ORGN` live preset, C root, major scale, `CHRD` style, and octave 2
-- the `ORGN` preset's experimental -9 cent unison, plus a sine/2.0 Hz
-  secondary-wave setting retained for when a single-oscillator preset is selected
-- full shared live VCA depth with a 4.0 Hz VCA LFO
-
-The setup follows the normal control path, including MODE-button presses, analog-control filtering, shifted controls, and LCD confirmation. Once every setting has been confirmed, the simulator sounds a short test chord.
-
-The lower-left screw configures a DRONE stress test with all eight oscillators active as SAW waves at 600 Hz and all four pair VCA LFOs running at 5.0 Hz. Its cycle measurement is reset immediately before the drone gates open, so the displayed maximum covers the fully active DRONE path.
-
-Activating either setup also reveals the audio ISR cycle meter in the lower-right corner. Use it to verify that the 800-cycle audio deadline is met after firmware changes. Historical measurements were:
-
-```text
-PLAY:  ISR 763 / 800 cycles (95%) · MAX 780
-DRONE: ISR 550 / 800 cycles (69%) · MAX 554
-```
+Click the lower-right screw on the simulated front panel to reveal the audio ISR cycle meter. It shows the smoothed current ISR duration and its maximum, against the 800-cycle audio deadline. The screw does not change the firmware state or any control value.
 
 ## Hardware
 
@@ -140,41 +124,49 @@ The sequence runs in sixteenth notes.
 
 | Control | Function |
 |---|---|
-| Parameter 1 | Sequencer preset |
+| Parameter 1 | Shared preset bank |
 | Parameter 2 | Tempo, 60-220 BPM |
-| Parameter 3 | Preset-specific `COLOR` |
-| Parameter 4 | Preset-specific `SHAPE`; glide for `LEAD` |
+| Parameter 3 | `DRM` playback tuning; unused by melodic presets |
+| Parameter 4 | Unused |
 | Step pots 1-8 | Chromatic pitch from C2 to B3; drum selection in `DRUM` |
 | Step buttons 1-8 | Toggle the corresponding step on or off |
 
-The LCD shows the preset, BPM, `COLOR`/`SHAPE`, and the gate pattern. `x` is an enabled step, `-` is disabled, and `O`/`o` marks the current enabled/disabled step.
+The LCD shows the preset, BPM, DRM playback tuning when applicable, and the gate pattern. `x` is an enabled step, `-` is disabled, and `O`/`o` marks the current enabled/disabled step.
 
-| Preset | Voice structure | `COLOR` | `SHAPE` |
-|---|---|---|---|
-| `SUB` | Sine + square sub-octave | Detune | Decay |
-| `BAS` | Saw + square sub-octave | Vibrato depth | Decay |
-| `PLK` | Triangle + square octave | Detune | Decay |
-| `BEL` | Sine harmonics + triangle | Inharmonic offset | Ring length |
-| `LED` | Two saw waves | Detune/spread | Glide |
-| `CRD` | Four-layer chord | Minor / major / sus2 / sus4 | Decay |
-| `DRM` | Monophonic PCM drum engine | Playback tuning | Decay |
+The shared bank also contains the former PLAY sounds: `PURE`, `SOFT`, `KEYS`,
+`PLUK`, `BASS`, `LEAD`, and `ORGN`. Each bank entry retains its complete voice
+recipe, envelope length, modulation, and PLAY setting. When one of
+these sounds is used in SEQ, its stored envelope length is used.
+
+Each preset also stores one square-wave pulse width. It is applied to every
+square oscillator in that preset and otherwise has no effect; the stored value
+is limited to a musically useful 5-95% duty cycle. The supplied `SQR` preset
+uses a 35% pulse width, while the other presets retain the 50% default.
+
+Each preset also stores a shared PLAY VCA depth and modulation rate. Depth is
+0-256, while modulation is a compact index: `0` is off, `1` is 0.01 Hz,
+`20` is 0.20 Hz, `21-68` cover 0.3-5.0 Hz in 0.1 Hz steps, and `69-98`
+cover 5.5-20.0 Hz in 0.5 Hz steps. Selecting a PLAY preset restores these
+VCA values; they apply to all three live voices together, never to the
+background sequence.
+
+Each preset additionally stores one glide value (`0-127`). It applies to every
+melodic voice of that preset, in both SEQ and PLAY; `0` switches glide off.
 
 #### DRUM preset
 
 Each step stores one of `KICK`, `SNAR`, or `CHH`; this is still a single eight-step track, not three separate drum tracks. A new hit immediately replaces the previous one.
 
-The samples are signed 9-bit mono PCM at 20 kHz, losslessly bit-packed in flash. They are streamed directly from program memory without a RAM copy. `T` changes playback speed from 0.75x to 1.25x, while `D` applies a decay envelope lasting 25-100% of the pitch-adjusted sample duration.
+The samples are signed 9-bit mono PCM at 20 kHz, losslessly bit-packed in flash. They are streamed directly from program memory without a RAM copy. Parameter 3 (`T`) changes playback speed from 0.75x to 1.25x. The selected DRM preset's `length` value applies a decay envelope lasting 25-100% of the pitch-adjusted sample duration.
 
 ### PLAY - scale-quantized live performance
 
-PLAY reserves voice 0 for the monophonic background sequence and uses voices 1-3 for live notes.
-Live-note gates use a short 1.6 ms amplitude ramp on both press and release,
-which suppresses phase-discontinuity clicks without changing the selected
-sound envelope.
+PLAY reserves voice 0 for the monophonic background sequence and uses voices
+1-3 for live notes.
 
 | Control | Function |
 |---|---|
-| Parameter 1 | Live preset |
+| Parameter 1 | Shared preset bank |
 | Parameter 2 | Root note, C-B |
 | Parameter 3 | Scale: `MAJ`, `MIN`, `PEN`, or `BLU` |
 | Parameter 4 | Style: `POLY`, `CHRD`, `UP`, `DOWN`, `UPDN`, `CUP`, `CDWN`, or `CUDN` |
@@ -182,15 +174,12 @@ sound envelope.
 | Step pots 2-8 | Unused |
 | Step buttons 1-8 | Consecutive notes of the selected scale |
 
-Live presets are `PURE`, `SOFT`, `KEYS`, `PLUK`, `BASS`, `LEAD`, and `ORGN`.
-As an experimental PLAY-only feature, a live preset may also contain a signed
-`unisonCents` value (`-25` to `+25`). A non-zero value adds a second, phase-
-independent copy inside each live oscillator: positive values make that copy
-sharp and negative values make it flat, without consuming any of the three
-live voice slots. The copy follows the primary oscillator's vibrato through a
-precomputed frequency-word offset. `PURE` and `PLUK` are currently single
-oscillator presets; the other supplied presets demonstrate small signed
-detunes.
+Every shared preset may be selected for PLAY. Each voice recipe stores a signed
+`detuneCents` pitch offset (`-1200` to `+1200`), so it can use any whole-cent
+value from 1 to 1199 as well as semitone or octave intervals. Preset voices can
+therefore be detuned by up to one octave in either direction. Offsets are
+evaluated when a note is triggered and do not add oscillator layers or audio-
+ISR work.
 
 Preset modulation is a fixed 5 Hz triangle vibrato. Its stored `MOD` value is
 neutral at 64; distance from 64 selects depth, so values above and below 64
@@ -202,7 +191,7 @@ sweep.
 - `UP`, `DOWN`, and `UPDN` arpeggiate held buttons on the sequencer's sixteenth-note clock.
 - `CUP`, `CDWN`, and `CUDN` arpeggiate the 1-3-5 chord of the most recently held button upward, downward, or up then down, respectively, on that same clock.
 
-The background sequence keeps its position when entering PLAY. Hold **MODE** and press step button 1 to toggle it; the LCD shows `SEQ+` or `SEQ-`. Its clock continues while muted, so arpeggiators remain synchronized. A `DRUM` sequence uses the same reserved background slot and does not reduce the three live voices.
+The background sequence keeps its position when entering PLAY. Hold **MODE** and press step button 1 to toggle it; the LCD shows `SEQ+` or `SEQ-`. Its clock continues while muted, so arpeggiators remain synchronized. A `DRUM` sequence uses its dedicated PCM path and does not consume a normal voice.
 
 #### PLAY shifted controls
 
@@ -215,7 +204,7 @@ Hold **MODE** while moving a parameter pot:
 | Parameter 3 | Shared live VCA depth: off, then an adjustable 100-0% lower volume endpoint |
 | Parameter 4 | VCA triangle LFO: off, then 0.05-0.20 Hz in 0.01 Hz steps, 0.2-5.0 Hz in 0.1 Hz steps, and 5-20 Hz in 0.5 Hz steps |
 
-With a second waveform but no morph LFO, only the second waveform is used. With the LFO enabled, all three live voices morph between the preset and second waveform at matching phase positions; no extra oscillator is required. The VCA and both LFOs affect only the three live voices, never the background sequence. With its LFO off, the VCA holds the selected lower endpoint; with the LFO enabled, it moves between full volume and that endpoint. To retain the 20 kHz ISR margin, a preset with non-zero `unisonCents` temporarily bypasses this secondary-wave path; its selected shifted settings are retained and return when a single-oscillator preset is selected.
+With a second waveform but no morph LFO, only the second waveform is used. With the LFO enabled, all three live voices morph between the preset and second waveform at matching phase positions; no extra oscillator is required. The VCA and both LFOs affect only the three live voices, never the background sequence. With its LFO off, the VCA holds the selected lower endpoint; with the LFO enabled, it moves between full volume and that endpoint.
 
 The morph LFO is available only when a second waveform is selected, and the VCA LFO only when VCA depth is enabled.
 
@@ -251,7 +240,7 @@ On Windows, set `RAW_TO_H_OUTPUT_BITS` to `9` near the top of `util/raw_to_h.bat
 - **Real-time audio:** Timer2 runs the audio interrupt at 20 kHz. Timer1 generates 9-bit Fast PWM on `D9` at 31.25 kHz.
 - **Synthesis:** 256-sample wavetables, phase accumulators, four envelope-driven normal voices, and a separate eight-oscillator drone path. Core tables and drum data live in flash.
 - **Resource-aware mixing:** the drone engine recalculates one oscillator pair per audio interrupt. Each pair is therefore updated at 5 kHz while the PWM output remains at 20 kHz. This is an intentional quality/CPU trade-off for the 80-600 Hz range.
-- **PLAY isolation:** morphing, experimental in-oscillator unison, their 2.5 kHz control-rate LFOs, and the shared 9-bit linear VCA operate only on live voices 1-3. Voice 0 remains a clean background sequencer voice.
+- **PLAY isolation:** waveform morphing and its 2.5 kHz control-rate LFO, plus the shared 9-bit linear VCA, operate only on live voices 1-3. Voice 0 remains a clean background sequencer voice.
 - **PWM quality:** the internal mix uses additional fixed-point precision before conversion to 9-bit PWM, with quantization-error feedback and dither where appropriate.
 - **Stable controls:** multiplexed analog inputs use settling reads, median sampling, smoothing, movement confirmation, and hysteresis. Buttons are debounced in software.
 - **Efficient LCD updates:** a two-line shadow buffer writes only changed characters, avoiding visible flicker and unnecessary time in the control loop.
