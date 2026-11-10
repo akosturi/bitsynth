@@ -133,10 +133,9 @@ The sequence runs in sixteenth notes.
 
 The LCD shows the preset, BPM, DRM playback tuning when applicable, and the gate pattern. `x` is an enabled step, `-` is disabled, and `O`/`o` marks the current enabled/disabled step.
 
-The shared bank also contains the former PLAY sounds: `PURE`, `SOFT`, `KEYS`,
-`PLUK`, `BASS`, `LEAD`, and `ORGN`. Each bank entry retains its complete voice
-recipe, envelope length, modulation, and PLAY setting. When one of
-these sounds is used in SEQ, its stored envelope length is used.
+The shared bank contains `SIN`, `TRI`, `SAW`, `SQR`, `DRM`, and `NSE`. Each
+melodic entry retains its complete voice recipe, envelope length, modulation,
+and PLAY setting. When one is used in SEQ, its stored envelope length is used.
 
 Each preset also stores one square-wave pulse width. It is applied to every
 square oscillator in that preset and otherwise has no effect; the stored value
@@ -200,13 +199,19 @@ Hold **MODE** while moving a parameter pot:
 | Control | Shifted function |
 |---|---|
 | Parameter 1 | Wavetable-morph triangle LFO: off, then 0.05-0.20 Hz in 0.01 Hz steps, 0.2-5.0 Hz in 0.1 Hz steps, and 5-20 Hz in 0.5 Hz steps |
-| Parameter 2 | Second waveform: off, sine, triangle, square, or saw |
+| Parameter 2 | Second waveform: off, sine, triangle, square, saw, or `NSE` |
 | Parameter 3 | Shared live VCA depth: off, then an adjustable 100-0% lower volume endpoint |
 | Parameter 4 | VCA triangle LFO: off, then 0.05-0.20 Hz in 0.01 Hz steps, 0.2-5.0 Hz in 0.1 Hz steps, and 5-20 Hz in 0.5 Hz steps |
 
-With a second waveform but no morph LFO, only the second waveform is used. With the LFO enabled, all three live voices morph between the preset and second waveform at matching phase positions; no extra oscillator is required. The VCA and both LFOs affect only the three live voices, never the background sequence. With its LFO off, the VCA holds the selected lower endpoint; with the LFO enabled, it moves between full volume and that endpoint.
+With a second waveform but no morph LFO, only the second waveform is used. With the LFO enabled, all three live voices morph between the preset and second waveform; periodic waves use matching phase positions, while `NSE` is generated directly. No extra oscillator is required. The VCA and both LFOs affect only the three live voices, never the background sequence. With its LFO off, the VCA holds the selected lower endpoint; with the LFO enabled, it moves between full volume and that endpoint.
 
 The morph LFO is available only when a second waveform is selected, and the VCA LFO only when VCA depth is enabled.
+
+`NSE` is a generated white-noise source, not a wavetable. It uses an independent
+16-bit LFSR for each normal voice, advances at the 20 kHz audio rate, and uses
+the selected preset's envelope and PLAY VCA controls. Its pitch setting has no
+effect. `NSE` is available in the shared SEQ/PLAY preset bank and as PLAY's
+second waveform; it is intentionally unavailable in DRONE.
 
 After shifted editing, soft takeover prevents the normal preset, root, scale, and style values from jumping. Each normal function becomes active again only after its knob is moved deliberately.
 
@@ -223,7 +228,8 @@ DRONE stops the sequencer and switches to a dedicated eight-oscillator mixer.
 | Step pots 1-8 | Continuous, unquantized frequency from 80-600 Hz |
 | Step buttons 1-8 | Toggle the corresponding oscillator |
 
-Available waveforms are sine, triangle, square, and saw. Gates use short amplitude ramps to reduce switching clicks.
+Available waveforms are sine, triangle, square, and saw. `NSE` is intentionally
+unavailable in DRONE. Gates use short amplitude ramps to reduce switching clicks.
 
 While holding **MODE**, parameter pots 1-4 set independent VCA triangle-LFO rates for oscillator pairs 1-2, 3-4, 5-6, and 7-8. Each offers off plus 94 rates: 0.05-0.20 Hz in 0.01 Hz steps, 0.2-5.0 Hz in 0.1 Hz steps, and 5-20 Hz in 0.5 Hz steps. The four pair VCAs use the same fine 9-bit linear amplitude scaling as PLAY. Soft takeover also applies when returning to waveform selection.
 

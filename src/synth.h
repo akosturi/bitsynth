@@ -18,6 +18,7 @@
 #define TRIANGLE 1
 #define SQUARE   2
 #define SAW      3
+#define NOISE    4
 
 #define ENVELOPE0 0
 #define ENVELOPE1 1
@@ -61,6 +62,9 @@ const uint8_t SYNTH_ENVELOPE_COUNT = 11;
 const uint8_t SYNTH_WAVETABLE_INDEX_BITS = 8;
 const uint8_t SYNTH_WAVETABLE_SHIFT = 16 - SYNTH_WAVETABLE_INDEX_BITS;
 const uint16_t SYNTH_GENERATED_SQUARE = 0;
+// Flash on this target cannot reach this address; reserve it as a generated
+// source marker rather than spending flash on a noise wavetable.
+const uint16_t SYNTH_GENERATED_NOISE = 0xFFFF;
 const uint16_t SYNTH_DEFAULT_PULSE_WIDTH = 0x8000;
 // Updated once per four audio frames (5 kHz), giving a fixed 5 Hz vibrato.
 const uint32_t SYNTH_VIBRATO_LFO_STEP = 4294967UL;
@@ -91,6 +95,11 @@ volatile uint16_t EFTW[SYNTH_VOICE_COUNT] = {10, 10, 10, 10};
 volatile uint8_t divider = 4;
 volatile int16_t pwmQuantizationError = 0;
 volatile uint8_t pwmDitherLfsr = 0xA5;
+// Independent maximal-length 16-bit Galois LFSRs for the four normal voices.
+// These are advanced only by the audio ISR and must never be seeded with zero.
+volatile uint16_t noiseLfsrs[SYNTH_VOICE_COUNT] = {
+  0xA5C3, 0xD72B, 0x9E37, 0xF1A5
+};
 volatile bool playMorphActive = false;
 volatile uint16_t playMorphSource = (uint16_t)SinTable;
 volatile uint32_t playMorphLfoPCW = 0x80000000UL;
@@ -135,6 +144,26 @@ static inline __attribute__((always_inline)) int16_t generatedSquareSample(
   return phase < pulseWidth ? 255 : -256;
 }
 
+static inline __attribute__((always_inline)) int16_t nextNoiseSample(uint8_t voice)
+{
+  const uint16_t state = noiseLfsrs[voice];
+  const uint16_t next = (state >> 1) ^ ((state & 1) ? 0xB400 : 0);
+  noiseLfsrs[voice] = next;
+  return (int16_t)(next & 0x01FF) - 256;
+}
+
+static inline __attribute__((always_inline)) int16_t nextWaveSample(
+  uint8_t voice, uint16_t source, uint16_t phase, uint16_t pulseWidth)
+{
+  if (source == SYNTH_GENERATED_SQUARE) {
+    return generatedSquareSample(phase, pulseWidth);
+  }
+  if (source == SYNTH_GENERATED_NOISE) {
+    return nextNoiseSample(voice);
+  }
+  return readSigned9Sample(source, phase >> SYNTH_WAVETABLE_SHIFT);
+}
+
 // Decodes a signed 9-bit sample packed across byte boundaries.
 static inline __attribute__((always_inline)) int16_t readPackedSigned9Sample(
   uint16_t sampleAddress, uint16_t sampleIndex)
@@ -170,9 +199,7 @@ static inline __attribute__((always_inline)) int16_t nextScaledVoiceSample(
     return 0;
   }
   const uint16_t source = waveSources[voice];
-  const int16_t sample = source == SYNTH_GENERATED_SQUARE ?
-    generatedSquareSample(phase, pulseWidths[voice]) :
-    readSigned9Sample(source, phase >> SYNTH_WAVETABLE_SHIFT);
+  const int16_t sample = nextWaveSample(voice, source, phase, pulseWidths[voice]);
   return scaleSigned9Sample(sample, gain, 3);
 }
 
@@ -187,11 +214,8 @@ static inline __attribute__((always_inline)) int16_t nextScaledMorphedVoiceSampl
   }
 
   const uint16_t primarySource = waveSources[voice];
-  const uint16_t index = phase >> SYNTH_WAVETABLE_SHIFT;
-  const int16_t sampleA = primarySource == SYNTH_GENERATED_SQUARE ?
-    generatedSquareSample(phase, pulseWidths[voice]) : readSigned9Sample(primarySource, index);
-  const int16_t sampleB = secondarySource == SYNTH_GENERATED_SQUARE ?
-    generatedSquareSample(phase, pulseWidths[voice]) : readSigned9Sample(secondarySource, index);
+  const int16_t sampleA = nextWaveSample(voice, primarySource, phase, pulseWidths[voice]);
+  const int16_t sampleB = nextWaveSample(voice, secondarySource, phase, pulseWidths[voice]);
   const uint8_t primaryAmount = 128 - morphAmount;
   const int16_t sample =
     ((sampleA * primaryAmount) + (sampleB * morphAmount)) >> 7;
@@ -430,6 +454,8 @@ class synth
           return SYNTH_GENERATED_SQUARE;
         case SAW:
           return (uint16_t)SawTable;
+        case NOISE:
+          return SYNTH_GENERATED_NOISE;
         case SINE:
         default:
           return (uint16_t)SinTable;
@@ -819,7 +845,7 @@ class synth
 
     void setDroneWave(uint8_t voice, uint8_t wave)
     {
-      if (voice >= SYNTH_DRONE_COUNT) {
+      if (voice >= SYNTH_DRONE_COUNT || wave == NOISE) {
         return;
       }
 

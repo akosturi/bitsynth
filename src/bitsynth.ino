@@ -16,9 +16,9 @@ const uint8_t kStepCount = 8;
 const uint8_t kSettingCount = 4;
 const uint8_t kStepPotsPerLoop = 2;
 const uint8_t kDroneWaveCount = 4;
-const uint8_t kPlayMorphWaveCount = 4;
+const uint8_t kPlayMorphWaveCount = 5;
 const uint8_t kPlayMorphOff = 255;
-const uint8_t kPresetCount = 5;
+const uint8_t kPresetCount = 6;
 const uint8_t kDrumCount = DRUM_SAMPLE_COUNT;
 const uint8_t kScaleCount = 4;
 const uint8_t kPlayStyleCount = 8;
@@ -50,8 +50,8 @@ enum InstrumentMode : uint8_t { MODE_SEQ = 0, MODE_PLAY = 1, MODE_DRONE = 2 };
 enum ScaleMode : uint8_t { SCALE_MAJOR = 0, SCALE_MINOR = 1, SCALE_PENTATONIC = 2, SCALE_BLUES = 3 };
 enum PlayStyle : uint8_t { STYLE_POLY = 0, STYLE_CHORD = 1, STYLE_ARP_UP = 2, STYLE_ARP_DOWN = 3, STYLE_ARP_UPDOWN = 4,
                            STYLE_CHORD_ARP_UP = 5, STYLE_CHORD_ARP_DOWN = 6, STYLE_CHORD_ARP_UPDOWN = 7 };
-enum PresetId : uint8_t { PRESET_SUB = 0, PRESET_BASS, PRESET_PLUCK, PRESET_BELL, PRESET_LEAD, PRESET_CHORD, PRESET_DRUM,
-                          PRESET_PURE, PRESET_SOFT, PRESET_KEYS, PRESET_PLUK, PRESET_LIVE_BASS, PRESET_LIVE_LEAD, PRESET_ORGN };
+enum PresetId : uint8_t { PRESET_SINE = 0, PRESET_TRIANGLE, PRESET_SAW,
+                          PRESET_SQUARE, PRESET_DRUM, PRESET_NOISE };
 enum DrumId : uint8_t { DRUM_KICK = 0, DRUM_SNARE, DRUM_CLOSED_HAT };
 
 struct VoiceRecipe {
@@ -104,7 +104,8 @@ const Preset kPresets[kPresetCount] PROGMEM = {
   {"TRI", 1, {{TRIANGLE, 0, ENVELOPE3, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}}, 127, 50, 0, 0, 0},
   {"SAW", 1, {{SAW, 0, ENVELOPE3, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}, {SINE, 0, 0, 64}}, 127, 50, 0, 0, 0},
   {"SQR", 1, {{SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, 0, 64}, {SQUARE, 0, 0, 64}, {SINE, 0, 0, 64}}, 127, 35, 256, 68, 0},
-  {"DRM", 1, {{SINE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 127, 50, 0, 0, 0}
+  {"DRM", 1, {{SINE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 127, 50, 0, 0, 0},
+  {"NSE", 1, {{NOISE, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 115, 50, 0, 0, 0}
 };
 
 const char kDrumLabels[kDrumCount][5] PROGMEM = {"KICK", "SNAR", "CHH"};
@@ -115,13 +116,14 @@ const int8_t kScaleOffsets[kScaleCount][kStepCount] PROGMEM = {
 };
 const uint8_t kScaleLengths[kScaleCount] PROGMEM = {7, 7, 5, 6};
 const char kDroneWaveLabels[kDroneWaveCount][4] PROGMEM = {"SIN", "TRI", "SQR", "SAW"};
+const char kPlayMorphWaveLabels[kPlayMorphWaveCount][4] PROGMEM = {"SIN", "TRI", "SQR", "SAW", "NSE"};
 const char kRootLabels[12][3] PROGMEM = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
 const char kScaleLabels[kScaleCount][4] PROGMEM = {"MAJ", "MIN", "PEN", "BLU"};
 const char kStyleLabels[kPlayStyleCount][5] PROGMEM = {"POLY", "CHRD", "UP", "DOWN", "UPDN", "CUP", "CDWN", "CUDN"};
 synth edgar;
 InstrumentMode instrumentMode = MODE_SEQ;
-SeqControls seqControls = {PRESET_SUB, 126, 64};
-PlayControls playControls = {PRESET_PURE, 0, SCALE_MAJOR, STYLE_POLY, 0};
+SeqControls seqControls = {PRESET_SINE, 126, 64};
+PlayControls playControls = {PRESET_SINE, 0, SCALE_MAJOR, STYLE_POLY, 0};
 uint8_t stepNotes[kStepCount] = {36, 38, 40, 41, 43, 45, 47, 48};
 uint8_t stepDrums[kStepCount] = {DRUM_KICK, DRUM_CLOSED_HAT, DRUM_SNARE, DRUM_CLOSED_HAT,
                                  DRUM_KICK, DRUM_CLOSED_HAT, DRUM_SNARE, DRUM_CLOSED_HAT};
@@ -1230,7 +1232,7 @@ void renderPlayDashboard(bool inlineEditVisible) {
     frameText(1, 9, F("B:"));
     if (playMorphWave == kPlayMorphOff) frameText(1, 11, F("OFF"));
     else {
-      frameProgmemText(1, 11, kDroneWaveLabels[playMorphWave]);
+      frameProgmemText(1, 11, kPlayMorphWaveLabels[playMorphWave]);
     }
   } else if (editedPlayShift == 2) {
     frameText(1, 9, F("L:"));
