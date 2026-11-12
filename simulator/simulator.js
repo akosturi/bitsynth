@@ -32,7 +32,7 @@ const FALLBACK_HARDWARE = {
   source: 'embedded fallback',
   settings: [0, 420, 511, 511].map((value, index) => ({
     id: `setting${index + 1}`,
-    label: ['P1 PRESET', 'P2 BPM', 'P3 TUNE', 'P4 UNUSED'][index],
+    label: `P${index + 1} MACRO`,
     value,
   })),
   steps: [0, 89, 178, 223, 312, 401, 489, 534].map((value, index) => ({

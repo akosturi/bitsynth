@@ -100,6 +100,8 @@ volatile uint8_t pwmDitherLfsr = 0xA5;
 volatile uint16_t noiseLfsrs[SYNTH_VOICE_COUNT] = {
   0xA5C3, 0xD72B, 0x9E37, 0xF1A5
 };
+// Retained performance engines. Their UI routing is intentionally disabled
+// for now, but presets still configure the VCA defaults.
 volatile bool playMorphActive = false;
 volatile uint16_t playMorphSource = (uint16_t)SinTable;
 volatile uint32_t playMorphLfoPCW = 0x80000000UL;
@@ -203,23 +205,16 @@ static inline __attribute__((always_inline)) int16_t nextScaledVoiceSample(
   return scaleSigned9Sample(sample, gain, 3);
 }
 
-// Crossfades between the primary and secondary waves at matching phases.
 static inline __attribute__((always_inline)) int16_t nextScaledMorphedVoiceSample(
   uint8_t voice, uint16_t secondarySource, uint8_t morphAmount, uint8_t gain)
 {
   const uint16_t phase = PCW[voice] + FTW[voice];
   PCW[voice] = phase;
-  if (gain == 0) {
-    return 0;
-  }
-
-  const uint16_t primarySource = waveSources[voice];
-  const int16_t sampleA = nextWaveSample(voice, primarySource, phase, pulseWidths[voice]);
+  if (gain == 0) return 0;
+  const int16_t sampleA = nextWaveSample(voice, waveSources[voice], phase, pulseWidths[voice]);
   const int16_t sampleB = nextWaveSample(voice, secondarySource, phase, pulseWidths[voice]);
   const uint8_t primaryAmount = 128 - morphAmount;
-  const int16_t sample =
-    ((sampleA * primaryAmount) + (sampleB * morphAmount)) >> 7;
-  return scaleSigned9Sample(sample, gain, 3);
+  return scaleSigned9Sample(((sampleA * primaryAmount) + (sampleB * morphAmount)) >> 7, gain, 3);
 }
 
 // Applies a 9-bit linear gain with error far below one PWM output step.
@@ -330,17 +325,12 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
       updatePlayVcaLfo = playLfoDivider == 0;
       updatePlayMorphLfo = !updatePlayVcaLfo;
     }
-    if (updatePlayVcaLfo) {
-      const uint32_t vcaLfoStep = playVcaLfoFTW;
-      if (vcaLfoStep != 0) {
-        playVcaLfoPCW += vcaLfoStep;
-        const uint8_t trianglePhase = ((uint8_t*)&playVcaLfoPCW)[3];
-        const uint8_t triangleAmount = (trianglePhase & 0x80) ?
-          (uint8_t)(256U - trianglePhase) : trianglePhase;
-        const uint16_t attenuation =
-          (playVcaAttenuationDepth * triangleAmount + 64) >> 7;
-        playVcaGain = 256 - attenuation;
-      }
+    if (updatePlayVcaLfo && playVcaLfoFTW != 0) {
+      playVcaLfoPCW += playVcaLfoFTW;
+      const uint8_t phase = ((uint8_t*)&playVcaLfoPCW)[3];
+      const uint8_t triangle = (phase & 0x80) ? (uint8_t)(256U - phase) : phase;
+      const uint16_t attenuation = (playVcaAttenuationDepth * triangle + 64) >> 7;
+      playVcaGain = 256 - attenuation;
     }
 
     int16_t sourceZeroQ7 = 0;
@@ -368,27 +358,18 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
     int16_t liveMixQ7;
     if (playMorphActive) {
       if (updatePlayMorphLfo) {
-        const uint32_t morphLfoStep = playMorphLfoFTW;
-        playMorphLfoPCW += morphLfoStep;
-        const uint8_t trianglePhase = ((uint8_t*)&playMorphLfoPCW)[3];
-        playMorphAmount = (trianglePhase & 0x80) ?
-          (uint8_t)(256U - trianglePhase) : trianglePhase;
+        playMorphLfoPCW += playMorphLfoFTW;
+        const uint8_t phase = ((uint8_t*)&playMorphLfoPCW)[3];
+        playMorphAmount = (phase & 0x80) ? (uint8_t)(256U - phase) : phase;
       }
-      const uint16_t secondaryWave = playMorphSource;
-      const uint8_t morphAmount = playMorphAmount;
-      liveMixQ7 =
-        nextScaledMorphedVoiceSample(1, secondaryWave, morphAmount, AMP[1]) +
-        nextScaledMorphedVoiceSample(2, secondaryWave, morphAmount, AMP[2]) +
-        nextScaledMorphedVoiceSample(3, secondaryWave, morphAmount, AMP[3]);
+      liveMixQ7 = nextScaledMorphedVoiceSample(1, playMorphSource, playMorphAmount, AMP[1]) +
+        nextScaledMorphedVoiceSample(2, playMorphSource, playMorphAmount, AMP[2]) +
+        nextScaledMorphedVoiceSample(3, playMorphSource, playMorphAmount, AMP[3]);
     } else {
-      liveMixQ7 =
-        nextScaledVoiceSample(1, AMP[1]) +
-        nextScaledVoiceSample(2, AMP[2]) +
+      liveMixQ7 = nextScaledVoiceSample(1, AMP[1]) + nextScaledVoiceSample(2, AMP[2]) +
         nextScaledVoiceSample(3, AMP[3]);
     }
-    const uint16_t vcaGain = playVcaGain;
-    mixQ7 = sourceZeroQ7 + (vcaGain >= 256 ? liveMixQ7 :
-      scalePlayMix(liveMixQ7, (uint8_t)vcaGain));
+    mixQ7 = sourceZeroQ7 + (playVcaGain >= 256 ? liveMixQ7 : scalePlayMix(liveMixQ7, (uint8_t)playVcaGain));
 
     if (!renderDrum || voiceIndex != 0) {
       const uint16_t pitch = PITCH[voiceIndex];
@@ -581,55 +562,37 @@ class synth
       }
     }
 
-    // Configures LFO-driven waveform morphing for the live voices.
-    void configurePlayMorph(
-      uint8_t primaryWave, uint8_t secondaryWave, uint16_t frequencyHundredths, bool secondaryEnabled)
+    // Kept available for a future UI route; no current control calls it.
+    void configurePlayMorph(uint8_t primaryWave, uint8_t secondaryWave,
+      uint16_t frequencyHundredths, bool secondaryEnabled)
     {
-      const uint16_t primarySource = waveSource(primaryWave);
-      const uint16_t secondarySource = waveSource(secondaryWave);
-      const uint32_t lfoStep = frequencyHundredths == 0 ? 0 :
-        (uint32_t)frequencyHundredths * 17180UL;
-      const bool active = secondaryEnabled && lfoStep != 0;
-      const uint16_t outputSource = secondaryEnabled && !active ? secondarySource : primarySource;
-
+      const uint16_t primary = waveSource(primaryWave);
+      const uint16_t secondary = waveSource(secondaryWave);
+      const uint32_t step = frequencyHundredths == 0 ? 0 : (uint32_t)frequencyHundredths * 17180UL;
+      const bool active = secondaryEnabled && step != 0;
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        const bool wasActive = playMorphActive;
-        for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) {
-          waveSources[voice] = outputSource;
-        }
-        playMorphSource = secondarySource;
-        playMorphLfoFTW = lfoStep;
-        if (active && !wasActive) {
-          playMorphLfoPCW = 0x80000000UL;
-          playMorphAmount = 128;
-        } else if (!active) {
-          playMorphAmount = 128;
-        }
+        for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) waveSources[voice] = active || !secondaryEnabled ? primary : secondary;
+        playMorphSource = secondary;
+        playMorphLfoFTW = step;
+        if (!active) playMorphAmount = 128;
         playMorphActive = active;
       }
     }
 
-    void disablePlayMorph()
-    {
-      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        playMorphActive = false;
-        playMorphLfoFTW = 0;
-        playMorphAmount = 128;
-      }
+    void disablePlayMorph() {
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) { playMorphActive = false; playMorphLfoFTW = 0; playMorphAmount = 128; }
     }
 
-    // Configures the live VCA's maximum attenuation and optional triangle LFO.
     void configurePlayVca(uint16_t depth, uint16_t frequencyHundredths)
     {
       if (depth > 256) depth = 256;
-      const uint32_t lfoStep = depth == 0 || frequencyHundredths == 0 ? 0 :
-        (uint32_t)frequencyHundredths * 17180UL;
-
+      const uint32_t step = depth == 0 || frequencyHundredths == 0 ? 0 : (uint32_t)frequencyHundredths * 17180UL;
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         const bool wasActive = playVcaLfoFTW != 0;
         playVcaAttenuationDepth = depth;
-        playVcaLfoFTW = lfoStep;
-        if (lfoStep == 0) {
+        playVcaLfoFTW = step;
+        if (step == 0) {
+          playVcaLfoPCW = 0x80000000UL;
           playVcaGain = 256 - depth;
         } else if (!wasActive) {
           playVcaLfoPCW = 0x80000000UL;
@@ -638,13 +601,8 @@ class synth
       }
     }
 
-    void disablePlayVca()
-    {
-      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        playVcaAttenuationDepth = 0;
-        playVcaGain = 256;
-        playVcaLfoFTW = 0;
-      }
+    void disablePlayVca() {
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) { playVcaAttenuationDepth = 0; playVcaGain = 256; playVcaLfoFTW = 0; }
     }
 
     void setPitch(uint8_t voice, uint8_t midiNote)
