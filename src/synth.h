@@ -28,9 +28,6 @@
 #define ENVELOPE5 5
 #define ENVELOPE6 6
 #define ENVELOPE7 7
-#define ENVELOPE8 8
-#define ENVELOPE9 9
-#define ENVELOPE10 10
 
 #define FS 20000UL
 
@@ -44,12 +41,13 @@
 static_assert(kickSampleRate == FS, "kick sample rate must match the 20 kHz audio engine");
 static_assert(snareSampleRate == FS, "snare sample rate must match the 20 kHz audio engine");
 static_assert(hihatSampleRate == FS, "hi-hat sample rate must match the 20 kHz audio engine");
-static_assert(kickSampleBits == 9, "kick sample must use signed 9-bit PCM");
-static_assert(snareSampleBits == 9, "snare sample must use signed 9-bit PCM");
-static_assert(hihatSampleBits == 9, "hi-hat sample must use signed 9-bit PCM");
-static_assert(sizeof(kickSample) == (kickSampleLength * 9U + 7U) / 8U, "invalid packed kick sample size");
-static_assert(sizeof(snareSample) == (snareSampleLength * 9U + 7U) / 8U, "invalid packed snare sample size");
-static_assert(sizeof(hihatSample) == (hihatSampleLength * 9U + 7U) / 8U, "invalid packed hi-hat sample size");
+static_assert(kickSampleBits == 9, "kick sample must use unsigned 9-bit PCM");
+static_assert(snareSampleBits == 9, "snare sample must use unsigned 9-bit PCM");
+static_assert(hihatSampleBits == 9, "hi-hat sample must use unsigned 9-bit PCM");
+// One trailing byte makes the final unaligned 16-bit flash read safe.
+static_assert(sizeof(kickSample) == (kickSampleLength * 9U + 7U) / 8U + 1U, "invalid packed kick sample size");
+static_assert(sizeof(snareSample) == (snareSampleLength * 9U + 7U) / 8U + 1U, "invalid packed snare sample size");
+static_assert(sizeof(hihatSample) == (hihatSampleLength * 9U + 7U) / 8U + 1U, "invalid packed hi-hat sample size");
 
 #define SET(x,y) (x |= (1 << y))
 #define CLR(x,y) (x &= (~(1 << y)))
@@ -58,7 +56,7 @@ const uint8_t SYNTH_VOICE_COUNT = 4;
 const uint8_t SYNTH_DRONE_COUNT = 8;
 const uint8_t SYNTH_MIDI_NOTE_MAX = 127;
 const uint8_t SYNTH_LENGTH_MAX = 127;
-const uint8_t SYNTH_ENVELOPE_COUNT = 11;
+const uint8_t SYNTH_ENVELOPE_COUNT = 8;
 const uint8_t SYNTH_WAVETABLE_INDEX_BITS = 8;
 const uint8_t SYNTH_WAVETABLE_SHIFT = 16 - SYNTH_WAVETABLE_INDEX_BITS;
 const uint16_t SYNTH_GENERATED_SQUARE = 0;
@@ -166,15 +164,15 @@ static inline __attribute__((always_inline)) int16_t nextWaveSample(
   return readSigned9Sample(source, phase >> SYNTH_WAVETABLE_SHIFT);
 }
 
-// Decodes a signed 9-bit sample packed across byte boundaries.
-static inline __attribute__((always_inline)) int16_t readPackedSigned9Sample(
+// Decodes an offset-binary unsigned 9-bit sample packed across byte boundaries.
+static inline __attribute__((always_inline)) int16_t readPackedUnsigned9Sample(
   uint16_t sampleAddress, uint16_t sampleIndex)
 {
   const uint16_t byteIndex = sampleIndex + (sampleIndex >> 3);
   const uint8_t shift = sampleIndex & 0x07;
   const uint16_t packed = pgm_read_word(sampleAddress + byteIndex);
   const uint16_t encoded = (packed >> shift) & 0x01FF;
-  return (encoded & 0x0100) ? (int16_t)(encoded | 0xFE00) : encoded;
+  return (int16_t)encoded - 256;
 }
 
 // Scales a signed sample with arithmetic-shift rounding.
@@ -344,7 +342,7 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
         drumActive = false;
         renderDrum = false;
       } else {
-        const int16_t sample = readPackedSigned9Sample(drumSampleAddress, sampleIndex);
+        const int16_t sample = readPackedUnsigned9Sample(drumSampleAddress, sampleIndex);
         drumSamplePhase = samplePhase + drumSampleStep;
         const uint8_t gain = envelope >> 8;
         sourceZeroQ7 = scaleSigned9Sample(sample, gain, 3);
@@ -658,15 +656,6 @@ class synth
           break;
         case ENVELOPE7:
           selectedEnvelope = (uint16_t)Env7;
-          break;
-        case ENVELOPE8:
-          selectedEnvelope = (uint16_t)Env8;
-          break;
-        case ENVELOPE9:
-          selectedEnvelope = (uint16_t)Env9;
-          break;
-        case ENVELOPE10:
-          selectedEnvelope = (uint16_t)Env10;
           break;
       }
 

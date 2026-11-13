@@ -48,7 +48,6 @@ enum InstrumentMode : uint8_t { MODE_SEQ = 0, MODE_PLAY = 1, MODE_DRONE = 2 };
 enum ScaleMode : uint8_t { SCALE_MAJOR = 0, SCALE_MINOR = 1, SCALE_PENTATONIC = 2, SCALE_BLUES = 3 };
 enum PlayStyle : uint8_t { STYLE_POLY = 0, STYLE_CHORD = 1, STYLE_ARP_UP = 2, STYLE_ARP_DOWN = 3, STYLE_ARP_UPDOWN = 4,
                            STYLE_CHORD_ARP_UP = 5, STYLE_CHORD_ARP_DOWN = 6, STYLE_CHORD_ARP_UPDOWN = 7 };
-enum ProgramKind : uint8_t { PROGRAM_MELODIC = 0, PROGRAM_DRUM = 1 };
 enum PresetId : uint8_t { PRESET_SINE = 0, PRESET_TRIANGLE, PRESET_SAW,
                           PRESET_SQUARE, PRESET_DRUM, PRESET_NOISE };
 enum DrumId : uint8_t { DRUM_KICK = 0, DRUM_SNARE, DRUM_CLOSED_HAT };
@@ -85,8 +84,6 @@ struct DrumPreset {
   uint8_t macros[4];
   uint8_t lfoTargets[2];
 };
-
-struct ProgramRef { uint8_t kind; uint8_t index; };
 
 struct SeqControls { uint8_t preset; uint8_t bpm; uint8_t drumTone; };
 struct PlayControls { uint8_t preset; uint8_t root; uint8_t scale; uint8_t style; uint8_t octave; };
@@ -127,18 +124,9 @@ const MelodicPreset kMelodicPresets[] PROGMEM = {
   {"NSE", 1, {{NOISE, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 115, 50, 0, 0, 0, {MACRO_VCA_DEPTH, MACRO_VCA_RATE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}}
 };
 
-const DrumPreset kDrumPresets[] PROGMEM = {
-  {"DRM", 127, {MACRO_DRUM_TUNE, MACRO_DRUM_DECAY, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}}
-};
-
-const ProgramRef kPrograms[kPresetCount] PROGMEM = {
-  {PROGRAM_MELODIC, 0}, {PROGRAM_MELODIC, 1}, {PROGRAM_MELODIC, 2},
-  {PROGRAM_MELODIC, 3}, {PROGRAM_DRUM, 0}, {PROGRAM_MELODIC, 4}
-};
+const DrumPreset kDrumPreset PROGMEM =
+  {"DRM", 127, {MACRO_DRUM_TUNE, MACRO_DRUM_DECAY, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}};
 const uint8_t kPlayPresetCount = 5;
-const uint8_t kPlayProgramIds[kPlayPresetCount] PROGMEM = {
-  PRESET_SINE, PRESET_TRIANGLE, PRESET_SAW, PRESET_SQUARE, PRESET_NOISE
-};
 
 const char kDrumLabels[kDrumCount][5] PROGMEM = {"KICK", "SNAR", "CHH"};
 
@@ -176,7 +164,6 @@ unsigned long lastMacroLfoMs = 0;
 
 uint8_t currentStep = 0;
 uint8_t playingStep = 255;
-uint8_t renderedStep = 255;
 unsigned long lastStepMs = 0;
 uint16_t nextStepIntervalMs = 119;
 uint16_t normalCurrentPitch[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
@@ -227,7 +214,6 @@ uint8_t editedStep = 255;
 uint8_t editedDrone = 255;
 uint16_t editedDroneHz = 0;
 uint8_t editedDroneLfo = 255;
-uint16_t editedDroneLfoRateHundredths = 0;
 uint8_t editedPlayShift = 0;
 unsigned long inlineEditUntilMs = 0;
 char displayFrame[2][17];
@@ -239,42 +225,36 @@ void copyProgmemLabel(char *destination, const char *source, uint8_t size) {
   destination[size - 1] = '\0';
 }
 
-void readProgramRef(uint8_t programId, ProgramRef &program) {
-  memcpy_P(&program, &kPrograms[programId], sizeof(ProgramRef));
-}
-
-void readMelodicPreset(uint8_t index, MelodicPreset &preset) {
+void readMelodicPreset(uint8_t programId, MelodicPreset &preset) {
+  const uint8_t index = programId - (programId > PRESET_DRUM);
   memcpy_P(&preset, &kMelodicPresets[index], sizeof(MelodicPreset));
 }
 
-void readDrumPreset(uint8_t index, DrumPreset &preset) {
-  memcpy_P(&preset, &kDrumPresets[index], sizeof(DrumPreset));
+void readDrumPreset(DrumPreset &preset) {
+  memcpy_P(&preset, &kDrumPreset, sizeof(DrumPreset));
 }
 
-uint8_t playProgramId() { return pgm_read_byte(&kPlayProgramIds[playControls.preset]); }
+uint8_t playProgramId() { return playControls.preset + (playControls.preset >= PRESET_DRUM); }
 
 bool isDrumProgram(uint8_t programId) {
-  ProgramRef program; readProgramRef(programId, program);
-  return program.kind == PROGRAM_DRUM;
+  return programId == PRESET_DRUM;
 }
 
 void programLabel(uint8_t programId, char label[5]) {
-  ProgramRef program; readProgramRef(programId, program);
-  if (program.kind == PROGRAM_DRUM) {
-    DrumPreset preset; readDrumPreset(program.index, preset); memcpy(label, preset.label, sizeof(preset.label));
+  if (isDrumProgram(programId)) {
+    DrumPreset preset; readDrumPreset(preset); memcpy(label, preset.label, sizeof(preset.label));
   } else {
-    MelodicPreset preset; readMelodicPreset(program.index, preset); memcpy(label, preset.label, sizeof(preset.label));
+    MelodicPreset preset; readMelodicPreset(programId, preset); memcpy(label, preset.label, sizeof(preset.label));
   }
 }
 
 uint8_t macroForCurrentProgram(uint8_t slot) {
   const uint8_t programId = instrumentMode == MODE_PLAY ? playProgramId() : seqControls.preset;
-  ProgramRef program; readProgramRef(programId, program);
-  if (program.kind == PROGRAM_DRUM) {
-    DrumPreset preset; readDrumPreset(program.index, preset);
+  if (isDrumProgram(programId)) {
+    DrumPreset preset; readDrumPreset(preset);
     return slot < 4 ? preset.macros[slot] : preset.lfoTargets[slot - 4];
   }
-  MelodicPreset preset; readMelodicPreset(program.index, preset);
+  MelodicPreset preset; readMelodicPreset(programId, preset);
   return slot < 4 ? preset.macros[slot] : preset.lfoTargets[slot - 4];
 }
 
@@ -339,6 +319,13 @@ uint16_t macroValueForRaw(uint8_t parameter, uint16_t raw) {
   }
 }
 
+void showParameterEdit(uint8_t slot, unsigned long now) {
+  editedPlayShift = slot + 1;
+  editedStep = 255;
+  inlineEditUntilMs = now + kEditViewMs;
+  displayDirty = true;
+}
+
 void applyMacroValue(uint8_t slot, uint16_t raw, unsigned long now) {
   const uint8_t parameter = macroForCurrentProgram(slot);
   if (parameter == MACRO_NONE) return;
@@ -354,22 +341,23 @@ void applyMacroValue(uint8_t slot, uint16_t raw, unsigned long now) {
     edgar.configurePlayVca(activeMacroValue(MACRO_VCA_DEPTH, 0),
       presetVcaRateHundredths((uint8_t)activeMacroValue(MACRO_VCA_RATE, 0)));
   }
-  editedPlayShift = slot + 1;
-  editedStep = 255;
-  inlineEditUntilMs = now + kEditViewMs;
-  displayDirty = true;
+  showParameterEdit(slot, now);
 }
 
 void applyLfoControl(uint8_t slot, uint16_t raw, unsigned long now) {
   const uint8_t lfo = (slot - 4) >> 1;
   const bool depth = (slot & 1) != 0;
   if (macroForCurrentProgram(4 + lfo) == MACRO_NONE) return;
-  if (depth) lfoDepth[lfo] = mapByteHysteresis(raw, lfoDepth[lfo], 127, 0);
-  else lfoRateIndex[lfo] = mapIndexHysteresis(raw, lfoRateIndex[lfo], kLfoRateCount);
-  editedPlayShift = slot - 3;
-  editedStep = 255;
-  inlineEditUntilMs = now + kEditViewMs;
-  displayDirty = true;
+  if (depth) {
+    const uint8_t next = mapByteHysteresis(raw, lfoDepth[lfo], 127, 0);
+    if (next == lfoDepth[lfo]) return;
+    lfoDepth[lfo] = next;
+  } else {
+    const uint8_t next = mapIndexHysteresis(raw, lfoRateIndex[lfo], kLfoRateCount);
+    if (next == lfoRateIndex[lfo]) return;
+    lfoRateIndex[lfo] = next;
+  }
+  showParameterEdit(slot - 4, now);
 }
 
 bool parameterPotUnlocked(uint8_t pot, uint16_t raw) {
@@ -380,17 +368,16 @@ bool parameterPotUnlocked(uint8_t pot, uint16_t raw) {
 }
 
 void loadProgramMacroDefaults(uint8_t programId) {
-  ProgramRef program; readProgramRef(programId, program);
   for (uint8_t slot = 0; slot < 4; ++slot) macroValues[slot] = 64;
   lfoDepth[0] = lfoDepth[1] = 0;
-  if (program.kind == PROGRAM_DRUM) {
-    DrumPreset preset; readDrumPreset(program.index, preset);
+  if (isDrumProgram(programId)) {
+    DrumPreset preset; readDrumPreset(preset);
     for (uint8_t slot = 0; slot < 4; ++slot) {
       if (preset.macros[slot] == MACRO_DRUM_TUNE) macroValues[slot] = seqControls.drumTone;
       if (preset.macros[slot] == MACRO_DRUM_DECAY) macroValues[slot] = preset.decay;
     }
   } else {
-    MelodicPreset preset; readMelodicPreset(program.index, preset);
+    MelodicPreset preset; readMelodicPreset(programId, preset);
     for (uint8_t slot = 0; slot < 4; ++slot) {
       if (preset.macros[slot] == MACRO_PULSE_WIDTH) macroValues[slot] = preset.squarePulseWidthPercent;
       if (preset.macros[slot] == MACRO_VIBRATO) macroValues[slot] = preset.voices[0].modulation;
@@ -441,7 +428,6 @@ void setup() {
   }
 
   lcd.begin(16, 2);
-  lcd.clear(); lcd.print(F("BitSynth 3-mode")); delay(500); lcd.clear();
   nextStepIntervalMs = 15000U / seqControls.bpm;
   lastStepMs = millis();
 }
@@ -572,6 +558,14 @@ uint8_t mapIndexHysteresis(uint16_t raw, uint8_t current, uint8_t count) {
   return current;
 }
 
+void readPerformancePageControls(const uint16_t values[], unsigned long now) {
+  for (uint8_t slot = 0; slot < kSettingCount; ++slot) {
+    if (!parameterPotUnlocked(slot, values[slot])) continue;
+    if (parameterPage == 0) applyMacroValue(slot, values[slot], now);
+    else applyLfoControl(slot + 4, values[slot], now);
+  }
+}
+
 // Scans a subset of multiplexed controls each loop to limit latency.
 void readControls(unsigned long now) {
   const uint8_t setting = settingScanChannel;
@@ -584,7 +578,8 @@ void readControls(unsigned long now) {
   settingScanChannel = (settingScanChannel + 1) % kSettingCount;
 
   if (settingReadyMask == ((1 << kSettingCount) - 1)) {
-    if (instrumentMode == MODE_SEQ) readSequencerControls(settingValues, now);
+    if (instrumentMode != MODE_DRONE && parameterPage < 2) readPerformancePageControls(settingValues, now);
+    else if (instrumentMode == MODE_SEQ) readSequencerControls(settingValues, now);
     else if (instrumentMode == MODE_PLAY) readPlayControls(settingValues, now);
     else readDroneControls(settingValues, now);
   }
@@ -599,39 +594,29 @@ void readControls(unsigned long now) {
 }
 
 void readSequencerControls(const uint16_t values[], unsigned long now) {
-  if (parameterPage == 0) {
-    for (uint8_t slot = 0; slot < 4; ++slot) if (parameterPotUnlocked(slot, values[slot])) applyMacroValue(slot, values[slot], now);
-    return;
-  }
-  if (parameterPage == 1) {
-    for (uint8_t slot = 0; slot < 4; ++slot) if (parameterPotUnlocked(slot, values[slot])) applyLfoControl(slot + 4, values[slot], now);
-    return;
-  }
   uint8_t next = parameterPotUnlocked(0, values[0]) ? mapIndexHysteresis(values[0], seqControls.preset, kPresetCount) : seqControls.preset;
   if (next != seqControls.preset) {
     if (isDrumProgram(seqControls.preset) || isDrumProgram(next)) { edgar.stopDrum(); stopNormalVoices(); }
-    seqControls.preset = next; loadProgramMacroDefaults(next); editedPlayShift = 1; inlineEditUntilMs = now + kEditViewMs; displayDirty = true;
+    seqControls.preset = next; loadProgramMacroDefaults(next); showParameterEdit(0, now);
   }
   next = parameterPotUnlocked(1, values[1]) ? mapByteHysteresis(values[1], seqControls.bpm, 60, 220) : seqControls.bpm;
-  if (next != seqControls.bpm) { seqControls.bpm = next; editedPlayShift = 2; inlineEditUntilMs = now + kEditViewMs; displayDirty = true; }
+  if (next != seqControls.bpm) { seqControls.bpm = next; showParameterEdit(1, now); }
   next = parameterPotUnlocked(2, values[2]) ? mapByteHysteresis(values[2], seqControls.drumTone, 127, 0) : seqControls.drumTone;
-  if (next != seqControls.drumTone) { seqControls.drumTone = next; editedPlayShift = 3; inlineEditUntilMs = now + kEditViewMs; displayDirty = true; }
+  if (next != seqControls.drumTone) { seqControls.drumTone = next; showParameterEdit(2, now); }
 }
 
 void revoiceHeldButtons();
 
 // Handles normal play controls and mode-button secondary functions.
 void readPlayControls(const uint16_t values[], unsigned long now) {
-  if (parameterPage == 0) { for (uint8_t slot = 0; slot < 4; ++slot) if (parameterPotUnlocked(slot, values[slot])) applyMacroValue(slot, values[slot], now); return; }
-  if (parameterPage == 1) { for (uint8_t slot = 0; slot < 4; ++slot) if (parameterPotUnlocked(slot, values[slot])) applyLfoControl(slot + 4, values[slot], now); return; }
   uint8_t next = parameterPotUnlocked(0, values[0]) ? mapIndexHysteresis(values[0], playControls.preset, kPlayPresetCount) : playControls.preset;
-  if (next != playControls.preset) { playControls.preset = next; loadProgramMacroDefaults(playProgramId()); applyLiveConfiguration(); revoiceHeldButtons(); editedPlayShift = 1; inlineEditUntilMs = now + kEditViewMs; displayDirty = true; }
+  if (next != playControls.preset) { playControls.preset = next; loadProgramMacroDefaults(playProgramId()); applyLiveConfiguration(); revoiceHeldButtons(); showParameterEdit(0, now); }
   next = parameterPotUnlocked(1, values[1]) ? mapIndexHysteresis(values[1], playControls.root, 12) : playControls.root;
-  if (next != playControls.root) { playControls.root = next; revoiceHeldButtons(); editedPlayShift = 2; inlineEditUntilMs = now + kEditViewMs; displayDirty = true; }
+  if (next != playControls.root) { playControls.root = next; revoiceHeldButtons(); showParameterEdit(1, now); }
   next = parameterPotUnlocked(2, values[2]) ? mapIndexHysteresis(values[2], playControls.scale, kScaleCount) : playControls.scale;
-  if (next != playControls.scale) { playControls.scale = next; revoiceHeldButtons(); editedPlayShift = 3; inlineEditUntilMs = now + kEditViewMs; displayDirty = true; }
+  if (next != playControls.scale) { playControls.scale = next; revoiceHeldButtons(); showParameterEdit(2, now); }
   next = parameterPotUnlocked(3, values[3]) ? mapIndexHysteresis(values[3], playControls.style, kPlayStyleCount) : playControls.style;
-  if (next != playControls.style) { playControls.style = next; arpPosition = 0; arpDirection = 1; revoiceHeldButtons(); editedPlayShift = 4; inlineEditUntilMs = now + kEditViewMs; displayDirty = true; }
+  if (next != playControls.style) { playControls.style = next; arpPosition = 0; arpDirection = 1; revoiceHeldButtons(); showParameterEdit(3, now); }
 }
 
 // MODE + a DRONE parameter pot edits that pair's amplitude-LFO rate.
@@ -646,7 +631,6 @@ void readDroneControls(const uint16_t values[], unsigned long now) {
       edgar.setDroneLfoRate(pair, rate);
       modeButtonChordUsed = true;
       editedDroneLfo = pair;
-      editedDroneLfoRateHundredths = rate;
       editedDrone = 255;
       inlineEditUntilMs = now + kEditViewMs;
       displayDirty = true;
@@ -678,6 +662,7 @@ void readSequencerStepPot(uint8_t step, unsigned long now) {
     if (drumMode) stepDrums[step] = next;
     else stepNotes[step] = next;
     editedStep = step;
+    editedPlayShift = 0;
     editedDrone = 255;
     inlineEditUntilMs = now + kEditViewMs;
     displayDirty = true;
@@ -743,6 +728,7 @@ void scanModeButton(unsigned long now) {
           parameterPageLocked[pot] = true;
         }
         editedPlayShift = 0;
+        editedStep = 255;
         displayDirty = true;
       }
     }
@@ -811,6 +797,8 @@ void changeMode(InstrumentMode nextMode, unsigned long now) {
   stopNormalVoices();
   instrumentMode = nextMode;
   parameterPage = nextMode == MODE_DRONE ? 0 : 2;
+  editedStep = 255;
+  editedPlayShift = 0;
   for (uint8_t pot = 0; pot < 4; ++pot) {
     parameterPageRaw[pot] = settingValues[pot];
     parameterPageLocked[pot] = true;
@@ -895,8 +883,7 @@ void updateGlide(unsigned long now) {
 // Builds a sequencer voice stack from the selected preset.
 void triggerSequencerNote(uint8_t note, bool backgroundOnly) {
   edgar.stopDrum();
-  ProgramRef program; readProgramRef(seqControls.preset, program);
-  MelodicPreset preset; readMelodicPreset(program.index, preset);
+  MelodicPreset preset; readMelodicPreset(seqControls.preset, preset);
   const uint8_t voiceCount = backgroundOnly ? 1 : preset.voiceCount;
 
   for (uint8_t voice = 0; voice < voiceCount; ++voice) {
@@ -918,8 +905,7 @@ void triggerDrum(uint8_t drum, bool backgroundOnly) {
   normalCurrentPitch[0] = 0;
   normalTargetPitch[0] = 0;
   normalGlide[0] = 0;
-  ProgramRef program; readProgramRef(seqControls.preset, program);
-  DrumPreset preset; readDrumPreset(program.index, preset);
+  DrumPreset preset; readDrumPreset(preset);
   const uint8_t decay = activeMacroValue(MACRO_DRUM_DECAY, preset.decay);
   edgar.triggerDrum(min(drum, (uint8_t)(kDrumCount - 1)), seqControls.drumTone, decay);
 }
@@ -952,8 +938,7 @@ void runSequencer(unsigned long now) {
 }
 
 void applyLiveConfiguration() {
-  ProgramRef program; readProgramRef(playProgramId(), program);
-  MelodicPreset preset; readMelodicPreset(program.index, preset);
+  MelodicPreset preset; readMelodicPreset(playProgramId(), preset);
   const uint16_t pulseWidth = pulseWidthForPercent(activeMacroValue(MACRO_PULSE_WIDTH, preset.squarePulseWidthPercent));
   playGlide = preset.glide;
   edgar.configurePlayVca(activeMacroValue(MACRO_VCA_DEPTH, preset.vcaDepth),
@@ -1158,23 +1143,6 @@ void frameNumber(uint8_t row, uint8_t column, uint16_t value) {
   frameText(row, column, text);
 }
 
-void frameHundredths(uint8_t row, uint8_t column, uint16_t value) {
-  char text[6];
-  const uint8_t whole = value / 100;
-  if (whole == 0) text[0] = '\0';
-  else utoa(whole, text, 10);
-  const uint8_t length = strlen(text);
-  text[length] = '.';
-  text[length + 1] = '0' + (value / 10) % 10;
-  if (value % 10) {
-    text[length + 2] = '0' + value % 10;
-    text[length + 3] = '\0';
-  } else {
-    text[length + 2] = '\0';
-  }
-  frameText(row, column, text);
-}
-
 // Writes only LCD regions that differ from the rendered frame.
 void flushDisplayFrame() {
   for (uint8_t row = 0; row < 2; ++row) {
@@ -1201,8 +1169,7 @@ void renderDisplay(unsigned long now) {
     ((instrumentMode != MODE_DRONE && (editedStep < kStepCount || editedPlayShift != 0)) ||
      (instrumentMode == MODE_DRONE &&
       (editedDrone < kStepCount || editedDroneLfo < kSettingCount)));
-  const bool displayedStepChanged = instrumentMode == MODE_SEQ && renderedStep != playingStep;
-  if (!displayDirty && !displayedStepChanged && inlineEditVisible == renderedInlineEditVisible) return;
+  if (!displayDirty && inlineEditVisible == renderedInlineEditVisible) return;
 
   resetDisplayFrame();
   if (instrumentMode == MODE_SEQ) renderSequencerDashboard(inlineEditVisible);
@@ -1210,7 +1177,6 @@ void renderDisplay(unsigned long now) {
   else renderDroneDashboard(inlineEditVisible);
   flushDisplayFrame();
 
-  renderedStep = playingStep;
   renderedInlineEditVisible = inlineEditVisible;
   displayDirty = false;
 }
@@ -1252,7 +1218,7 @@ void renderParameterValue(uint8_t pot) {
     frameNumber(0, column, macroValues[pot]);
   } else if (parameterPage == 1) {
     if (pot & 1) frameNumber(0, column, lfoDepth[pot >> 1]);
-    else frameHundredths(0, column, lfoRateForIndex(lfoRateIndex[pot >> 1]));
+    else frameNumber(0, column, lfoRateIndex[pot >> 1] + 1);
   } else if (instrumentMode == MODE_SEQ) {
     if (pot == 0) { char label[5]; programLabel(seqControls.preset, label); frameText(0, column, label); }
     else if (pot == 1) frameNumber(0, column, seqControls.bpm);
@@ -1271,7 +1237,11 @@ void renderSequencerDashboard(bool inlineEditVisible) {
     const bool enabled = bitRead(seqGateMask, step);
     frameChar(1, step, step == playingStep ? (enabled ? 'O' : 'o') : (enabled ? 'x' : '-'));
   }
-  if (inlineEditVisible && editedPlayShift > 0) renderParameterValue(editedPlayShift - 1);
+  if (inlineEditVisible && editedStep < kStepCount) {
+    frameChar(1, 9, 'S'); frameChar(1, 10, '1' + editedStep); frameChar(1, 11, ':');
+    if (isDrumProgram(seqControls.preset)) frameProgmemText(1, 12, kDrumLabels[stepDrums[editedStep]]);
+    else { char note[5]; formatNoteName(stepNotes[editedStep], note); frameText(1, 12, note); }
+  } else if (inlineEditVisible && editedPlayShift > 0) renderParameterValue(editedPlayShift - 1);
 }
 
 void renderPlayDashboard(bool inlineEditVisible) {
@@ -1296,8 +1266,8 @@ void renderDroneDashboard(bool inlineEditVisible) {
   if (inlineEditVisible) {
     if (editedDroneLfo < kSettingCount) {
       frameChar(1, 9, 'L'); frameChar(1, 10, '1' + editedDroneLfo); frameChar(1, 11, ':');
-      if (editedDroneLfoRateHundredths == 0) frameText(1, 12, F("OFF"));
-      else frameHundredths(1, 12, editedDroneLfoRateHundredths);
+      const uint16_t rate = droneLfoRateHundredths[editedDroneLfo];
+      frameNumber(1, 12, rate == 0 ? 0 : lfoRateIndexForHundredths(rate) + 1);
     } else {
       frameChar(1, 9, 'D'); frameChar(1, 10, '1' + editedDrone); frameChar(1, 11, ':');
       frameNumber(1, 12, editedDroneHz);

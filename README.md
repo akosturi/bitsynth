@@ -9,7 +9,7 @@ The same firmware runs on the physical instrument and in the browser simulator. 
 - **Hardware:** Arduino Pro Mini, 5 V / 16 MHz, ATmega328P
 - **Firmware build:** PlatformIO environment `hardware`
 - **Browser simulator:** the physical front-panel view in `simulator/hardware.html`
-- **Current `hardware` build footprint:** 27,796 bytes flash (90.5%) and 724 bytes RAM (35.4%)
+- **Last verified `hardware` build footprint (before the current source change):** 29,216 bytes flash (95.1%) and 725 bytes RAM (35.4%)
 
 An Uno or Nano with the same ATmega328P clock and voltage can also run the firmware if wired to the same pins.
 
@@ -108,6 +108,8 @@ The positive lead of electrolytic capacitor `C4` faces `R3`. Connect the top of 
 
 ### Global controls
 
+On power-up, BitSynth opens directly in SEQ.
+
 A short tap on **MODE** advances to the next four-parameter control page in
 SEQ and PLAY. A long press (about 650 ms) cycles through modes:
 
@@ -134,7 +136,7 @@ The sequence runs in sixteenth notes.
 The SEQ pages are direct macros, macro LFO rate/depth pairs, then program,
 tempo (60-220 BPM), and `DRM` playback tuning.
 
-The LCD shows the preset, BPM, DRM playback tuning when applicable, and the gate pattern. `x` is an enabled step, `-` is disabled, and `O`/`o` marks the current enabled/disabled step.
+The LCD's upper row shows the selected control page's parameter names and briefly shows values when they change. The lower row shows the gate pattern: `x` is an enabled step, `-` is disabled, and `O`/`o` marks the current enabled/disabled step. Turning a step pot briefly shows its step number and note name, or drum name in `DRM`, at the lower right.
 
 SEQ contains `SIN`, `TRI`, `SAW`, `SQR`, `DRM`, and `NSE`. Melodic programs
 store voice recipes, envelope length, pulse width, glide, and their macro/LFO
@@ -157,7 +159,7 @@ melodic voice of that preset, in both SEQ and PLAY; `0` switches glide off.
 
 Each step stores one of `KICK`, `SNAR`, or `CHH`; this is still a single eight-step track, not three separate drum tracks. A new hit immediately replaces the previous one.
 
-The samples are signed 9-bit mono PCM at 20 kHz, losslessly bit-packed in flash. They are streamed directly from program memory without a RAM copy. Parameter 3 (`T`) changes playback speed from 0.75x to 1.25x. The selected DRM preset's `length` value applies a decay envelope lasting 25-100% of the pitch-adjusted sample duration.
+The samples are unsigned (offset-binary) 9-bit mono PCM at 20 kHz, losslessly bit-packed in flash. They are streamed directly from program memory without a RAM copy. Parameter 3 (`T`) changes playback speed from 0.75x to 1.25x. The selected DRM preset's `length` value applies a decay envelope lasting 25-100% of the pitch-adjusted sample duration.
 
 ### PLAY - scale-quantized live performance
 
@@ -204,7 +206,9 @@ While a parameter is being adjusted, its field temporarily shows the value,
 then returns to its name. In SEQ, the lower row remains the step-gate view; in
 PLAY it remains the style/root/scale/octave view. A macro slot without an
 assigned parameter shows `---`. The first LFO supplies rate/depth pair 1; the
-second supplies pair 2. Rates use the same 0.05-20 Hz stepped range as DRONE.
+second supplies pair 2. Their LCD rate values are steps 1-94, corresponding to
+the same 0.05-20 Hz range as DRONE. The direct `VCR` macro already shows its
+own 0-98 step scale, with 0 meaning off.
 Macro LFOs are resolved outside the audio interrupt;
 the ISR receives only the resulting engine values. The current programs use
 the first LFO for vibrato where assigned. Waveform morphing is currently not
@@ -235,7 +239,7 @@ DRONE stops the sequencer and switches to a dedicated eight-oscillator mixer.
 Available waveforms are sine, triangle, square, and saw. `NSE` is intentionally
 unavailable in DRONE. Gates use short amplitude ramps to reduce switching clicks.
 
-While holding **MODE**, parameter pots 1-4 set independent VCA triangle-LFO rates for oscillator pairs 1-2, 3-4, 5-6, and 7-8. Each offers off plus 94 rates: 0.05-0.20 Hz in 0.01 Hz steps, 0.2-5.0 Hz in 0.1 Hz steps, and 5-20 Hz in 0.5 Hz steps. The four pair VCAs use the same fine 9-bit linear amplitude scaling as PLAY. Soft takeover also applies when returning to waveform selection.
+While holding **MODE**, parameter pots 1-4 set independent VCA triangle-LFO rates for oscillator pairs 1-2, 3-4, 5-6, and 7-8. Each offers off plus 94 rates: 0.05-0.20 Hz in 0.01 Hz steps, 0.2-5.0 Hz in 0.1 Hz steps, and 5-20 Hz in 0.5 Hz steps. The LCD shows 0 for off and 1-94 for the rates. The four pair VCAs use the same fine 9-bit linear amplitude scaling as PLAY. Soft takeover also applies when returning to waveform selection.
 
 Leaving DRONE returns to SEQ and restarts the sequence from step 1.
 
