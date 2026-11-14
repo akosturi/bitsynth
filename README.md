@@ -9,7 +9,7 @@ The same firmware runs on the physical instrument and in the browser simulator. 
 - **Hardware:** Arduino Pro Mini, 5 V / 16 MHz, ATmega328P
 - **Firmware build:** PlatformIO environment `hardware`
 - **Browser simulator:** the physical front-panel view in `simulator/hardware.html`
-- **Last verified `hardware` build footprint (before the current source change):** 29,216 bytes flash (95.1%) and 725 bytes RAM (35.4%)
+- **Last verified `hardware` build footprint:** 29,462 bytes flash (95.9%) and 973 bytes RAM (47.5%)
 
 An Uno or Nano with the same ATmega328P clock and voltage can also run the firmware if wired to the same pins.
 
@@ -144,8 +144,8 @@ assignments. The PCM `DRM` program has its own compact data instead of unused
 oscillator fields.
 
 Melodic programs retain their stored PLAY VCA depth and rate. `VCD` remains a
-direct macro on `SIN`, `TRI`, `SAW`, and `NSE`; `GLD` takes the second macro
-slot on those programs. The waveform-morph engine is retained internally
+direct macro on `SIN`, `TRI`, `SAW`, and `NSE`; `CHR` takes the second macro
+slot on every melodic program. The waveform-morph engine is retained internally
 without a current front-panel route.
 
 Each preset also stores one square-wave pulse width. It is applied to every
@@ -153,11 +153,15 @@ square oscillator in that preset and otherwise has no effect; the stored value
 is limited to a musically useful 5-95% duty cycle. The supplied `SQR` preset
 uses a 35% pulse width, while the other presets retain the 50% default.
 
-Each melodic preset stores one default glide value (`0-127`). Its `GLD` macro
-overrides that value for the active program in both SEQ and PLAY; `0` switches
-glide off. The macro affects subsequent note triggers and immediately changes
-the speed of any glide already in progress; turning it off completes that glide
-at once.
+Each melodic preset stores one default glide value (`0-127`) that applies in
+both SEQ and PLAY; `0` switches glide off.
+
+`CHR` selects a mono Juno-60-style chorus. In SEQ it follows the normal mix;
+in PLAY it processes only live voices 1-3, leaving voice 0's background
+sequence dry. `0` is off, `1` is chorus 1, and `2` is chorus 2. Both modes use a 16-bit,
+20 kHz delay line swept by a triangle LFO from 1.66 to 5.35 ms, with no
+feedback and a 50% wet mix. Chorus 1 runs at 0.513 Hz and chorus 2 at 0.863
+Hz. DRONE bypasses the effect.
 
 #### DRUM preset
 
@@ -218,8 +222,8 @@ numeric macro declared by its program (`PWM`, `VIB`, `TUN`, `DEC`, `VCD`, or
 `VCR`); depth sets a centred triangle sweep, with 127 spanning that parameter's
 complete valid range before clamping. Drum tune and decay are resolved when a
 new hit starts. The melodic programs also expose `ENV` and `LEN` direct macros
-for selecting one of the eight envelopes and its playback speed. Melodic
-programs also expose the direct-only `GLD` macro for a 0-127 glide amount.
+for selecting one of the six envelopes and its playback speed. `CHR` is a
+direct-only macro and is not an LFO target.
 `LEN` uses a
 logarithmic range from roughly 50 ms (1) to 1.6 s (127); `LEN` 0 is HOLD and
 uses the constant full-level envelope until note-off. Neither envelope macro is
@@ -265,6 +269,7 @@ On Windows, set `RAW_TO_H_OUTPUT_BITS` to `9` near the top of `util/raw_to_h.bat
 - **Real-time audio:** Timer2 runs the audio interrupt at 20 kHz. Timer1 generates 9-bit Fast PWM on `D9` at 31.25 kHz.
 - **Synthesis:** 256-sample wavetables, phase accumulators, four envelope-driven normal voices, and a separate eight-oscillator drone path. Core tables and drum data live in flash.
 - **Resource-aware mixing:** the drone engine recalculates one oscillator pair per audio interrupt. Each pair is therefore updated at 5 kHz while the PWM output remains at 20 kHz. This is an intentional quality/CPU trade-off for the 80-600 Hz range.
+- **Chorus:** the macro-controlled post-mix effect uses a 108-sample, 16-bit delay line in SRAM and audio-rate fractional interpolation. DRONE bypasses it.
 - **PWM quality:** the internal mix uses additional fixed-point precision before conversion to 9-bit PWM, with quantization-error feedback and dither where appropriate.
 - **Stable controls:** multiplexed analog inputs use settling reads, median sampling, smoothing, movement confirmation, and hysteresis. Buttons are debounced in software.
 - **Efficient LCD updates:** a two-line shadow buffer writes only changed characters, avoiding visible flicker and unnecessary time in the control loop.

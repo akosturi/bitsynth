@@ -56,7 +56,7 @@ const uint8_t SYNTH_VOICE_COUNT = 4;
 const uint8_t SYNTH_DRONE_COUNT = 8;
 const uint8_t SYNTH_MIDI_NOTE_MAX = 127;
 const uint8_t SYNTH_LENGTH_MAX = 127;
-const uint8_t SYNTH_ENVELOPE_COUNT = 8;
+const uint8_t SYNTH_ENVELOPE_COUNT = 6;
 const uint8_t SYNTH_WAVETABLE_INDEX_BITS = 8;
 const uint8_t SYNTH_WAVETABLE_SHIFT = 16 - SYNTH_WAVETABLE_INDEX_BITS;
 const uint16_t SYNTH_GENERATED_SQUARE = 0;
@@ -66,6 +66,14 @@ const uint16_t SYNTH_GENERATED_NOISE = 0xFFFF;
 const uint16_t SYNTH_DEFAULT_PULSE_WIDTH = 0x8000;
 // Updated once per four audio frames (5 kHz), giving a fixed 5 Hz vibrato.
 const uint32_t SYNTH_VIBRATO_LFO_STEP = 4294967UL;
+const uint8_t SYNTH_CHORUS_OFF = 0;
+const uint8_t SYNTH_CHORUS_1 = 1;
+const uint8_t SYNTH_CHORUS_2 = 2;
+// Juno-60-style triangle-modulated delay parameters at the 20 kHz engine rate.
+const uint16_t SYNTH_CHORUS_BUFFER_SAMPLES = 108;
+const uint32_t SYNTH_CHORUS_1_LFO_STEP = 110166UL; // 0.513 Hz
+const uint32_t SYNTH_CHORUS_2_LFO_STEP = 185328UL; // 0.863 Hz
+const uint16_t SYNTH_CHORUS_MIN_DELAY_Q8 = 8500; // 1.66 ms
 
 static_assert(sizeof(SinTable) / sizeof(SinTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid sine table size");
 static_assert(sizeof(TriangleTable) / sizeof(TriangleTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid triangle table size");
@@ -131,6 +139,14 @@ volatile uint32_t drumSamplePhase = 0;
 volatile uint32_t drumSampleStep = 0x10000UL;
 volatile uint16_t drumEnvelope = 0;
 volatile uint16_t drumEnvelopeStep = 1;
+// One 16-bit Q7 mono delay line, written only by the audio ISR. It stores the
+// wet half of the signal, so interpolating adjacent samples stays in int16_t.
+int16_t chorusBuffer[SYNTH_CHORUS_BUFFER_SAMPLES] = {0};
+volatile bool chorusActive = false;
+volatile bool chorusLiveOnly = false;
+volatile uint16_t chorusWriteIndex = 0;
+volatile uint32_t chorusLfoPCW = 0;
+volatile uint32_t chorusLfoFTW = 0;
 
 static inline __attribute__((always_inline)) int16_t readSigned9Sample(
   uint16_t sampleAddress, uint16_t sampleIndex)
@@ -240,6 +256,36 @@ static inline __attribute__((always_inline)) uint16_t modulationCoarse(uint16_t 
   const uint8_t high = value >> 8;
   const uint8_t low = (uint8_t)value / 64U;
   return ((uint16_t)high << 2) | low;
+}
+
+// Applies the post-mix chorus with Q8 fractional addressing and audio-rate
+// delay modulation.
+static inline __attribute__((always_inline)) int16_t applyChorus(int16_t inputQ7)
+{
+  const uint32_t phase = chorusLfoPCW + chorusLfoFTW;
+  chorusLfoPCW = phase;
+  uint16_t triangle = phase >> 16;
+  if (phase & 0x80000000UL) triangle = 0xFFFFU - triangle;
+  // 18892 / 32768 is approximated by shifts, keeping the full delay range
+  // within 0.001 ms of the requested 1.66-5.35 ms span without a wide multiply.
+  const uint16_t delayQ8 = SYNTH_CHORUS_MIN_DELAY_Q8 + (triangle >> 1) +
+    (triangle >> 4) + (triangle >> 7) + (triangle >> 8) + (triangle >> 9) +
+    (triangle >> 12);
+  const uint16_t delaySamples = delayQ8 >> 8;
+  const uint16_t writeIndex = chorusWriteIndex;
+  chorusBuffer[writeIndex] = inputQ7 >> 1;
+  chorusWriteIndex = writeIndex + 1 == SYNTH_CHORUS_BUFFER_SAMPLES ?
+    0 : writeIndex + 1;
+
+  const uint16_t readIndex = writeIndex >= delaySamples ?
+    writeIndex - delaySamples : writeIndex + SYNTH_CHORUS_BUFFER_SAMPLES - delaySamples;
+  const uint16_t nextIndex = readIndex == 0 ?
+    SYNTH_CHORUS_BUFFER_SAMPLES - 1 : readIndex - 1;
+  const int16_t first = chorusBuffer[readIndex];
+  const int16_t difference = (int16_t)chorusBuffer[nextIndex] - first;
+  const int16_t delayed = first +
+    (int16_t)(((int32_t)difference * (uint8_t)delayQ8) >> 8);
+  return (inputQ7 >> 1) + delayed;
 }
 
 // Mixes one audio frame and updates time-sliced synthesis state.
@@ -367,7 +413,10 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
       liveMixQ7 = nextScaledVoiceSample(1, AMP[1]) + nextScaledVoiceSample(2, AMP[2]) +
         nextScaledVoiceSample(3, AMP[3]);
     }
-    mixQ7 = sourceZeroQ7 + (playVcaGain >= 256 ? liveMixQ7 : scalePlayMix(liveMixQ7, (uint8_t)playVcaGain));
+    const int16_t scaledLiveMixQ7 = playVcaGain >= 256 ? liveMixQ7 :
+      scalePlayMix(liveMixQ7, (uint8_t)playVcaGain);
+    mixQ7 = sourceZeroQ7 + (chorusActive && chorusLiveOnly ?
+      applyChorus(scaledLiveMixQ7) : scaledLiveMixQ7);
 
     if (!renderDrum || voiceIndex != 0) {
       const uint16_t pitch = PITCH[voiceIndex];
@@ -385,6 +434,10 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
         FTW[voiceIndex] = pitch + pitchOffset;
       }
     }
+  }
+
+  if (!renderDrone && chorusActive && !chorusLiveOnly) {
+    mixQ7 = applyChorus(mixQ7);
   }
 
   const uint8_t feedback = (pwmDitherLfsr & 0x01) ? 0xB8 : 0x00;
@@ -651,12 +704,6 @@ class synth
         case ENVELOPE5:
           selectedEnvelope = (uint16_t)Env5;
           break;
-        case ENVELOPE6:
-          selectedEnvelope = (uint16_t)Env6;
-          break;
-        case ENVELOPE7:
-          selectedEnvelope = (uint16_t)Env7;
-          break;
       }
 
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
@@ -777,10 +824,33 @@ class synth
       }
     }
 
+    // A macro-controlled, 50/50 dry/wet effect with no feedback path.
+    // PLAY scopes it to the three live voices; SEQ applies it to the final mix.
+    void configureChorus(uint8_t mode, bool liveOnly)
+    {
+      const uint32_t lfoStep = mode == SYNTH_CHORUS_1 ? SYNTH_CHORUS_1_LFO_STEP :
+        mode == SYNTH_CHORUS_2 ? SYNTH_CHORUS_2_LFO_STEP : 0;
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        if (chorusActive != (lfoStep != 0) || chorusLiveOnly != liveOnly ||
+            chorusLfoFTW != lfoStep) {
+          chorusActive = lfoStep != 0;
+          chorusLiveOnly = liveOnly;
+          chorusWriteIndex = 0;
+          chorusLfoPCW = 0;
+          chorusLfoFTW = lfoStep;
+        }
+      }
+    }
+
     void setDroneMode(bool enabled)
     {
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         droneMode = enabled;
+        if (enabled) {
+          chorusActive = false;
+          chorusLiveOnly = false;
+          chorusLfoFTW = 0;
+        }
         droneMixPair = 0;
         for (uint8_t pair = 0; pair < SYNTH_DRONE_COUNT / 2; ++pair) {
           dronePairMixQ7[pair] = 0;
