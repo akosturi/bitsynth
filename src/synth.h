@@ -106,10 +106,11 @@ volatile uint8_t pwmDitherLfsr = 0xA5;
 volatile uint16_t noiseLfsrs[SYNTH_VOICE_COUNT] = {
   0xA5C3, 0xD72B, 0x9E37, 0xF1A5
 };
-// Retained performance engines. Their UI routing is intentionally disabled
-// for now, but presets still configure the VCA defaults.
+// Performance engines. Preset morphing crossfades two flash-resident waveform
+// sources and never duplicates oscillator state.
 volatile bool playMorphActive = false;
-volatile uint16_t playMorphSource = (uint16_t)SinTable;
+volatile uint16_t playMorphPrimarySource = (uint16_t)SinTable;
+volatile uint16_t playMorphSecondarySource = (uint16_t)SinTable;
 volatile uint32_t playMorphLfoPCW = 0x80000000UL;
 volatile uint32_t playMorphLfoFTW = 0;
 volatile uint8_t playMorphAmount = 128;
@@ -220,12 +221,13 @@ static inline __attribute__((always_inline)) int16_t nextScaledVoiceSample(
 }
 
 static inline __attribute__((always_inline)) int16_t nextScaledMorphedVoiceSample(
-  uint8_t voice, uint16_t secondarySource, uint8_t morphAmount, uint8_t gain)
+  uint8_t voice, uint16_t primarySource, uint16_t secondarySource,
+  uint8_t morphAmount, uint8_t gain)
 {
   const uint16_t phase = PCW[voice] + FTW[voice];
   PCW[voice] = phase;
   if (gain == 0) return 0;
-  const int16_t sampleA = nextWaveSample(voice, waveSources[voice], phase, pulseWidths[voice]);
+  const int16_t sampleA = nextWaveSample(voice, primarySource, phase, pulseWidths[voice]);
   const int16_t sampleB = nextWaveSample(voice, secondarySource, phase, pulseWidths[voice]);
   const uint8_t primaryAmount = 128 - morphAmount;
   return scaleSigned9Sample(((sampleA * primaryAmount) + (sampleB * morphAmount)) >> 7, gain, 3);
@@ -396,7 +398,10 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
         drumEnvelope = envelope <= envelopeStep ? 0 : envelope - envelopeStep;
       }
     } else {
-      sourceZeroQ7 = nextScaledVoiceSample(0, AMP[0]);
+      sourceZeroQ7 = playMorphActive ?
+        nextScaledMorphedVoiceSample(0, playMorphPrimarySource,
+          playMorphSecondarySource, playMorphAmount, AMP[0]) :
+        nextScaledVoiceSample(0, AMP[0]);
     }
 
     int16_t liveMixQ7;
@@ -406,9 +411,12 @@ ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
         const uint8_t phase = ((uint8_t*)&playMorphLfoPCW)[3];
         playMorphAmount = (phase & 0x80) ? (uint8_t)(256U - phase) : phase;
       }
-      liveMixQ7 = nextScaledMorphedVoiceSample(1, playMorphSource, playMorphAmount, AMP[1]) +
-        nextScaledMorphedVoiceSample(2, playMorphSource, playMorphAmount, AMP[2]) +
-        nextScaledMorphedVoiceSample(3, playMorphSource, playMorphAmount, AMP[3]);
+      liveMixQ7 = nextScaledMorphedVoiceSample(1, playMorphPrimarySource,
+        playMorphSecondarySource, playMorphAmount, AMP[1]) +
+        nextScaledMorphedVoiceSample(2, playMorphPrimarySource,
+          playMorphSecondarySource, playMorphAmount, AMP[2]) +
+        nextScaledMorphedVoiceSample(3, playMorphPrimarySource,
+          playMorphSecondarySource, playMorphAmount, AMP[3]);
     } else {
       liveMixQ7 = nextScaledVoiceSample(1, AMP[1]) + nextScaledVoiceSample(2, AMP[2]) +
         nextScaledVoiceSample(3, AMP[3]);
@@ -613,8 +621,9 @@ class synth
       }
     }
 
-    // Kept available for a future UI route; no current control calls it.
-    void configurePlayMorph(uint8_t primaryWave, uint8_t secondaryWave,
+    // Crossfades the first two preset waveform sources. A zero rate or an
+    // absent secondary source leaves the regular per-voice assignment intact.
+    void configurePresetMorph(uint8_t primaryWave, uint8_t secondaryWave,
       uint16_t frequencyHundredths, bool secondaryEnabled)
     {
       const uint16_t primary = waveSource(primaryWave);
@@ -622,15 +631,15 @@ class synth
       const uint32_t step = frequencyHundredths == 0 ? 0 : (uint32_t)frequencyHundredths * 17180UL;
       const bool active = secondaryEnabled && step != 0;
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) waveSources[voice] = active || !secondaryEnabled ? primary : secondary;
-        playMorphSource = secondary;
+        playMorphPrimarySource = primary;
+        playMorphSecondarySource = secondary;
         playMorphLfoFTW = step;
-        if (!active) playMorphAmount = 128;
+        if (!active) playMorphAmount = 0;
         playMorphActive = active;
       }
     }
 
-    void disablePlayMorph() {
+    void disablePresetMorph() {
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) { playMorphActive = false; playMorphLfoFTW = 0; playMorphAmount = 128; }
     }
 

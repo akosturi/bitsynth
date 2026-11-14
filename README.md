@@ -133,20 +133,29 @@ The sequence runs in sixteenth notes.
 | Step pots 1-8 | Chromatic pitch from C2 to B3; drum selection in `DRUM` |
 | Step buttons 1-8 | Toggle the corresponding step on or off |
 
-The SEQ pages are direct macros, macro LFO rate/depth pairs, then program,
-tempo (60-220 BPM), and `DRM` playback tuning.
+SEQ packs its available parameters left-to-right into pages of four: program,
+tempo (60-220 BPM), then the selected program's direct macros and LFO
+rate/depth pairs. `DRM` additionally exposes playback tuning after tempo; it
+does not appear for melodic programs. Empty macro and LFO slots are skipped,
+so no completely empty parameter page is shown. The `DRM` direct macro is
+`DEC` (decay).
 
 The LCD's upper row shows the selected control page's parameter names and briefly shows values when they change. The lower row shows the gate pattern: `x` is an enabled step, `-` is disabled, and `O`/`o` marks the current enabled/disabled step. Turning a step pot briefly shows its step number and note name, or drum name in `DRM`, at the lower right.
 
-SEQ contains `SIN`, `TRI`, `SAW`, `SQR`, `DRM`, and `NSE`. Melodic programs
-store voice recipes, envelope length, pulse width, glide, and their macro/LFO
-assignments. The PCM `DRM` program has its own compact data instead of unused
-oscillator fields.
+SEQ contains `GLA`, `TRI`, `FLY`, `SQR`, `DRM`, `NSE`, `SUB`, `BA1`, `PLK`,
+`BEL`, `LED`, `HYS`, `PUR`, `SOF`, `KEY`, `PLK`, `BA2`, `UNI`, and `ORG`.
+PLAY contains the same melodic programs but omits `DRM`. The restored programs
+retain their stored voice recipes, envelopes, lengths, modulation, and detune
+values; their macro and LFO assignments are intentionally empty. The PCM `DRM`
+program has its own compact data instead of unused oscillator fields.
 
-Melodic programs retain their stored PLAY VCA depth and rate. `VCD` remains a
-direct macro on `SIN`, `TRI`, `SAW`, and `NSE`; `CHR` takes the second macro
-slot on every melodic program. The waveform-morph engine is retained internally
-without a current front-panel route.
+Melodic programs retain their stored PLAY VCA depth and rate. `MOR` is the
+first macro on `SIN`, `TRI`, `SAW`, and `NSE`; `SQR` retains `PWM` first and
+places `MOR` second. `MOR` controls waveform-morph speed: `0` is off, while
+`1-127` span 0.16-20.32 Hz. A multi-voice preset crossfades only the first two
+waveforms in its voice recipes (`A-B-A`); a single-voice preset does not morph.
+Morphing crossfades waveform sources only, so each voice keeps its own pitch,
+envelope, modulation, and pulse-width settings.
 
 Each preset also stores one square-wave pulse width. It is applied to every
 square oscillator in that preset and otherwise has no effect; the stored value
@@ -167,7 +176,7 @@ Hz. DRONE bypasses the effect.
 
 Each step stores one of `KICK`, `SNAR`, or `CHH`; this is still a single eight-step track, not three separate drum tracks. A new hit immediately replaces the previous one.
 
-The samples are unsigned (offset-binary) 9-bit mono PCM at 20 kHz, losslessly bit-packed in flash. They are streamed directly from program memory without a RAM copy. Parameter 3 (`T`) changes playback speed from 0.75x to 1.25x. The selected DRM preset's `length` value applies a decay envelope lasting 25-100% of the pitch-adjusted sample duration.
+The samples are unsigned (offset-binary) 9-bit mono PCM at 20 kHz, losslessly bit-packed in flash. They are streamed directly from program memory without a RAM copy. Parameter 3 (`T`) changes playback speed from 0.75x to 1.25x. The direct-macro page's `DEC` parameter applies a decay envelope lasting 25-100% of the pitch-adjusted sample duration.
 
 ### PLAY - scale-quantized live performance
 
@@ -182,25 +191,29 @@ PLAY reserves voice 0 for the monophonic background sequence and uses voices
 | Step pots 5-8 | Unused |
 | Step buttons 1-8 | Consecutive notes of the selected scale |
 
-The PLAY pages are direct macros, macro LFO rate/depth pairs, then melodic
-program, root note, scale, and style. `DRM` is intentionally SEQ-only.
+PLAY packs program, root note, scale, style, then its available direct macros
+and LFO rate/depth pairs into four-control pages; empty slots are skipped.
+`DRM` is intentionally SEQ-only.
 
 Each PLAY program is melodic. Each voice recipe stores a signed
 `detuneCents` pitch offset (`-1200` to `+1200`), so it can use any whole-cent
-value from 1 to 1199 as well as semitone or octave intervals. Preset voices can
-therefore be detuned by up to one octave in either direction. Offsets are
-evaluated when a note is triggered and do not add oscillator layers or audio-
-ISR work.
+value from 1 to 1199 as well as semitone or octave intervals. In `POLY`, a
+multi-voice preset is played as a single detuned unison stack, using up to four
+oscillators (or three with the background sequence running). Single-voice
+presets retain note polyphony. `CHRD` uses only the first voice recipe.
 
 Preset modulation is a fixed 5 Hz triangle vibrato. Its stored `MOD` value is
 neutral at 64; distance from 64 selects depth, so values above and below 64
 produce the same centered pitch movement rather than an envelope-driven pitch
 sweep.
 
-- `POLY` allows three simultaneous live notes. A fourth note steals the oldest voice.
-- `CHRD` plays a scale-derived 1-3-5 chord from the most recently held button.
-- `UP`, `DOWN`, and `UPDN` arpeggiate held buttons on the sequencer's sixteenth-note clock.
-- `CUP`, `CDWN`, and `CUDN` arpeggiate the 1-3-5 chord of the most recently held button upward, downward, or up then down, respectively, on that same clock.
+- `POLY` allows four simultaneous live notes while the background sequence is
+  off. With it on, voice 0 remains reserved for the sequence, so POLY allows
+  three notes; the next note steals the oldest live voice in either case.
+- `CHRD` plays a scale-derived 1-3-5 chord from the most recently held button,
+  using the preset's first voice recipe.
+- `UP`, `DOWN`, and `UPDN` arpeggiate held buttons on the sequencer's sixteenth-note clock. Button presses and releases are applied at the next clock, so they cannot retrigger an off-grid note.
+- `CUP`, `CDWN`, and `CUDN` arpeggiate the 1-3-5 chord of the most recently held button upward, downward, or up then down, respectively, on that same clock; button changes are likewise clock-quantized.
 
 The background sequence keeps its position when entering PLAY. Hold **MODE**
 and press step button 1 to toggle it. A `DRUM` sequence uses its dedicated PCM
@@ -212,7 +225,7 @@ Programs declare up to four direct macros and two optional LFO targets. The
 LCD's upper row shows the current page's four three-character parameter names.
 While a parameter is being adjusted, its field temporarily shows the value,
 then returns to its name. In SEQ, the lower row remains the step-gate view; in
-PLAY it remains the style/root/scale/octave view. A macro slot without an
+PLAY it shows octave and background-sequence status. A macro slot without an
 assigned parameter shows `---`. The first LFO supplies rate/depth pair 1; the
 second supplies pair 2. Their LCD rate values are steps 1-94, corresponding to
 the same 0.05-20 Hz range as DRONE.
@@ -223,11 +236,12 @@ numeric macro declared by its program (`PWM`, `VIB`, `TUN`, `DEC`, `VCD`, or
 complete valid range before clamping. Drum tune and decay are resolved when a
 new hit starts. The melodic programs also expose `ENV` and `LEN` direct macros
 for selecting one of the six envelopes and its playback speed. `CHR` is a
-direct-only macro and is not an LFO target.
+direct-only macro and is not an LFO target. `MOR` is also direct-only: it
+sets a preset's waveform-morph speed and is inactive for one-voice presets.
 `LEN` uses a
 logarithmic range from roughly 50 ms (1) to 1.6 s (127); `LEN` 0 is HOLD and
 uses the constant full-level envelope until note-off. Neither envelope macro is
-an LFO target. Waveform morphing is currently not available.
+an LFO target.
 
 `NSE` is a generated white-noise source, not a wavetable. It uses an independent
 16-bit LFSR for each normal voice, advances at the 20 kHz audio rate, and uses

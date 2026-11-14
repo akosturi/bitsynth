@@ -16,7 +16,7 @@ const uint8_t kStepCount = 8;
 const uint8_t kSettingCount = 4;
 const uint8_t kStepPotsPerLoop = 2;
 const uint8_t kDroneWaveCount = 4;
-const uint8_t kPresetCount = 6;
+const uint8_t kPresetCount = 18;
 const uint8_t kDrumCount = DRUM_SAMPLE_COUNT;
 const uint8_t kScaleCount = 4;
 const uint8_t kPlayStyleCount = 8;
@@ -54,7 +54,16 @@ enum DrumId : uint8_t { DRUM_KICK = 0, DRUM_SNARE, DRUM_CLOSED_HAT };
 enum MacroParam : uint8_t {
   MACRO_NONE = 0, MACRO_PULSE_WIDTH, MACRO_VIBRATO,
   MACRO_DRUM_TUNE, MACRO_DRUM_DECAY, MACRO_VCA_DEPTH, MACRO_VCA_RATE,
-  MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH, MACRO_GLIDE, MACRO_CHORUS
+  MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH, MACRO_GLIDE, MACRO_CHORUS,
+  MACRO_MORPH
+};
+
+enum ParameterControl : uint8_t {
+  PARAM_NONE = 0,
+  PARAM_SEQ_PRESET, PARAM_SEQ_BPM, PARAM_SEQ_TUNE,
+  PARAM_PLAY_PRESET, PARAM_PLAY_ROOT, PARAM_PLAY_SCALE, PARAM_PLAY_STYLE,
+  PARAM_MACRO_0, PARAM_MACRO_1, PARAM_MACRO_2, PARAM_MACRO_3,
+  PARAM_LFO_0_RATE, PARAM_LFO_0_DEPTH, PARAM_LFO_1_RATE, PARAM_LFO_1_DEPTH
 };
 
 struct VoiceRecipe {
@@ -76,6 +85,7 @@ struct MelodicPreset {
   uint16_t vcaDepth;
   uint8_t vcaModulation;
   uint8_t chorusMode;
+  uint8_t morphSpeed;
   uint8_t macros[4];
   uint8_t lfoTargets[2];
 };
@@ -99,37 +109,35 @@ struct AnalogMotionState {
 
 // label, voice count, voices {wave, detune cents, envelope, modulation} x4,
 // envelope length, square pulse width, glide, PLAY VCA depth, PLAY VCA LFO rate,
-// direct macros x4, LFO targets x2
+// chorus mode, morph speed, direct macros x4, LFO targets x2
 // Available macros: MACRO_NONE, MACRO_PULSE_WIDTH, MACRO_VIBRATO,
 // MACRO_DRUM_TUNE, MACRO_DRUM_DECAY, MACRO_VCA_DEPTH, MACRO_VCA_RATE,
-// MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH, MACRO_GLIDE, MACRO_CHORUS.
-//const MelodicPreset kMelodicPresets[] PROGMEM = {
-//  {"SUB", 2, {{SINE, 0, ENVELOPE0, 64}, {SQUARE, -12, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 0},
-//  {"BA1", 2, {{SAW, 0, ENVELOPE1, 64}, {SQUARE, -12, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 0},
-//  {"PLK", 2, {{TRIANGLE, 0, ENVELOPE1, 64}, {SQUARE, 12, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 0},
-//  {"BEL", 3, {{SINE, 0, ENVELOPE2, 64}, {SINE, 12, ENVELOPE2, 64}, {TRIANGLE, 19, ENVELOPE2, 64}, {SINE, 0, 0, 64}}, 102, 0},
-//  {"LED", 2, {{SAW, 0, ENVELOPE0, 64}, {SAW, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 0},
-//  {"CRD", 4, {{TRIANGLE, 0, ENVELOPE0, 64}, {TRIANGLE, 4, ENVELOPE0, 64}, {TRIANGLE, 7, ENVELOPE0, 64}, {SINE, 12, ENVELOPE0, 64}}, 102, 0},
-//  {"PUR", 3, {{SINE, 0, ENVELOPE3, 64}, {SINE, 0, ENVELOPE3, 64}, {SINE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}}, 116, 0},
-//  {"SOF", 3, {{SINE, 0, ENVELOPE0, 64}, {SINE, 0, ENVELOPE0, 64}, {SINE, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}}, 102, -5},
-//  {"KEY", 3, {{TRIANGLE, 0, ENVELOPE2, 64}, {TRIANGLE, 0, ENVELOPE2, 64}, {TRIANGLE, 0, ENVELOPE2, 64}, {SINE, 0, 0, 64}}, 82, 4},
-//  {"PLK", 3, {{SQUARE, 0, ENVELOPE1, 64}, {SQUARE, 0, ENVELOPE1, 64}, {SQUARE, 0, ENVELOPE1, 64}, {SINE, 0, 0, 64}}, 46, 0},
-//  {"BA2", 3, {{SAW, 0, ENVELOPE0, 58}, {SAW, 0, ENVELOPE0, 58}, {SAW, 0, ENVELOPE0, 58}, {SINE, 0, 0, 64}}, 92, -7},
-//  {"LEA", 3, {{SAW, 0, ENVELOPE3, 68}, {SAW, 0, ENVELOPE3, 68}, {SAW, 0, ENVELOPE3, 68}, {SINE, 0, 0, 64}}, 116, 12},
-//  {"ORG", 3, {{SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}}, 116, -9},
-//  {"DRM", 1, {{SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 127, 0}
-//};
+// MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH, MACRO_GLIDE, MACRO_CHORUS,
+// MACRO_MORPH.
 const MelodicPreset kMelodicPresets[] PROGMEM = {
-  {"SIN", 1, {{SINE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 96, 50, 0, 0, 0, SYNTH_CHORUS_OFF, {MACRO_VCA_DEPTH, MACRO_CHORUS, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_VIBRATO, MACRO_NONE}},
-  {"TRI", 1, {{TRIANGLE, 0, ENVELOPE3, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 96, 0, 64}}, 127, 50, 0, 0, 0, SYNTH_CHORUS_OFF, {MACRO_VCA_DEPTH, MACRO_CHORUS, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_VIBRATO, MACRO_NONE}},
-  {"SAW", 1, {{SAW, 0, ENVELOPE3, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}, {SINE, 0, 0, 64}}, 96, 50, 0, 0, 0, SYNTH_CHORUS_OFF, {MACRO_VCA_DEPTH, MACRO_CHORUS, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_VIBRATO, MACRO_NONE}},
-  {"SQR", 1, {{SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, 0, 64}, {SQUARE, 0, 0, 64}, {SINE, 0, 0, 64}}, 96, 35, 0, 256, 68, SYNTH_CHORUS_OFF, {MACRO_PULSE_WIDTH, MACRO_CHORUS, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_VIBRATO, MACRO_NONE}},
-  {"NSE", 1, {{NOISE, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 96, 50, 0, 0, 0, SYNTH_CHORUS_OFF, {MACRO_VCA_DEPTH, MACRO_CHORUS, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_NONE, MACRO_NONE}}
+  {"GLA", 2, {{SAW, 0, ENVELOPE3, 64}, {TRIANGLE, 0, ENVELOPE3, 64}, {SAW, 0, ENVELOPE3, 64}, {TRIANGLE, 0, ENVELOPE3, 64}}, 127, 50, 0, 32, 8, SYNTH_CHORUS_OFF, 1, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
+  {"TRI", 1, {{TRIANGLE, 0, ENVELOPE3, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 96, 0, 64}}, 127, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_MORPH, MACRO_CHORUS, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_VIBRATO, MACRO_NONE}},
+  {"FLY", 1, {{SAW, 0, ENVELOPE3, 69}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}, {SINE, 0, 0, 64}}, 127, 50, 17, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
+  {"SQR", 1, {{SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, 0, 64}, {SQUARE, 0, 0, 64}, {SINE, 0, 0, 64}}, 96, 35, 0, 256, 68, SYNTH_CHORUS_OFF, 0, {MACRO_PULSE_WIDTH, MACRO_MORPH, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_VIBRATO, MACRO_NONE}},
+  {"NSE", 1, {{NOISE, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 96, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_MORPH, MACRO_CHORUS, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_NONE, MACRO_NONE}},
+  {"SUB", 2, {{SINE, 0, ENVELOPE0, 64}, {SQUARE, -12, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
+  {"BA1", 2, {{SAW, 0, ENVELOPE1, 64}, {SQUARE, -12, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
+  {"PLK", 2, {{TRIANGLE, 0, ENVELOPE1, 64}, {SQUARE, 12, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
+  {"BEL", 3, {{SINE, 0, ENVELOPE2, 64}, {SINE, 12, ENVELOPE2, 64}, {TRIANGLE, 19, ENVELOPE2, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
+  {"LED", 2, {{SAW, 0, ENVELOPE0, 64}, {SAW, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
+  {"HYS", 4, {{SAW, -18, ENVELOPE3, 62}, {SAW, -6, ENVELOPE3, 63}, {SAW, 6, ENVELOPE3, 65}, {SAW, 18, ENVELOPE3, 66}}, 127, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
+  {"PUR", 3, {{SINE, 0, ENVELOPE3, 64}, {SINE, 0, ENVELOPE3, 64}, {SINE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}}, 116, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
+  {"SOF", 3, {{SINE, 0, ENVELOPE0, 64}, {SINE, 0, ENVELOPE0, 64}, {SINE, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
+  {"KEY", 3, {{TRIANGLE, 0, ENVELOPE2, 64}, {TRIANGLE, 0, ENVELOPE2, 64}, {TRIANGLE, 0, ENVELOPE2, 64}, {SINE, 0, 0, 64}}, 82, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
+  {"PLK", 3, {{SQUARE, 0, ENVELOPE1, 64}, {SQUARE, 0, ENVELOPE1, 64}, {SQUARE, 0, ENVELOPE1, 64}, {SINE, 0, 0, 64}}, 46, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
+  {"BA2", 3, {{SAW, 0, ENVELOPE0, 58}, {SAW, 0, ENVELOPE0, 58}, {SAW, 0, ENVELOPE0, 58}, {SINE, 0, 0, 64}}, 92, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
+  {"UNI", 3, {{SAW, -9, ENVELOPE3, 64}, {SAW, 0, ENVELOPE3, 64}, {SAW, 9, ENVELOPE3, 64}, {SINE, 0, 0, 64}}, 127, 50, 12, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
+  {"ORG", 3, {{SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}}, 116, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}}
 };
 
 const DrumPreset kDrumPreset PROGMEM =
-  {"DRM", 127, {MACRO_DRUM_TUNE, MACRO_DRUM_DECAY, MACRO_NONE, MACRO_NONE}, {MACRO_DRUM_DECAY, MACRO_NONE}};
-const uint8_t kPlayPresetCount = 5;
+  {"DRM", 127, {MACRO_DRUM_DECAY, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}};
+const uint8_t kPlayPresetCount = 17;
 
 const char kDrumLabels[kDrumCount][5] PROGMEM = {"KICK", "SNAR", "CHH"};
 
@@ -178,8 +186,8 @@ uint8_t heldButtonMask = 0;
 uint16_t buttonPressOrder[kStepCount] = {0};
 uint16_t pressOrderCounter = 0;
 int8_t liveVoiceForButton[kStepCount] = {-1, -1, -1, -1, -1, -1, -1, -1};
-int8_t liveButtonForVoice[3] = {-1, -1, -1};
-uint16_t liveVoiceAge[3] = {0, 0, 0};
+int8_t liveButtonForVoice[SYNTH_VOICE_COUNT] = {-1, -1, -1, -1};
+uint16_t liveVoiceAge[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
 uint8_t arpPosition = 0;
 int8_t arpDirection = 1;
 
@@ -194,8 +202,7 @@ bool modeButtonLongHandled = false;
 bool modeButtonChordUsed = false;
 bool modeChordStepHeld = false;
 bool playSequencerEnabled = true;
-uint8_t parameterPage = 2;
-const uint8_t kPerformancePageCount = 3;
+uint8_t parameterPage = 0;
 uint16_t parameterPageRaw[4] = {0, 0, 0, 0};
 bool parameterPageLocked[4] = {false, false, false, false};
 
@@ -259,6 +266,49 @@ uint8_t macroForCurrentProgram(uint8_t slot) {
   }
   MelodicPreset preset; readMelodicPreset(programId, preset);
   return slot < 4 ? preset.macros[slot] : preset.lfoTargets[slot - 4];
+}
+
+// Voice 0 belongs to the background sequencer when it is running. Otherwise
+// POLY can use the complete four-voice normal-oscillator pool.
+uint8_t firstLiveVoice() { return playSequencerEnabled ? 1 : 0; }
+
+// The parameter strip is packed left-to-right.  This keeps unavailable
+// controls (such as drum tuning outside DRM) off the LCD and out of the page
+// cycle without needing a RAM-resident page table.
+uint8_t parameterControlCount() {
+  uint8_t count = instrumentMode == MODE_SEQ ? 2 : 4;
+  if (instrumentMode == MODE_SEQ && isDrumProgram(seqControls.preset)) ++count;
+  for (uint8_t slot = 0; slot < 4; ++slot) if (macroForCurrentProgram(slot) != MACRO_NONE) ++count;
+  for (uint8_t lfo = 0; lfo < 2; ++lfo) if (macroForCurrentProgram(4 + lfo) != MACRO_NONE) count += 2;
+  return count;
+}
+
+uint8_t parameterControlAt(uint8_t index) {
+  const bool sequence = instrumentMode == MODE_SEQ;
+  const uint8_t fixedCount = sequence ? (isDrumProgram(seqControls.preset) ? 3 : 2) : 4;
+  if (index < fixedCount) {
+    if (sequence) return index == 0 ? PARAM_SEQ_PRESET : (index == 1 ? PARAM_SEQ_BPM : PARAM_SEQ_TUNE);
+    return PARAM_PLAY_PRESET + index;
+  }
+  index -= fixedCount;
+  for (uint8_t slot = 0; slot < 4; ++slot) {
+    if (macroForCurrentProgram(slot) == MACRO_NONE) continue;
+    if (index-- == 0) return PARAM_MACRO_0 + slot;
+  }
+  for (uint8_t lfo = 0; lfo < 2; ++lfo) {
+    if (macroForCurrentProgram(4 + lfo) == MACRO_NONE) continue;
+    if (index-- == 0) return PARAM_LFO_0_RATE + lfo * 2;
+    if (index-- == 0) return PARAM_LFO_0_DEPTH + lfo * 2;
+  }
+  return PARAM_NONE;
+}
+
+uint8_t parameterControlForPot(uint8_t pot) {
+  return parameterControlAt(parameterPage * kSettingCount + pot);
+}
+
+uint8_t parameterPageCount() {
+  return (parameterControlCount() + kSettingCount - 1) / kSettingCount;
 }
 
 // Keep preset pulse widths musically useful while retaining one-byte storage.
@@ -327,6 +377,7 @@ uint16_t macroMaximum(uint8_t parameter) {
     case MACRO_GLIDE: return 127;
     case MACRO_VCA_DEPTH: return 256;
     case MACRO_VCA_RATE: return kPresetVcaModulationCount - 1;
+    case MACRO_MORPH: return 127;
     case MACRO_CHORUS: return SYNTH_CHORUS_2;
     default: return 0;
   }
@@ -366,6 +417,7 @@ uint16_t macroValueForRaw(uint8_t parameter, uint16_t raw) {
     case MACRO_ENVELOPE_LENGTH: return mapByteHysteresis(raw, activeMacroValue(parameter, 127), 127, 0);
     case MACRO_CHORUS: return mapIndexHysteresis(raw,
       activeMacroValue(parameter, SYNTH_CHORUS_OFF), SYNTH_CHORUS_2 + 1);
+    case MACRO_MORPH: return mapByteHysteresis(raw, activeMacroValue(parameter, 0), 127, 0);
     default: return 0;
   }
 }
@@ -442,7 +494,19 @@ void applyCurrentProgramChorus() {
   edgar.configureChorus(activeMacroValue(MACRO_CHORUS, preset.chorusMode), liveOnly);
 }
 
-void applyMacroValue(uint8_t slot, uint16_t raw, unsigned long now) {
+// Morph macro values span 0 (off) through 0.16-20.32 Hz.  This is deliberately
+// direct-only: changing its source list from the foreground keeps it out of
+// the macro-LFO update path and preserves the audio ISR's fixed workload.
+void applyCurrentProgramMorph() {
+  const uint8_t programId = instrumentMode == MODE_PLAY ? playProgramId() : seqControls.preset;
+  if (isDrumProgram(programId)) { edgar.disablePresetMorph(); return; }
+  MelodicPreset preset; readMelodicPreset(programId, preset);
+  const uint8_t speed = activeMacroValue(MACRO_MORPH, preset.morphSpeed);
+  edgar.configurePresetMorph(preset.voices[0].wave, preset.voices[1].wave,
+    (uint16_t)speed << 4, preset.voiceCount > 1);
+}
+
+void applyMacroValue(uint8_t slot, uint8_t displaySlot, uint16_t raw, unsigned long now) {
   const uint8_t parameter = macroForCurrentProgram(slot);
   if (parameter == MACRO_NONE) return;
   const uint16_t next = macroValueForRaw(parameter, raw);
@@ -466,14 +530,16 @@ void applyMacroValue(uint8_t slot, uint16_t raw, unsigned long now) {
     }
   } else if (parameter == MACRO_CHORUS) {
     edgar.configureChorus(next, instrumentMode == MODE_PLAY);
+  } else if (parameter == MACRO_MORPH) {
+    applyCurrentProgramMorph();
   } else if (parameter == MACRO_VCA_DEPTH || parameter == MACRO_VCA_RATE) {
     edgar.configurePlayVca(lfoModulatedMacroValue(MACRO_VCA_DEPTH, 0),
       presetVcaRateHundredths((uint8_t)lfoModulatedMacroValue(MACRO_VCA_RATE, 0)));
   }
-  showParameterEdit(slot, now);
+  showParameterEdit(displaySlot, now);
 }
 
-void applyLfoControl(uint8_t slot, uint16_t raw, unsigned long now) {
+void applyLfoControl(uint8_t slot, uint8_t displaySlot, uint16_t raw, unsigned long now) {
   const uint8_t lfo = (slot - 4) >> 1;
   const bool depth = (slot & 1) != 0;
   if (macroForCurrentProgram(4 + lfo) == MACRO_NONE) return;
@@ -486,7 +552,7 @@ void applyLfoControl(uint8_t slot, uint16_t raw, unsigned long now) {
     if (next == lfoRateIndex[lfo]) return;
     lfoRateIndex[lfo] = next;
   }
-  showParameterEdit(slot - 4, now);
+  showParameterEdit(displaySlot, now);
 }
 
 bool parameterPotUnlocked(uint8_t pot, uint16_t raw) {
@@ -516,9 +582,11 @@ void loadProgramMacroDefaults(uint8_t programId) {
       if (preset.macros[slot] == MACRO_ENVELOPE_LENGTH) macroValues[slot] = envelopeLengthControlForPreset(preset.length);
       if (preset.macros[slot] == MACRO_GLIDE) macroValues[slot] = preset.glide;
       if (preset.macros[slot] == MACRO_CHORUS) macroValues[slot] = preset.chorusMode;
+      if (preset.macros[slot] == MACRO_MORPH) macroValues[slot] = preset.morphSpeed;
     }
   }
   applyCurrentProgramChorus();
+  applyCurrentProgramMorph();
 }
 
 // Macro LFOs are intentionally evaluated in the foreground at 250 Hz.  They
@@ -696,11 +764,67 @@ uint8_t mapIndexHysteresis(uint16_t raw, uint8_t current, uint8_t count) {
   return current;
 }
 
-void readPerformancePageControls(const uint16_t values[], unsigned long now) {
-  for (uint8_t slot = 0; slot < kSettingCount; ++slot) {
-    if (!parameterPotUnlocked(slot, values[slot])) continue;
-    if (parameterPage == 0) applyMacroValue(slot, values[slot], now);
-    else applyLfoControl(slot + 4, values[slot], now);
+void revoiceHeldButtons();
+
+void lockParameterPageControls() {
+  for (uint8_t pot = 0; pot < kSettingCount; ++pot) {
+    parameterPageRaw[pot] = settingValues[pot];
+    parameterPageLocked[pot] = true;
+  }
+}
+
+void applyParameterControl(uint8_t control, uint8_t pot, uint16_t raw, unsigned long now) {
+  if (control >= PARAM_MACRO_0 && control <= PARAM_MACRO_3) {
+    applyMacroValue(control - PARAM_MACRO_0, pot, raw, now);
+    return;
+  }
+  if (control >= PARAM_LFO_0_RATE && control <= PARAM_LFO_1_DEPTH) {
+    applyLfoControl(4 + control - PARAM_LFO_0_RATE, pot, raw, now);
+    return;
+  }
+
+  uint8_t next;
+  switch (control) {
+    case PARAM_SEQ_PRESET:
+      next = mapIndexHysteresis(raw, seqControls.preset, kPresetCount);
+      if (next != seqControls.preset) {
+        if (isDrumProgram(seqControls.preset) || isDrumProgram(next)) { edgar.stopDrum(); stopNormalVoices(); }
+        seqControls.preset = next; loadProgramMacroDefaults(next); lockParameterPageControls(); showParameterEdit(pot, now);
+      }
+      break;
+    case PARAM_SEQ_BPM:
+      next = mapByteHysteresis(raw, seqControls.bpm, 60, 220);
+      if (next != seqControls.bpm) { seqControls.bpm = next; showParameterEdit(pot, now); }
+      break;
+    case PARAM_SEQ_TUNE:
+      next = mapByteHysteresis(raw, seqControls.drumTone, 127, 0);
+      if (next != seqControls.drumTone) { seqControls.drumTone = next; showParameterEdit(pot, now); }
+      break;
+    case PARAM_PLAY_PRESET:
+      next = mapIndexHysteresis(raw, playControls.preset, kPlayPresetCount);
+      if (next != playControls.preset) { playControls.preset = next; loadProgramMacroDefaults(playProgramId()); lockParameterPageControls(); applyLiveConfiguration(); revoiceHeldButtons(); showParameterEdit(pot, now); }
+      break;
+    case PARAM_PLAY_ROOT:
+      next = mapIndexHysteresis(raw, playControls.root, 12);
+      if (next != playControls.root) { playControls.root = next; revoiceHeldButtons(); showParameterEdit(pot, now); }
+      break;
+    case PARAM_PLAY_SCALE:
+      next = mapIndexHysteresis(raw, playControls.scale, kScaleCount);
+      if (next != playControls.scale) { playControls.scale = next; revoiceHeldButtons(); showParameterEdit(pot, now); }
+      break;
+    case PARAM_PLAY_STYLE:
+      next = mapIndexHysteresis(raw, playControls.style, kPlayStyleCount);
+      if (next != playControls.style) { playControls.style = next; arpPosition = 0; arpDirection = 1; revoiceHeldButtons(); showParameterEdit(pot, now); }
+      break;
+  }
+}
+
+void readParameterPageControls(const uint16_t values[], unsigned long now) {
+  for (uint8_t pot = 0; pot < kSettingCount; ++pot) {
+    const uint8_t control = parameterControlForPot(pot);
+    if (control != PARAM_NONE && parameterPotUnlocked(pot, values[pot])) {
+      applyParameterControl(control, pot, values[pot], now);
+    }
   }
 }
 
@@ -716,9 +840,7 @@ void readControls(unsigned long now) {
   settingScanChannel = (settingScanChannel + 1) % kSettingCount;
 
   if (settingReadyMask == ((1 << kSettingCount) - 1)) {
-    if (instrumentMode != MODE_DRONE && parameterPage < 2) readPerformancePageControls(settingValues, now);
-    else if (instrumentMode == MODE_SEQ) readSequencerControls(settingValues, now);
-    else if (instrumentMode == MODE_PLAY) readPlayControls(settingValues, now);
+    if (instrumentMode != MODE_DRONE) readParameterPageControls(settingValues, now);
     else readDroneControls(settingValues, now);
   }
 
@@ -729,32 +851,6 @@ void readControls(unsigned long now) {
     else readDronePitchPot(step, now);
     stepScanChannel = (stepScanChannel + 1) % kStepCount;
   }
-}
-
-void readSequencerControls(const uint16_t values[], unsigned long now) {
-  uint8_t next = parameterPotUnlocked(0, values[0]) ? mapIndexHysteresis(values[0], seqControls.preset, kPresetCount) : seqControls.preset;
-  if (next != seqControls.preset) {
-    if (isDrumProgram(seqControls.preset) || isDrumProgram(next)) { edgar.stopDrum(); stopNormalVoices(); }
-    seqControls.preset = next; loadProgramMacroDefaults(next); showParameterEdit(0, now);
-  }
-  next = parameterPotUnlocked(1, values[1]) ? mapByteHysteresis(values[1], seqControls.bpm, 60, 220) : seqControls.bpm;
-  if (next != seqControls.bpm) { seqControls.bpm = next; showParameterEdit(1, now); }
-  next = parameterPotUnlocked(2, values[2]) ? mapByteHysteresis(values[2], seqControls.drumTone, 127, 0) : seqControls.drumTone;
-  if (next != seqControls.drumTone) { seqControls.drumTone = next; showParameterEdit(2, now); }
-}
-
-void revoiceHeldButtons();
-
-// Handles normal play controls and mode-button secondary functions.
-void readPlayControls(const uint16_t values[], unsigned long now) {
-  uint8_t next = parameterPotUnlocked(0, values[0]) ? mapIndexHysteresis(values[0], playControls.preset, kPlayPresetCount) : playControls.preset;
-  if (next != playControls.preset) { playControls.preset = next; loadProgramMacroDefaults(playProgramId()); applyLiveConfiguration(); revoiceHeldButtons(); showParameterEdit(0, now); }
-  next = parameterPotUnlocked(1, values[1]) ? mapIndexHysteresis(values[1], playControls.root, 12) : playControls.root;
-  if (next != playControls.root) { playControls.root = next; revoiceHeldButtons(); showParameterEdit(1, now); }
-  next = parameterPotUnlocked(2, values[2]) ? mapIndexHysteresis(values[2], playControls.scale, kScaleCount) : playControls.scale;
-  if (next != playControls.scale) { playControls.scale = next; revoiceHeldButtons(); showParameterEdit(2, now); }
-  next = parameterPotUnlocked(3, values[3]) ? mapIndexHysteresis(values[3], playControls.style, kPlayStyleCount) : playControls.style;
-  if (next != playControls.style) { playControls.style = next; arpPosition = 0; arpDirection = 1; revoiceHeldButtons(); showParameterEdit(3, now); }
 }
 
 // MODE + a DRONE parameter pot edits that pair's amplitude-LFO rate.
@@ -860,11 +956,8 @@ void scanModeButton(unsigned long now) {
         // DRONE retains its dedicated controls and has no performance pages.
         displayDirty = true;
       } else {
-        parameterPage = (parameterPage + 1) % kPerformancePageCount;
-        for (uint8_t pot = 0; pot < 4; ++pot) {
-          parameterPageRaw[pot] = settingValues[pot];
-          parameterPageLocked[pot] = true;
-        }
+        parameterPage = (parameterPage + 1) % parameterPageCount();
+        lockParameterPageControls();
         editedPlayShift = 0;
         editedStep = 255;
         displayDirty = true;
@@ -899,7 +992,8 @@ void handleStepButton(uint8_t button, bool pressed) {
     playSequencerEnabled = !playSequencerEnabled;
     modeButtonChordUsed = true;
     modeChordStepHeld = true;
-    if (!playSequencerEnabled) { stopNormalVoice(0); edgar.stopDrum(); }
+    stopNormalVoice(0); edgar.stopDrum();
+    revoiceHeldButtons();
     displayDirty = true;
     return;
   }
@@ -928,19 +1022,16 @@ void changeMode(InstrumentMode nextMode, unsigned long now) {
   if (previous == MODE_DRONE) { edgar.stopAllDrones(); edgar.setDroneMode(false); }
   if (previous == MODE_PLAY) {
     clearHeldNotes();
-    edgar.disablePlayMorph();
+    edgar.disablePresetMorph();
     edgar.disablePlayVca();
   }
   edgar.stopDrum();
   stopNormalVoices();
   instrumentMode = nextMode;
-  parameterPage = nextMode == MODE_DRONE ? 0 : 2;
+  parameterPage = 0;
   editedStep = 255;
   editedPlayShift = 0;
-  for (uint8_t pot = 0; pot < 4; ++pot) {
-    parameterPageRaw[pot] = settingValues[pot];
-    parameterPageLocked[pot] = true;
-  }
+  lockParameterPageControls();
 
   if (nextMode == MODE_DRONE) {
     for (uint8_t pair = 0; pair < kSettingCount; ++pair) {
@@ -1070,8 +1161,10 @@ void runSequencer(unsigned long now) {
   if ((unsigned long)(now - lastStepMs) >= nextStepIntervalMs) lastStepMs = now;
   playingStep = currentStep;
   if (instrumentMode == MODE_PLAY) {
-    if (playSequencerEnabled && bitRead(seqGateMask, currentStep)) triggerSequencerStep(currentStep, true);
-    else { stopNormalVoice(0); edgar.stopDrum(); }
+    if (playSequencerEnabled) {
+      if (bitRead(seqGateMask, currentStep)) triggerSequencerStep(currentStep, true);
+      else { stopNormalVoice(0); edgar.stopDrum(); }
+    }
   } else if (bitRead(seqGateMask, currentStep)) {
     triggerSequencerStep(currentStep, false);
   } else {
@@ -1094,7 +1187,8 @@ void applyLiveConfiguration() {
   playGlide = activeMacroValue(MACRO_GLIDE, preset.glide);
   edgar.configurePlayVca(lfoModulatedMacroValue(MACRO_VCA_DEPTH, preset.vcaDepth),
     presetVcaRateHundredths((uint8_t)lfoModulatedMacroValue(MACRO_VCA_RATE, preset.vcaModulation)));
-  for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) {
+  applyCurrentProgramMorph();
+  for (uint8_t voice = firstLiveVoice(); voice < SYNTH_VOICE_COUNT; ++voice) {
     edgar.setWave(voice, preset.voices[0].wave);
     edgar.setEnvelope(voice, envelope);
     edgar.setPulseWidth(voice, pulseWidth);
@@ -1124,27 +1218,49 @@ int8_t latestHeldButton() {
 
 void resetLiveAssignments() {
   for (uint8_t button = 0; button < kStepCount; ++button) liveVoiceForButton[button] = -1;
-  for (uint8_t slot = 0; slot < 3; ++slot) { liveButtonForVoice[slot] = -1; liveVoiceAge[slot] = 0; }
+  for (uint8_t voice = 0; voice < SYNTH_VOICE_COUNT; ++voice) {
+    liveButtonForVoice[voice] = -1; liveVoiceAge[voice] = 0;
+  }
 }
 
 void clearHeldNotes() {
   heldButtonMask = 0;
-  for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
+  for (uint8_t voice = firstLiveVoice(); voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
   resetLiveAssignments();
 }
 
 // Assigns a free live voice or steals the oldest active one.
 void triggerPolyButton(uint8_t button) {
-  int8_t slot = -1;
-  for (uint8_t i = 0; i < 3; ++i) if (liveButtonForVoice[i] < 0) { slot = i; break; }
-  if (slot < 0) {
-    slot = 0;
-    for (uint8_t i = 1; i < 3; ++i) if (liveVoiceAge[i] < liveVoiceAge[slot]) slot = i;
-    const int8_t stolenButton = liveButtonForVoice[slot];
+  const uint8_t firstVoice = firstLiveVoice();
+  MelodicPreset preset; readMelodicPreset(playProgramId(), preset);
+  // A multi-voice program is a unison stack in POLY.  It consumes the whole
+  // live pool: four oscillators normally, or three while voice 0 sequences.
+  if (preset.voiceCount > 1) {
+    const uint8_t availableVoiceCount = SYNTH_VOICE_COUNT - firstVoice;
+    const uint8_t stackVoiceCount = min(preset.voiceCount, availableVoiceCount);
+    const uint8_t note = liveNoteForButton(button);
+    for (uint8_t stackVoice = 0; stackVoice < stackVoiceCount; ++stackVoice) {
+      const uint8_t voice = firstVoice + stackVoice;
+      const VoiceRecipe recipe = preset.voices[stackVoice];
+      edgar.setMod(voice, recipe.modulation);
+      triggerNormalVoice(voice, pitchForNoteWithDetuneCents(note, recipe.detuneCents), playGlide);
+    }
+    for (uint8_t voice = firstVoice + stackVoiceCount; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
+    return;
+  }
+  int8_t voice = -1;
+  for (uint8_t candidate = firstVoice; candidate < SYNTH_VOICE_COUNT; ++candidate) {
+    if (liveButtonForVoice[candidate] < 0) { voice = candidate; break; }
+  }
+  if (voice < 0) {
+    voice = firstVoice;
+    for (uint8_t candidate = firstVoice + 1; candidate < SYNTH_VOICE_COUNT; ++candidate) {
+      if (liveVoiceAge[candidate] < liveVoiceAge[voice]) voice = candidate;
+    }
+    const int8_t stolenButton = liveButtonForVoice[voice];
     if (stolenButton >= 0) liveVoiceForButton[stolenButton] = -1;
   }
-  const uint8_t voice = slot + 1;
-  liveButtonForVoice[slot] = button; liveVoiceForButton[button] = voice; liveVoiceAge[slot] = buttonPressOrder[button];
+  liveButtonForVoice[voice] = button; liveVoiceForButton[button] = voice; liveVoiceAge[voice] = buttonPressOrder[button];
   triggerNormalVoice(voice, pitchForNote(liveNoteForButton(button)), playGlide);
 }
 
@@ -1221,23 +1337,31 @@ void handleLivePress(uint8_t button) {
   applyLiveConfiguration();
   if (playControls.style == STYLE_POLY) triggerPolyButton(button);
   else if (playControls.style == STYLE_CHORD) triggerHeldChord();
-  else if ((heldButtonMask & ~(1 << button)) == 0) { arpPosition = 0; arpDirection = 1; advanceArpeggio(); }
+  // Arpeggios read heldButtonMask only from runSequencer(), so a key pressed
+  // between clocks cannot retrigger an off-grid note.
+  else if ((heldButtonMask & ~(1 << button)) == 0) { arpPosition = 0; arpDirection = 1; }
 }
 
 void handleLiveRelease(uint8_t button) {
   if (playControls.style == STYLE_POLY) {
+    MelodicPreset preset; readMelodicPreset(playProgramId(), preset);
+    if (preset.voiceCount > 1) {
+      revoiceHeldButtons();
+      return;
+    }
     const int8_t voice = liveVoiceForButton[button];
-    if (voice >= 1) {
-      stopNormalVoice(voice); liveButtonForVoice[voice - 1] = -1; liveVoiceForButton[button] = -1;
+    if (voice >= firstLiveVoice()) {
+      stopNormalVoice(voice); liveButtonForVoice[voice] = -1; liveVoiceForButton[button] = -1;
     }
   } else if (playControls.style == STYLE_CHORD) triggerHeldChord();
-  else advanceArpeggio();
+  // Keep the current arp note until the next sequencer clock, where the
+  // updated held-button set is applied.
 }
 
 // Rebuilds live voice assignments after a play setting changes.
 void revoiceHeldButtons() {
   if (instrumentMode != MODE_PLAY) return;
-  for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
+  for (uint8_t voice = firstLiveVoice(); voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
   resetLiveAssignments(); applyLiveConfiguration();
   if (playControls.style == STYLE_POLY) {
     uint8_t ordered[kStepCount];
@@ -1344,24 +1468,31 @@ void frameMacroName(uint8_t column, uint8_t parameter) {
     case MACRO_ENVELOPE_LENGTH: frameText(0, column, F("LEN")); break;
     case MACRO_GLIDE: frameText(0, column, F("GLD")); break;
     case MACRO_CHORUS: frameText(0, column, F("CHR")); break;
+    case MACRO_MORPH: frameText(0, column, F("MOR")); break;
     default: frameText(0, column, F("---")); break;
   }
 }
 
 void renderParameterName(uint8_t pot) {
   const uint8_t column = pot * 4;
-  if (parameterPage == 0) { frameMacroName(column, macroForCurrentProgram(pot)); return; }
-  if (parameterPage == 1) {
-    const uint8_t target = macroForCurrentProgram(4 + (pot >> 1));
-    frameText(0, column, target == MACRO_NONE ? F("---") : ((pot & 1) ? F("DEP") : F("RAT")));
+  const uint8_t control = parameterControlForPot(pot);
+  if (control >= PARAM_MACRO_0 && control <= PARAM_MACRO_3) {
+    frameMacroName(column, macroForCurrentProgram(control - PARAM_MACRO_0));
     return;
   }
-  if (instrumentMode == MODE_SEQ) {
-    static const char labels[4][4] PROGMEM = {"PRS", "BPM", "TUN", "---"};
-    frameProgmemText(0, column, labels[pot]);
-  } else {
-    static const char labels[4][4] PROGMEM = {"PRS", "ROT", "SCL", "STY"};
-    frameProgmemText(0, column, labels[pot]);
+  if (control >= PARAM_LFO_0_RATE && control <= PARAM_LFO_1_DEPTH) {
+    frameText(0, column, (control & 1) ? F("DEP") : F("RAT"));
+    return;
+  }
+  switch (control) {
+    case PARAM_SEQ_PRESET:
+    case PARAM_PLAY_PRESET: frameText(0, column, F("PRS")); break;
+    case PARAM_SEQ_BPM: frameText(0, column, F("BPM")); break;
+    case PARAM_SEQ_TUNE: frameText(0, column, F("TUN")); break;
+    case PARAM_PLAY_ROOT: frameText(0, column, F("ROT")); break;
+    case PARAM_PLAY_SCALE: frameText(0, column, F("SCL")); break;
+    case PARAM_PLAY_STYLE: frameText(0, column, F("STY")); break;
+    default: frameText(0, column, F("---")); break;
   }
 }
 
@@ -1369,20 +1500,24 @@ void renderParameterValue(uint8_t pot) {
   if (pot >= 4) return;
   const uint8_t column = pot * 4;
   frameText(0, column, F("   "));
-  if (parameterPage == 0) {
-    frameNumber(0, column, macroValues[pot]);
-  } else if (parameterPage == 1) {
-    if (pot & 1) frameNumber(0, column, lfoDepth[pot >> 1]);
-    else frameNumber(0, column, lfoRateIndex[pot >> 1] + 1);
-  } else if (instrumentMode == MODE_SEQ) {
-    if (pot == 0) { char label[5]; programLabel(seqControls.preset, label); frameText(0, column, label); }
-    else if (pot == 1) frameNumber(0, column, seqControls.bpm);
-    else if (pot == 2) frameNumber(0, column, seqControls.drumTone);
-  } else {
-    if (pot == 0) { char label[5]; programLabel(playProgramId(), label); frameText(0, column, label); }
-    else if (pot == 1) frameProgmemText(0, column, kRootLabels[playControls.root]);
-    else if (pot == 2) frameProgmemText(0, column, kScaleLabels[playControls.scale]);
-    else frameProgmemText(0, column, kStyleLabels[playControls.style]);
+  const uint8_t control = parameterControlForPot(pot);
+  if (control >= PARAM_MACRO_0 && control <= PARAM_MACRO_3) {
+    frameNumber(0, column, macroValues[control - PARAM_MACRO_0]);
+  } else if (control >= PARAM_LFO_0_RATE && control <= PARAM_LFO_1_DEPTH) {
+    const uint8_t lfo = (control - PARAM_LFO_0_RATE) >> 1;
+    frameNumber(0, column, (control & 1) ? lfoDepth[lfo] : lfoRateIndex[lfo] + 1);
+  } else if (control == PARAM_SEQ_PRESET || control == PARAM_PLAY_PRESET) {
+    char label[5]; programLabel(control == PARAM_SEQ_PRESET ? seqControls.preset : playProgramId(), label); frameText(0, column, label);
+  } else if (control == PARAM_SEQ_BPM) {
+    frameNumber(0, column, seqControls.bpm);
+  } else if (control == PARAM_SEQ_TUNE) {
+    frameNumber(0, column, seqControls.drumTone);
+  } else if (control == PARAM_PLAY_ROOT) {
+    frameProgmemText(0, column, kRootLabels[playControls.root]);
+  } else if (control == PARAM_PLAY_SCALE) {
+    frameProgmemText(0, column, kScaleLabels[playControls.scale]);
+  } else if (control == PARAM_PLAY_STYLE) {
+    frameProgmemText(0, column, kStyleLabels[playControls.style]);
   }
 }
 
@@ -1401,9 +1536,6 @@ void renderSequencerDashboard(bool inlineEditVisible) {
 
 void renderPlayDashboard(bool inlineEditVisible) {
   for (uint8_t pot = 0; pot < 4; ++pot) renderParameterName(pot);
-  frameProgmemText(1, 0, kStyleLabels[playControls.style]);
-  frameProgmemText(1, 5, kRootLabels[playControls.root]);
-  frameProgmemText(1, 8, kScaleLabels[playControls.scale]);
   frameChar(1, 12, 'O'); frameChar(1, 13, '2' + playControls.octave);
   frameText(1, 14, playSequencerEnabled ? F("+") : F("-"));
   if (inlineEditVisible && editedPlayShift > 0) renderParameterValue(editedPlayShift - 1);
