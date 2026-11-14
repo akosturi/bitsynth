@@ -143,17 +143,21 @@ store voice recipes, envelope length, pulse width, glide, and their macro/LFO
 assignments. The PCM `DRM` program has its own compact data instead of unused
 oscillator fields.
 
-Melodic programs retain their stored PLAY VCA depth and rate and expose them
-as direct macros (`VCD`, `VCR`). The waveform-morph engine is retained
-internally without a current front-panel route.
+Melodic programs retain their stored PLAY VCA depth and rate. `VCD` remains a
+direct macro on `SIN`, `TRI`, `SAW`, and `NSE`; `GLD` takes the second macro
+slot on those programs. The waveform-morph engine is retained internally
+without a current front-panel route.
 
 Each preset also stores one square-wave pulse width. It is applied to every
 square oscillator in that preset and otherwise has no effect; the stored value
 is limited to a musically useful 5-95% duty cycle. The supplied `SQR` preset
 uses a 35% pulse width, while the other presets retain the 50% default.
 
-Each preset additionally stores one glide value (`0-127`). It applies to every
-melodic voice of that preset, in both SEQ and PLAY; `0` switches glide off.
+Each melodic preset stores one default glide value (`0-127`). Its `GLD` macro
+overrides that value for the active program in both SEQ and PLAY; `0` switches
+glide off. The macro affects subsequent note triggers and immediately changes
+the speed of any glide already in progress; turning it off completes that glide
+at once.
 
 #### DRUM preset
 
@@ -207,12 +211,19 @@ then returns to its name. In SEQ, the lower row remains the step-gate view; in
 PLAY it remains the style/root/scale/octave view. A macro slot without an
 assigned parameter shows `---`. The first LFO supplies rate/depth pair 1; the
 second supplies pair 2. Their LCD rate values are steps 1-94, corresponding to
-the same 0.05-20 Hz range as DRONE. The direct `VCR` macro already shows its
-own 0-98 step scale, with 0 meaning off.
+the same 0.05-20 Hz range as DRONE.
 Macro LFOs are resolved outside the audio interrupt;
-the ISR receives only the resulting engine values. The current programs use
-the first LFO for vibrato where assigned. Waveform morphing is currently not
-available.
+the ISR receives only the resulting engine values. An LFO may target any
+numeric macro declared by its program (`PWM`, `VIB`, `TUN`, `DEC`, `VCD`, or
+`VCR`); depth sets a centred triangle sweep, with 127 spanning that parameter's
+complete valid range before clamping. Drum tune and decay are resolved when a
+new hit starts. The melodic programs also expose `ENV` and `LEN` direct macros
+for selecting one of the eight envelopes and its playback speed. Melodic
+programs also expose the direct-only `GLD` macro for a 0-127 glide amount.
+`LEN` uses a
+logarithmic range from roughly 50 ms (1) to 1.6 s (127); `LEN` 0 is HOLD and
+uses the constant full-level envelope until note-off. Neither envelope macro is
+an LFO target. Waveform morphing is currently not available.
 
 `NSE` is a generated white-noise source, not a wavetable. It uses an independent
 16-bit LFSR for each normal voice, advances at the 20 kHz audio rate, and uses

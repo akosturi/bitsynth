@@ -53,7 +53,8 @@ enum PresetId : uint8_t { PRESET_SINE = 0, PRESET_TRIANGLE, PRESET_SAW,
 enum DrumId : uint8_t { DRUM_KICK = 0, DRUM_SNARE, DRUM_CLOSED_HAT };
 enum MacroParam : uint8_t {
   MACRO_NONE = 0, MACRO_PULSE_WIDTH, MACRO_VIBRATO,
-  MACRO_DRUM_TUNE, MACRO_DRUM_DECAY, MACRO_VCA_DEPTH, MACRO_VCA_RATE
+  MACRO_DRUM_TUNE, MACRO_DRUM_DECAY, MACRO_VCA_DEPTH, MACRO_VCA_RATE,
+  MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH, MACRO_GLIDE
 };
 
 struct VoiceRecipe {
@@ -99,7 +100,8 @@ struct AnalogMotionState {
 // envelope length, square pulse width, glide, PLAY VCA depth, PLAY VCA LFO rate,
 // direct macros x4, LFO targets x2
 // Available macros: MACRO_NONE, MACRO_PULSE_WIDTH, MACRO_VIBRATO,
-// MACRO_DRUM_TUNE, MACRO_DRUM_DECAY, MACRO_VCA_DEPTH, MACRO_VCA_RATE.
+// MACRO_DRUM_TUNE, MACRO_DRUM_DECAY, MACRO_VCA_DEPTH, MACRO_VCA_RATE,
+// MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH, MACRO_GLIDE.
 //const MelodicPreset kMelodicPresets[] PROGMEM = {
 //  {"SUB", 2, {{SINE, 0, ENVELOPE0, 64}, {SQUARE, -12, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 0},
 //  {"BA1", 2, {{SAW, 0, ENVELOPE1, 64}, {SQUARE, -12, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 0},
@@ -117,15 +119,15 @@ struct AnalogMotionState {
 //  {"DRM", 1, {{SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 127, 0}
 //};
 const MelodicPreset kMelodicPresets[] PROGMEM = {
-  {"SIN", 1, {{SINE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 127, 50, 0, 0, 0, {MACRO_VCA_DEPTH, MACRO_VCA_RATE, MACRO_NONE, MACRO_NONE}, {MACRO_VIBRATO, MACRO_NONE}},
-  {"TRI", 1, {{TRIANGLE, 0, ENVELOPE3, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}}, 127, 50, 0, 0, 0, {MACRO_VCA_DEPTH, MACRO_VCA_RATE, MACRO_NONE, MACRO_NONE}, {MACRO_VIBRATO, MACRO_NONE}},
-  {"SAW", 1, {{SAW, 0, ENVELOPE3, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}, {SINE, 0, 0, 64}}, 127, 50, 0, 0, 0, {MACRO_VCA_DEPTH, MACRO_VCA_RATE, MACRO_NONE, MACRO_NONE}, {MACRO_VIBRATO, MACRO_NONE}},
-  {"SQR", 1, {{SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, 0, 64}, {SQUARE, 0, 0, 64}, {SINE, 0, 0, 64}}, 127, 35, 0, 256, 68, {MACRO_PULSE_WIDTH, MACRO_VCA_DEPTH, MACRO_VCA_RATE, MACRO_NONE}, {MACRO_VIBRATO, MACRO_NONE}},
-  {"NSE", 1, {{NOISE, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 115, 50, 0, 0, 0, {MACRO_VCA_DEPTH, MACRO_VCA_RATE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}}
+  {"SIN", 1, {{SINE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 96, 50, 0, 0, 0, {MACRO_VCA_DEPTH, MACRO_GLIDE, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_VIBRATO, MACRO_NONE}},
+  {"TRI", 1, {{TRIANGLE, 0, ENVELOPE3, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 96, 0, 64}}, 127, 50, 0, 0, 0, {MACRO_VCA_DEPTH, MACRO_GLIDE, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_VIBRATO, MACRO_NONE}},
+  {"SAW", 1, {{SAW, 0, ENVELOPE3, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}, {SINE, 0, 0, 64}}, 96, 50, 0, 0, 0, {MACRO_VCA_DEPTH, MACRO_GLIDE, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_VIBRATO, MACRO_NONE}},
+  {"SQR", 1, {{SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, 0, 64}, {SQUARE, 0, 0, 64}, {SINE, 0, 0, 64}}, 96, 35, 0, 256, 68, {MACRO_PULSE_WIDTH, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH, MACRO_GLIDE}, {MACRO_VIBRATO, MACRO_NONE}},
+  {"NSE", 1, {{NOISE, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 96, 50, 0, 0, 0, {MACRO_VCA_DEPTH, MACRO_GLIDE, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_NONE, MACRO_NONE}}
 };
 
 const DrumPreset kDrumPreset PROGMEM =
-  {"DRM", 127, {MACRO_DRUM_TUNE, MACRO_DRUM_DECAY, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}};
+  {"DRM", 127, {MACRO_DRUM_TUNE, MACRO_DRUM_DECAY, MACRO_NONE, MACRO_NONE}, {MACRO_DRUM_DECAY, MACRO_NONE}};
 const uint8_t kPlayPresetCount = 5;
 
 const char kDrumLabels[kDrumCount][5] PROGMEM = {"KICK", "SNAR", "CHH"};
@@ -307,15 +309,117 @@ uint16_t activeMacroValue(uint8_t parameter, uint16_t fallback) {
   return fallback;
 }
 
+uint16_t macroMinimum(uint8_t parameter) {
+  switch (parameter) {
+    case MACRO_PULSE_WIDTH: return 5;
+    case MACRO_VIBRATO: return 64;
+    default: return 0;
+  }
+}
+
+uint16_t macroMaximum(uint8_t parameter) {
+  switch (parameter) {
+    case MACRO_PULSE_WIDTH: return 95;
+    case MACRO_VIBRATO:
+    case MACRO_DRUM_TUNE:
+    case MACRO_DRUM_DECAY:
+    case MACRO_GLIDE: return 127;
+    case MACRO_VCA_DEPTH: return 256;
+    case MACRO_VCA_RATE: return kPresetVcaModulationCount - 1;
+    default: return 0;
+  }
+}
+
+// Resolves all LFOs addressed to a numeric macro. At depth 127 an LFO can
+// sweep across that macro's complete valid range; clamping preserves ranges
+// when the direct macro is not centred. Descriptor/list values are never
+// numeric macro targets, so they cannot reach this function.
+uint16_t lfoModulatedMacroValue(uint8_t parameter, uint16_t fallback) {
+  const uint16_t minimum = macroMinimum(parameter);
+  const uint16_t maximum = macroMaximum(parameter);
+  if (maximum <= minimum) return fallback;
+
+  int32_t value = constrain(activeMacroValue(parameter, fallback), minimum, maximum);
+  const int16_t span = maximum - minimum;
+  for (uint8_t lfo = 0; lfo < 2; ++lfo) {
+    if (macroForCurrentProgram(4 + lfo) != parameter || lfoDepth[lfo] == 0) continue;
+    const uint8_t phase = macroLfoPhase[lfo] >> 24;
+    const uint8_t triangle = (phase & 0x80) ? 256U - phase : phase;
+    const int16_t centred = (int16_t)triangle * 2 - 127;
+    value += ((int32_t)centred * lfoDepth[lfo] * span) / (127L * 127L);
+  }
+  return constrain(value, minimum, maximum);
+}
+
 uint16_t macroValueForRaw(uint8_t parameter, uint16_t raw) {
   switch (parameter) {
     case MACRO_PULSE_WIDTH: return mapByteHysteresis(raw, activeMacroValue(parameter, 50), 95, 5);
     case MACRO_VIBRATO: return mapByteHysteresis(raw, activeMacroValue(parameter, 64), 127, 64);
     case MACRO_DRUM_TUNE:
     case MACRO_DRUM_DECAY: return mapByteHysteresis(raw, activeMacroValue(parameter, 127), 127, 0);
+    case MACRO_GLIDE: return mapByteHysteresis(raw, activeMacroValue(parameter, 0), 127, 0);
     case MACRO_VCA_DEPTH: return mapWithHysteresis(raw, activeMacroValue(parameter, 0), 256, 0);
     case MACRO_VCA_RATE: return mapByteHysteresis(raw, activeMacroValue(parameter, 0), kPresetVcaModulationCount - 1, 0);
+    case MACRO_ENVELOPE: return mapIndexHysteresis(raw, activeMacroValue(parameter, 0), SYNTH_ENVELOPE_COUNT);
+    case MACRO_ENVELOPE_LENGTH: return mapByteHysteresis(raw, activeMacroValue(parameter, 127), 127, 0);
     default: return 0;
+  }
+}
+
+// LEN is a perceptual control, not the raw EFTWS index: zero is a held note,
+// while 1-127 span roughly 50 ms to 1.6 s. The engine's slowest non-zero
+// phase increment is one, so the upper value is necessarily approximate.
+const uint8_t kEnvelopeLengthRateAnchors[] PROGMEM = {33, 22, 15, 10, 7, 5, 3, 2, 1};
+
+uint8_t envelopeRateForControl(uint8_t control) {
+  if (control == 0) return 0;
+  const uint8_t position = control - 1;
+  const uint8_t segment = position >> 4;
+  const uint8_t fraction = position & 0x0F;
+  const uint8_t start = pgm_read_byte(&kEnvelopeLengthRateAnchors[segment]);
+  const uint8_t end = pgm_read_byte(&kEnvelopeLengthRateAnchors[segment + 1]);
+  return start - (((uint16_t)(start - end) * fraction + 8) >> 4);
+}
+
+uint8_t envelopeLengthIndexForRate(uint8_t rate) {
+  uint8_t bestIndex = 0;
+  uint16_t bestDifference = 0xFFFF;
+  for (uint8_t index = 0; index < 118; ++index) {
+    const uint16_t speed = pgm_read_word(&EFTWS[index]);
+    const uint16_t difference = speed > rate ? speed - rate : rate - speed;
+    if (difference < bestDifference) { bestDifference = difference; bestIndex = index; }
+  }
+  return bestIndex;
+}
+
+uint8_t envelopeLengthIndexForControl(uint8_t control) {
+  return control == 0 ? 127 : envelopeLengthIndexForRate(envelopeRateForControl(control));
+}
+
+uint8_t envelopeLengthControlForPreset(uint8_t length) {
+  const uint16_t rate = pgm_read_word(&EFTWS[length]);
+  if (rate == 0) return 0;
+  uint8_t bestControl = 1;
+  uint16_t bestDifference = 0xFFFF;
+  for (uint8_t control = 1; control <= 127; ++control) {
+    const uint16_t candidate = envelopeRateForControl(control);
+    const uint16_t difference = candidate > rate ? candidate - rate : rate - candidate;
+    if (difference < bestDifference) { bestDifference = difference; bestControl = control; }
+  }
+  return bestControl;
+}
+
+void applyMacroEnvelopeToVoices() {
+  const uint8_t programId = instrumentMode == MODE_PLAY ? playProgramId() : seqControls.preset;
+  if (isDrumProgram(programId)) return;
+  MelodicPreset preset; readMelodicPreset(programId, preset);
+  const uint8_t control = activeMacroValue(MACRO_ENVELOPE_LENGTH,
+    envelopeLengthControlForPreset(preset.length));
+  const uint8_t envelope = control == 0 ? ENVELOPE3 :
+    activeMacroValue(MACRO_ENVELOPE, preset.voices[0].envelope);
+  const uint8_t length = envelopeLengthIndexForControl(control);
+  for (uint8_t voice = 0; voice < SYNTH_VOICE_COUNT; ++voice) {
+    edgar.setEnvelope(voice, envelope); edgar.setLength(voice, length);
   }
 }
 
@@ -337,9 +441,20 @@ void applyMacroValue(uint8_t slot, uint16_t raw, unsigned long now) {
     for (uint8_t voice = 0; voice < SYNTH_VOICE_COUNT; ++voice) edgar.setPulseWidth(voice, width);
   } else if (parameter == MACRO_DRUM_TUNE) {
     seqControls.drumTone = (uint8_t)next;
+  } else if (parameter == MACRO_ENVELOPE || parameter == MACRO_ENVELOPE_LENGTH) {
+    applyMacroEnvelopeToVoices();
+  } else if (parameter == MACRO_GLIDE) {
+    playGlide = next;
+    for (uint8_t voice = 0; voice < SYNTH_VOICE_COUNT; ++voice) {
+      normalGlide[voice] = next;
+      if (next == 0 && normalCurrentPitch[voice] != 0) {
+        normalCurrentPitch[voice] = normalTargetPitch[voice];
+        edgar.setPitchWord(voice, normalCurrentPitch[voice]);
+      }
+    }
   } else if (parameter == MACRO_VCA_DEPTH || parameter == MACRO_VCA_RATE) {
-    edgar.configurePlayVca(activeMacroValue(MACRO_VCA_DEPTH, 0),
-      presetVcaRateHundredths((uint8_t)activeMacroValue(MACRO_VCA_RATE, 0)));
+    edgar.configurePlayVca(lfoModulatedMacroValue(MACRO_VCA_DEPTH, 0),
+      presetVcaRateHundredths((uint8_t)lfoModulatedMacroValue(MACRO_VCA_RATE, 0)));
   }
   showParameterEdit(slot, now);
 }
@@ -383,6 +498,9 @@ void loadProgramMacroDefaults(uint8_t programId) {
       if (preset.macros[slot] == MACRO_VIBRATO) macroValues[slot] = preset.voices[0].modulation;
       if (preset.macros[slot] == MACRO_VCA_DEPTH) macroValues[slot] = preset.vcaDepth;
       if (preset.macros[slot] == MACRO_VCA_RATE) macroValues[slot] = preset.vcaModulation;
+      if (preset.macros[slot] == MACRO_ENVELOPE) macroValues[slot] = preset.voices[0].envelope;
+      if (preset.macros[slot] == MACRO_ENVELOPE_LENGTH) macroValues[slot] = envelopeLengthControlForPreset(preset.length);
+      if (preset.macros[slot] == MACRO_GLIDE) macroValues[slot] = preset.glide;
     }
   }
 }
@@ -398,11 +516,15 @@ void updateMacroLfos(unsigned long now) {
     const uint8_t target = macroForCurrentProgram(4 + lfo);
     if (target == MACRO_NONE || lfoDepth[lfo] == 0) continue;
     macroLfoPhase[lfo] += (uint32_t)lfoRateForIndex(lfoRateIndex[lfo]) * 42950UL * elapsed;
-    const uint8_t phase = macroLfoPhase[lfo] >> 24;
-    const uint8_t triangle = (phase & 0x80) ? 256U - phase : phase;
-    const uint8_t amount = ((uint16_t)triangle * lfoDepth[lfo]) >> 7;
-    if (target == MACRO_VIBRATO) {
-      for (uint8_t voice = 0; voice < SYNTH_VOICE_COUNT; ++voice) edgar.setMod(voice, 64 + min(amount, (uint8_t)63));
+    if (target == MACRO_PULSE_WIDTH) {
+      const uint16_t width = pulseWidthForPercent(lfoModulatedMacroValue(target, 50));
+      for (uint8_t voice = 0; voice < SYNTH_VOICE_COUNT; ++voice) edgar.setPulseWidth(voice, width);
+    } else if (target == MACRO_VIBRATO) {
+      const uint8_t modulation = lfoModulatedMacroValue(target, 64);
+      for (uint8_t voice = 0; voice < SYNTH_VOICE_COUNT; ++voice) edgar.setMod(voice, modulation);
+    } else if (target == MACRO_VCA_DEPTH || target == MACRO_VCA_RATE) {
+      edgar.configurePlayVca(lfoModulatedMacroValue(MACRO_VCA_DEPTH, 0),
+        presetVcaRateHundredths((uint8_t)lfoModulatedMacroValue(MACRO_VCA_RATE, 0)));
     }
   }
 }
@@ -885,15 +1007,20 @@ void triggerSequencerNote(uint8_t note, bool backgroundOnly) {
   edgar.stopDrum();
   MelodicPreset preset; readMelodicPreset(seqControls.preset, preset);
   const uint8_t voiceCount = backgroundOnly ? 1 : preset.voiceCount;
+  const uint8_t envelopeControl = activeMacroValue(MACRO_ENVELOPE_LENGTH,
+    envelopeLengthControlForPreset(preset.length));
+  const uint8_t envelope = envelopeControl == 0 ? ENVELOPE3 :
+    activeMacroValue(MACRO_ENVELOPE, preset.voices[0].envelope);
+  const uint8_t envelopeLength = envelopeLengthIndexForControl(envelopeControl);
 
   for (uint8_t voice = 0; voice < voiceCount; ++voice) {
     VoiceRecipe recipe = preset.voices[voice];
     int16_t detuneCents = recipe.detuneCents;
-    uint8_t modulation = activeMacroValue(MACRO_VIBRATO, recipe.modulation);
-    const uint8_t glide = preset.glide;
-    edgar.setWave(voice, recipe.wave); edgar.setEnvelope(voice, recipe.envelope);
-    edgar.setPulseWidth(voice, pulseWidthForPercent(preset.squarePulseWidthPercent));
-    edgar.setLength(voice, preset.length); edgar.setMod(voice, modulation);
+    uint8_t modulation = lfoModulatedMacroValue(MACRO_VIBRATO, recipe.modulation);
+    const uint8_t glide = activeMacroValue(MACRO_GLIDE, preset.glide);
+    edgar.setWave(voice, recipe.wave); edgar.setEnvelope(voice, envelope);
+    edgar.setPulseWidth(voice, pulseWidthForPercent(lfoModulatedMacroValue(MACRO_PULSE_WIDTH, preset.squarePulseWidthPercent)));
+    edgar.setLength(voice, envelopeLength); edgar.setMod(voice, modulation);
     triggerNormalVoice(voice, pitchForNoteWithDetuneCents(note, detuneCents), glide);
   }
   if (!backgroundOnly) for (uint8_t voice = voiceCount; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
@@ -906,8 +1033,9 @@ void triggerDrum(uint8_t drum, bool backgroundOnly) {
   normalTargetPitch[0] = 0;
   normalGlide[0] = 0;
   DrumPreset preset; readDrumPreset(preset);
-  const uint8_t decay = activeMacroValue(MACRO_DRUM_DECAY, preset.decay);
-  edgar.triggerDrum(min(drum, (uint8_t)(kDrumCount - 1)), seqControls.drumTone, decay);
+  const uint8_t decay = lfoModulatedMacroValue(MACRO_DRUM_DECAY, preset.decay);
+  const uint8_t tone = lfoModulatedMacroValue(MACRO_DRUM_TUNE, seqControls.drumTone);
+  edgar.triggerDrum(min(drum, (uint8_t)(kDrumCount - 1)), tone, decay);
 }
 
 void triggerSequencerStep(uint8_t step, bool backgroundOnly) {
@@ -939,15 +1067,20 @@ void runSequencer(unsigned long now) {
 
 void applyLiveConfiguration() {
   MelodicPreset preset; readMelodicPreset(playProgramId(), preset);
-  const uint16_t pulseWidth = pulseWidthForPercent(activeMacroValue(MACRO_PULSE_WIDTH, preset.squarePulseWidthPercent));
-  playGlide = preset.glide;
-  edgar.configurePlayVca(activeMacroValue(MACRO_VCA_DEPTH, preset.vcaDepth),
-    presetVcaRateHundredths((uint8_t)activeMacroValue(MACRO_VCA_RATE, preset.vcaModulation)));
+  const uint16_t pulseWidth = pulseWidthForPercent(lfoModulatedMacroValue(MACRO_PULSE_WIDTH, preset.squarePulseWidthPercent));
+  const uint8_t envelopeControl = activeMacroValue(MACRO_ENVELOPE_LENGTH,
+    envelopeLengthControlForPreset(preset.length));
+  const uint8_t envelope = envelopeControl == 0 ? ENVELOPE3 :
+    activeMacroValue(MACRO_ENVELOPE, preset.voices[0].envelope);
+  const uint8_t envelopeLength = envelopeLengthIndexForControl(envelopeControl);
+  playGlide = activeMacroValue(MACRO_GLIDE, preset.glide);
+  edgar.configurePlayVca(lfoModulatedMacroValue(MACRO_VCA_DEPTH, preset.vcaDepth),
+    presetVcaRateHundredths((uint8_t)lfoModulatedMacroValue(MACRO_VCA_RATE, preset.vcaModulation)));
   for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) {
     edgar.setWave(voice, preset.voices[0].wave);
-    edgar.setEnvelope(voice, preset.voices[0].envelope);
+    edgar.setEnvelope(voice, envelope);
     edgar.setPulseWidth(voice, pulseWidth);
-    edgar.setLength(voice, preset.length); edgar.setMod(voice, activeMacroValue(MACRO_VIBRATO, preset.voices[0].modulation));
+    edgar.setLength(voice, envelopeLength); edgar.setMod(voice, lfoModulatedMacroValue(MACRO_VIBRATO, preset.voices[0].modulation));
   }
 }
 
@@ -1189,6 +1322,9 @@ void frameMacroName(uint8_t column, uint8_t parameter) {
     case MACRO_DRUM_DECAY: frameText(0, column, F("DEC")); break;
     case MACRO_VCA_DEPTH: frameText(0, column, F("VCD")); break;
     case MACRO_VCA_RATE: frameText(0, column, F("VCR")); break;
+    case MACRO_ENVELOPE: frameText(0, column, F("ENV")); break;
+    case MACRO_ENVELOPE_LENGTH: frameText(0, column, F("LEN")); break;
+    case MACRO_GLIDE: frameText(0, column, F("GLD")); break;
     default: frameText(0, column, F("---")); break;
   }
 }
