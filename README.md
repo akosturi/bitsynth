@@ -65,7 +65,7 @@ Simulator controls:
 
 - Drag a knob vertically, or place the pointer over it and use the mouse wheel.
 - Hold keys `1`-`8` for the eight step buttons.
-- Tap `M` to change a SEQ/PLAY parameter page; hold it to change mode.
+- Tap `M` to change a SEQ/PLAY parameter page; double-tap it to change mode.
 - Every knob and button is also usable with the pointer.
 
 The simulator models the real 9-bit, 31.25 kHz PWM signal and the documented passive output filter, not just the synth's digital sample stream. Firmware execution, LCD output, multiplexed controls, audio generation, and filtering all run in the browser.
@@ -110,18 +110,22 @@ The positive lead of electrolytic capacitor `C4` faces `R3`. Connect the top of 
 
 On power-up, BitSynth opens directly in SEQ.
 
-A short tap on **MODE** advances to the next four-parameter control page in
-SEQ and PLAY. A long press (about 650 ms) cycles through modes:
+One short **MODE** tap advances to the next four-parameter control page in SEQ
+and PLAY after the 350 ms double-tap window. Two short taps within that window
+cycle through modes:
 
 ```text
 SEQ -> PLAY -> DRONE -> SEQ
 ```
 
+Holding **MODE** by itself does nothing. It remains a modifier for the documented
+MODE combinations, including PLAY's MODE + step button 1 background-sequence toggle.
+
 There is no PANIC gesture. Each new SEQ/PLAY page uses soft takeover, so pots
 must move away from their position at the page change before they take effect.
 In DRONE, hold **MODE** while turning a parameter pot to set that oscillator
 pair's VCA-LFO rate. In PLAY, hold **MODE** and press step button 1 to toggle
-the background sequence; using either SHIFT action prevents mode changing.
+the background sequence; either MODE combination does not count as a tap gesture.
 
 ### SEQ - eight-step sequencer
 
