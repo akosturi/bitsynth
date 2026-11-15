@@ -79,158 +79,179 @@ static_assert(sizeof(SinTable) / sizeof(SinTable[0]) == (1U << SYNTH_WAVETABLE_I
 static_assert(sizeof(TriangleTable) / sizeof(TriangleTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid triangle table size");
 static_assert(sizeof(SawTable) / sizeof(SawTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid saw table size");
 
-volatile uint16_t PCW[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
-volatile uint16_t FTW[SYNTH_VOICE_COUNT] = {1000, 200, 300, 400};
-volatile uint8_t AMP[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
-volatile uint16_t PITCH[SYNTH_VOICE_COUNT] = {500, 500, 500, 500};
-volatile int8_t MOD[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
-volatile uint32_t vibratoLfoPCW = 0x40000000UL;
-volatile uint16_t waveSources[SYNTH_VOICE_COUNT] = {
-  (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable
+// Audio-engine state. It is deliberately not volatile: every foreground access
+// in class synth is wrapped in ATOMIC_BLOCK, whose cli/SREG-restore are
+// compiler memory barriers, and the renderer never runs concurrently with the
+// foreground. This lets the renderer keep values in registers.
+//
+// Rendering is block based. TIMER2_COMPA (20 kHz) only writes the next PWM
+// sample from a sixteen-sample ring. After each eight-sample half has been
+// played it enables TIMER2_COMPB, whose interrupt re-enables interrupts and
+// renders that half while the other half plays. Voices are rendered in two
+// four-sample sub-blocks, each preceded by the envelope and vibrato update,
+// so the per-voice control rate stays at 5 kHz; the PLAY VCA and morph LFOs
+// advance once per block (2.5 kHz).
+const uint8_t SYNTH_BLOCK_SAMPLES = 8;
+const uint8_t SYNTH_VOICE_BLOCK_SAMPLES = 4;
+const uint8_t SYNTH_OUTPUT_RING_SAMPLES = 2 * SYNTH_BLOCK_SAMPLES;
+const uint16_t SYNTH_PWM_CENTER = 256;
+
+uint16_t audioOutputRing[SYNTH_OUTPUT_RING_SAMPLES];
+uint8_t audioOutputIndex = 0;
+bool audioRenderBusy = false;
+
+// Per-voice state, grouped so the assembly renderer (synth_voices.S)
+// reaches every field through one pointer. Keep the field order and the
+// 22-byte size in sync with the VOICE_* offsets there.
+extern "C" {
+struct SynthVoice {
+  // Per-sample oscillator state.
+  uint16_t phase;
+  uint16_t step;
+  // A flash wavetable address, SYNTH_GENERATED_SQUARE, or SYNTH_GENERATED_NOISE.
+  uint16_t source;
+  // Full phase resolution makes pulse width independent from wavetable size.
+  uint16_t pulseWidth;
+  // Independent maximal-length 16-bit Galois LFSR; must never be zero.
+  uint16_t noise;
+  uint8_t amp;
+  // Control-rate state, updated once per four-sample block. Bit 15 of
+  // envelopePhase marks a finished or stopped envelope.
+  uint16_t envelopePhase;
+  uint16_t envelopeStep;
+  // Flash envelope table; assigned by setupVoice() before any trigger.
+  uint16_t envelope;
+  uint16_t pitch;
+  // Vibrato peak offset in 1/256 steps (eight times the 1/32 pitch-step
+  // peak), precomputed from pitch and vibratoDepth by the foreground.
+  uint16_t vibratoPeak;
+  uint8_t vibratoDepth;
 };
-// Full phase resolution makes pulse width independent from wavetable size.
-volatile uint16_t pulseWidths[SYNTH_VOICE_COUNT] = {
-  SYNTH_DEFAULT_PULSE_WIDTH, SYNTH_DEFAULT_PULSE_WIDTH,
-  SYNTH_DEFAULT_PULSE_WIDTH, SYNTH_DEFAULT_PULSE_WIDTH
+
+#define SYNTH_VOICE_INIT(noiseSeed) \
+  {0, 0, SYNTH_GENERATED_SQUARE, SYNTH_DEFAULT_PULSE_WIDTH, noiseSeed, 0, \
+   0x8000, 10, 0, 500, 0, 0}
+SynthVoice synthVoices[SYNTH_VOICE_COUNT] = {
+  SYNTH_VOICE_INIT(0xA5C3), SYNTH_VOICE_INIT(0xD72B),
+  SYNTH_VOICE_INIT(0x9E37), SYNTH_VOICE_INIT(0xF1A5)
 };
-volatile uint16_t envs[SYNTH_VOICE_COUNT] = {
-  (uint16_t)Env0, (uint16_t)Env0, (uint16_t)Env0, (uint16_t)Env0
-};
-volatile uint16_t EPCW[SYNTH_VOICE_COUNT] = {0x8000, 0x8000, 0x8000, 0x8000};
-volatile uint16_t EFTW[SYNTH_VOICE_COUNT] = {10, 10, 10, 10};
-volatile uint8_t divider = 4;
-volatile int16_t pwmQuantizationError = 0;
-volatile uint8_t pwmDitherLfsr = 0xA5;
-// Independent maximal-length 16-bit Galois LFSRs for the four normal voices.
-// These are advanced only by the audio ISR and must never be seeded with zero.
-volatile uint16_t noiseLfsrs[SYNTH_VOICE_COUNT] = {
-  0xA5C3, 0xD72B, 0x9E37, 0xF1A5
-};
+#undef SYNTH_VOICE_INIT
+
+// Block-constant morph description read by synthRenderVoices.
+const uint8_t SYNTH_KIND_A_SQUARE = 0x01;
+const uint8_t SYNTH_KIND_A_NOISE = 0x02;
+const uint8_t SYNTH_KIND_B_SQUARE = 0x04;
+const uint8_t SYNTH_KIND_B_NOISE = 0x08;
+uint16_t synthMorphSourceA = 0;
+uint16_t synthMorphSourceB = 0;
+uint8_t synthMorphAmount = 0;
+uint8_t synthMorphKinds = 0;
+
+// Advances all four envelopes and vibrato pitch steps by one block.
+void synthUpdateVoices(int8_t vibratoLfo);
+
+// Stores the active drum sample's four-sample block in accumulator.
+void synthRenderDrum(int16_t *accumulator);
+// 128 >> (index & 7) aligns a packed 9-bit drum sample at bits 7..15.
+extern const uint8_t synthPackedSampleScales[8] PROGMEM __attribute__((used)) =
+  {128, 64, 32, 16, 8, 4, 2, 1};
+
+// Adds a four-sample block of `count` consecutive voices to accumulator,
+// or stores it with SYNTH_RENDER_CLEAR.
+// SYNTH_RENDER_SPLIT stores the first, unmorphed voice to dry instead.
+const uint8_t SYNTH_RENDER_MORPH = 0x01;
+const uint8_t SYNTH_RENDER_CLEAR = 0x02;
+const uint8_t SYNTH_RENDER_SPLIT = 0x04;
+void synthRenderVoices(SynthVoice *voice, uint8_t count, int16_t *accumulator,
+  uint8_t flags, int16_t *dry);
+
+// Applies the selected bus stages and writes eight dithered PWM samples.
+const uint8_t SYNTH_FINISH_VCA = 0x01;
+const uint8_t SYNTH_FINISH_CHORUS = 0x02;
+const uint8_t SYNTH_FINISH_DRY = 0x04;
+void synthFinishBlock(int16_t *bus, const int16_t *dry, uint16_t *output,
+  uint8_t flags);
+}
+static_assert(sizeof(SynthVoice) == 22, "synth_voices.S expects a 22-byte SynthVoice");
+
+uint32_t vibratoLfoPCW = 0x40000000UL;
+int16_t pwmQuantizationError = 0;
+uint8_t pwmDitherLfsr = 0xA5;
+// Voice 0 is the PLAY background sequence while it runs. It then stays dry:
+// no waveform morph, VCA, or chorus. Otherwise it is a normal bus voice.
+bool voiceZeroBackground = false;
 // Performance engines. Preset morphing crossfades two flash-resident waveform
 // sources and never duplicates oscillator state.
-volatile bool playMorphActive = false;
-volatile uint16_t playMorphPrimarySource = (uint16_t)SinTable;
-volatile uint16_t playMorphSecondarySource = (uint16_t)SinTable;
-volatile uint32_t playMorphLfoPCW = 0x80000000UL;
-volatile uint32_t playMorphLfoFTW = 0;
-volatile uint8_t playMorphAmount = 128;
-volatile uint16_t playVcaGain = 256;
-volatile uint16_t playVcaAttenuationDepth = 0;
-volatile uint32_t playVcaLfoPCW = 0x80000000UL;
-volatile uint32_t playVcaLfoFTW = 0;
-uint8_t playLfoDivider = 0;
-volatile bool droneMode = false;
-volatile uint16_t dronePCW[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
-volatile uint16_t droneFTW[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
-volatile uint16_t droneWaveSources[SYNTH_DRONE_COUNT] = {
-  (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable,
-  (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable, (uint16_t)SinTable
-};
-volatile uint8_t droneAmp[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
-volatile uint8_t droneTargetAmp[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
-volatile uint8_t droneRampVoice = 0;
-volatile uint8_t droneMixPair = 0;
-volatile int16_t dronePairMixQ7[SYNTH_DRONE_COUNT / 2] = {0, 0, 0, 0};
-volatile uint32_t droneLfoPCW[SYNTH_DRONE_COUNT / 2] = {0, 0, 0, 0};
-volatile uint32_t droneLfoFTW[SYNTH_DRONE_COUNT / 2] = {0, 0, 0, 0};
-volatile bool drumActive = false;
-volatile uint16_t drumSampleAddress = 0;
-volatile uint16_t drumSampleLength = 0;
-volatile uint32_t drumSamplePhase = 0;
-volatile uint32_t drumSampleStep = 0x10000UL;
-volatile uint16_t drumEnvelope = 0;
-volatile uint16_t drumEnvelopeStep = 1;
-// One 16-bit Q7 mono delay line, written only by the audio ISR. It stores the
+bool playMorphActive = false;
+uint16_t playMorphPrimarySource = SYNTH_GENERATED_SQUARE;
+uint16_t playMorphSecondarySource = SYNTH_GENERATED_SQUARE;
+uint32_t playMorphLfoPCW = 0x80000000UL;
+uint32_t playMorphLfoFTW = 0;
+uint8_t playMorphAmount = 128;
+uint16_t playVcaGain = 256;
+uint16_t playVcaAttenuationDepth = 0;
+uint32_t playVcaLfoPCW = 0x80000000UL;
+uint32_t playVcaLfoFTW = 0;
+bool droneMode = false;
+uint16_t dronePCW[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
+uint16_t droneFTW[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
+uint16_t droneWaveSources[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
+uint8_t droneAmp[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
+uint8_t droneTargetAmp[SYNTH_DRONE_COUNT] = {0, 0, 0, 0, 0, 0, 0, 0};
+uint8_t droneRampVoice = 0;
+uint8_t droneMixPair = 0;
+int16_t dronePairMixQ7[SYNTH_DRONE_COUNT / 2] = {0, 0, 0, 0};
+uint32_t droneLfoPCW[SYNTH_DRONE_COUNT / 2] = {0, 0, 0, 0};
+uint32_t droneLfoFTW[SYNTH_DRONE_COUNT / 2] = {0, 0, 0, 0};
+bool drumActive = false;
+uint16_t drumSampleAddress = 0;
+uint16_t drumSampleLength = 0;
+uint32_t drumSamplePhase = 0;
+uint32_t drumSampleStep = 0x10000UL;
+uint16_t drumEnvelope = 0;
+uint16_t drumEnvelopeStep = 1;
+// One 16-bit Q7 mono delay line, written only by the renderer. It stores the
 // wet half of the signal, so interpolating adjacent samples stays in int16_t.
 int16_t chorusBuffer[SYNTH_CHORUS_BUFFER_SAMPLES] = {0};
-volatile bool chorusActive = false;
-volatile bool chorusLiveOnly = false;
-volatile uint16_t chorusWriteIndex = 0;
-volatile uint32_t chorusLfoPCW = 0;
-volatile uint32_t chorusLfoFTW = 0;
+bool chorusActive = false;
+uint8_t chorusWriteIndex = 0;
+uint32_t chorusLfoPCW = 0;
+uint32_t chorusLfoFTW = 0;
 
-static inline __attribute__((always_inline)) int16_t readSigned9Sample(
-  uint16_t sampleAddress, uint16_t sampleIndex)
+static_assert(SYNTH_CHORUS_BUFFER_SAMPLES <= 255, "chorus index must fit in one byte");
+
+// Returns floor(sample * gain / 16) for a signed 9-bit sample, branch-free,
+// for the quieter eight-oscillator drone mix. The high byte of a 9-bit sample
+// is 0x00 or 0xFF, so the product is low * gain - (high & gain) * 256: a
+// 17-bit value whose sign is the borrow. synth_voices.S uses the same method.
+static inline __attribute__((always_inline)) int16_t scaleSigned9SampleQ4(
+  int16_t sample, uint8_t gain)
 {
-  return (int16_t)pgm_read_word(sampleAddress + (sampleIndex << 1));
+  int16_t scaled;
+  asm("mul %A1, %2\n\t"
+      "and %B1, %2\n\t"
+      "sub r1, %B1\n\t"
+      "ror r1\n\t" "ror r0\n\t"
+      "asr r1\n\t" "ror r0\n\t"
+      "asr r1\n\t" "ror r0\n\t"
+      "asr r1\n\t" "ror r0\n\t"
+      "movw %0, r0\n\t"
+      "clr r1"
+      : "=r"(scaled), "+r"(sample) : "r"(gain));
+  return scaled;
 }
 
-static inline __attribute__((always_inline)) int16_t generatedSquareSample(
-  uint16_t phase, uint16_t pulseWidth)
+static inline __attribute__((always_inline)) int16_t readWavetable(
+  uint16_t source, uint16_t phase)
 {
-  return phase < pulseWidth ? 255 : -256;
+  return (int16_t)pgm_read_word(source + ((phase >> SYNTH_WAVETABLE_SHIFT) << 1));
 }
 
-static inline __attribute__((always_inline)) int16_t nextNoiseSample(uint8_t voice)
+static inline __attribute__((always_inline)) uint8_t sourceKind(
+  uint16_t source, uint8_t squareKind, uint8_t noiseKind)
 {
-  const uint16_t state = noiseLfsrs[voice];
-  const uint16_t next = (state >> 1) ^ ((state & 1) ? 0xB400 : 0);
-  noiseLfsrs[voice] = next;
-  return (int16_t)(next & 0x01FF) - 256;
-}
-
-static inline __attribute__((always_inline)) int16_t nextWaveSample(
-  uint8_t voice, uint16_t source, uint16_t phase, uint16_t pulseWidth)
-{
-  if (source == SYNTH_GENERATED_SQUARE) {
-    return generatedSquareSample(phase, pulseWidth);
-  }
-  if (source == SYNTH_GENERATED_NOISE) {
-    return nextNoiseSample(voice);
-  }
-  return readSigned9Sample(source, phase >> SYNTH_WAVETABLE_SHIFT);
-}
-
-// Decodes an offset-binary unsigned 9-bit sample packed across byte boundaries.
-static inline __attribute__((always_inline)) int16_t readPackedUnsigned9Sample(
-  uint16_t sampleAddress, uint16_t sampleIndex)
-{
-  const uint16_t byteIndex = sampleIndex + (sampleIndex >> 3);
-  const uint8_t shift = sampleIndex & 0x07;
-  const uint16_t packed = pgm_read_word(sampleAddress + byteIndex);
-  const uint16_t encoded = (packed >> shift) & 0x01FF;
-  return (int16_t)encoded - 256;
-}
-
-// Scales a signed sample with arithmetic-shift rounding.
-static inline __attribute__((always_inline)) int16_t scaleSigned9Sample(
-  int16_t sample, uint8_t gain, uint8_t shift)
-{
-  const bool negative = sample < 0;
-  const uint16_t magnitude = negative ? -sample : sample;
-  uint16_t product = magnitude * gain;
-  if (negative) {
-    product += (1U << shift) - 1U;
-    return -(int16_t)(product >> shift);
-  }
-  return product >> shift;
-}
-
-// Keeps phase continuity for silent voices without reading or scaling a table.
-static inline __attribute__((always_inline)) int16_t nextScaledVoiceSample(
-  uint8_t voice, uint8_t gain)
-{
-  const uint16_t phase = PCW[voice] + FTW[voice];
-  PCW[voice] = phase;
-  if (gain == 0) {
-    return 0;
-  }
-  const uint16_t source = waveSources[voice];
-  const int16_t sample = nextWaveSample(voice, source, phase, pulseWidths[voice]);
-  return scaleSigned9Sample(sample, gain, 3);
-}
-
-static inline __attribute__((always_inline)) int16_t nextScaledMorphedVoiceSample(
-  uint8_t voice, uint16_t primarySource, uint16_t secondarySource,
-  uint8_t morphAmount, uint8_t gain)
-{
-  const uint16_t phase = PCW[voice] + FTW[voice];
-  PCW[voice] = phase;
-  if (gain == 0) return 0;
-  const int16_t sampleA = nextWaveSample(voice, primarySource, phase, pulseWidths[voice]);
-  const int16_t sampleB = nextWaveSample(voice, secondarySource, phase, pulseWidths[voice]);
-  const uint8_t primaryAmount = 128 - morphAmount;
-  return scaleSigned9Sample(((sampleA * primaryAmount) + (sampleB * morphAmount)) >> 7, gain, 3);
+  return source == SYNTH_GENERATED_SQUARE ? squareKind :
+    source == SYNTH_GENERATED_NOISE ? noiseKind : 0;
 }
 
 // Applies a 9-bit linear gain with error far below one PWM output step.
@@ -252,233 +273,235 @@ static inline __attribute__((always_inline)) int16_t scalePlayMix(
   return negative ? -(int16_t)scaled : scaled;
 }
 
-// Computes value / 64 without slow wide shifts on AVR.
-static inline __attribute__((always_inline)) uint16_t modulationCoarse(uint16_t value)
+static inline __attribute__((always_inline)) uint8_t lfoTriangle(uint8_t phase)
 {
-  const uint8_t high = value >> 8;
-  const uint8_t low = (uint8_t)value / 64U;
-  return ((uint16_t)high << 2) | low;
+  return (phase & 0x80) ? (uint8_t)(256U - phase) : phase;
 }
 
-// Applies the post-mix chorus with Q8 fractional addressing and audio-rate
-// delay modulation.
-static inline __attribute__((always_inline)) int16_t applyChorus(int16_t inputQ7)
-{
-  const uint32_t phase = chorusLfoPCW + chorusLfoFTW;
-  chorusLfoPCW = phase;
-  uint16_t triangle = phase >> 16;
-  if (phase & 0x80000000UL) triangle = 0xFFFFU - triangle;
-  // 18892 / 32768 is approximated by shifts, keeping the full delay range
-  // within 0.001 ms of the requested 1.66-5.35 ms span without a wide multiply.
-  const uint16_t delayQ8 = SYNTH_CHORUS_MIN_DELAY_Q8 + (triangle >> 1) +
-    (triangle >> 4) + (triangle >> 7) + (triangle >> 8) + (triangle >> 9) +
-    (triangle >> 12);
-  const uint16_t delaySamples = delayQ8 >> 8;
-  const uint16_t writeIndex = chorusWriteIndex;
-  chorusBuffer[writeIndex] = inputQ7 >> 1;
-  chorusWriteIndex = writeIndex + 1 == SYNTH_CHORUS_BUFFER_SAMPLES ?
-    0 : writeIndex + 1;
+// The chorus and the final quantizer are implemented by synthFinishBlock in
+// synth_voices.S. Per sample, the chorus computes exactly:
+//   lfoPhase += lfoStep; triangle = lfoPhase >> 16, mirrored when bit 31 is set
+//   high = triangle >> 7; low = (uint8_t)(triangle << 1)
+//   delayQ8 = 8500 + high * 0x49 + (high * 0xCC >> 8) + (low * 0x49 >> 8)
+//   (triangle * 18892 / 32768, i.e. 1.66-5.35 ms, within 1/128 sample)
+//   dryHalf = in >> 1, stored at the write index; first/next are the samples
+//   delayQ8 >> 8 and that plus one older
+//   out = dryHalf + first + floor((next - first) * (delayQ8 & 0xFF) / 256)
+// and the quantizer, with an 8-bit Galois LFSR (taps 0xB8):
+//   s = mix + error + ((lfsr & 15) - (lfsr >> 4)) * 4; t = s + 64
+//   pwm = (t >> 7) + 256; error = (t & 127) - 64
 
-  const uint16_t readIndex = writeIndex >= delaySamples ?
-    writeIndex - delaySamples : writeIndex + SYNTH_CHORUS_BUFFER_SAMPLES - delaySamples;
-  const uint16_t nextIndex = readIndex == 0 ?
-    SYNTH_CHORUS_BUFFER_SAMPLES - 1 : readIndex - 1;
-  const int16_t first = chorusBuffer[readIndex];
-  const int16_t difference = (int16_t)chorusBuffer[nextIndex] - first;
-  const int16_t delayed = first +
-    (int16_t)(((int32_t)difference * (uint8_t)delayQ8) >> 8);
-  return (inputQ7 >> 1) + delayed;
+// Renders one drone frame: one oscillator pair is recalculated per call.
+static inline __attribute__((always_inline)) int16_t renderDroneFrame()
+{
+  const uint8_t rampVoice = (droneRampVoice + 1) & 0x07;
+  droneRampVoice = rampVoice;
+  uint8_t amplitude = droneAmp[rampVoice];
+  const uint8_t target = droneTargetAmp[rampVoice];
+  if (amplitude < target) {
+    amplitude = (target - amplitude > 15) ? amplitude + 15 : target;
+  } else if (amplitude > target) {
+    amplitude = (amplitude - target > 15) ? amplitude - 15 : target;
+  }
+  droneAmp[rampVoice] = amplitude;
+
+  const uint8_t pair = (droneMixPair + 1) & 0x03;
+  droneMixPair = pair;
+  int16_t pairMixQ7 = 0;
+  const uint8_t firstVoice = pair << 1;
+  for (uint8_t voice = firstVoice; voice < firstVoice + 2; ++voice) {
+    amplitude = droneAmp[voice];
+    if (amplitude != 0) {
+      const uint16_t phase = dronePCW[voice] += droneFTW[voice] << 2;
+      const uint16_t source = droneWaveSources[voice];
+      const int16_t sample = source == SYNTH_GENERATED_SQUARE ?
+        (phase < SYNTH_DEFAULT_PULSE_WIDTH ? 255 : -256) :
+        readWavetable(source, phase);
+      pairMixQ7 += scaleSigned9SampleQ4(sample, amplitude);
+    }
+  }
+
+  const uint32_t lfoStep = droneLfoFTW[pair];
+  if (lfoStep != 0) {
+    const uint32_t lfoPhase = droneLfoPCW[pair] + lfoStep;
+    droneLfoPCW[pair] = lfoPhase;
+    const uint16_t gain = (uint16_t)lfoTriangle(lfoPhase >> 24) << 1;
+    if (gain < 256) {
+      pairMixQ7 = scalePlayMix(pairMixQ7, (uint8_t)gain);
+    }
+  }
+  dronePairMixQ7[pair] = pairMixQ7;
+  return dronePairMixQ7[0] + dronePairMixQ7[1] +
+    dronePairMixQ7[2] + dronePairMixQ7[3];
 }
 
-// Mixes one audio frame and updates time-sliced synthesis state.
-// O2 avoids slow size-optimized shift loops in this ISR.
-ISR(TIMER2_COMPA_vect, __attribute__((optimize("O2"))))
+// Renders a block of drone frames. It is kept out of line so its registers
+// are not saved for every normal-mode block.
+static __attribute__((noinline, optimize("O2"))) void renderDroneBlock(int16_t *busQ7)
 {
-  const uint8_t voiceIndex = (divider + 1) & 0x03;
-  divider = voiceIndex;
-  const bool renderDrone = droneMode;
+  for (uint8_t i = 0; i < SYNTH_BLOCK_SAMPLES; ++i) busQ7[i] = renderDroneFrame();
+}
 
-  int16_t mixQ7;
+// Updates all per-voice control state once per block (5 kHz per voice).
+// synthUpdateVoices computes, for every voice:
+//   if (!(envelopePhase & 0x8000)) { envelopePhase += envelopeStep;
+//     amp = (envelopePhase & 0x8000) ? 0 : envelope[envelopePhase >> 8]; }
+//   else amp = 0
+//   step = pitch + floor(vibratoPeak * vibratoLfo / 256) when vibratoDepth != 0
+static inline __attribute__((always_inline)) void updateVoiceControls()
+{
+  vibratoLfoPCW += SYNTH_VIBRATO_LFO_STEP;
+  // Center the triangle at zero and halve it to keep the math 8-bit.
+  synthUpdateVoices((int8_t)(lfoTriangle(vibratoLfoPCW >> 24) >> 1) - 32);
+}
 
-  if (renderDrone) {
-    const uint8_t rampVoice = (droneRampVoice + 1) & 0x07;
-    droneRampVoice = rampVoice;
-    uint8_t amplitude = droneAmp[rampVoice];
-    const uint8_t target = droneTargetAmp[rampVoice];
-    if (amplitude < target) {
-      amplitude = (target - amplitude > 15) ? amplitude + 15 : target;
-    } else if (amplitude > target) {
-      amplitude = (amplitude - target > 15) ? amplitude - 15 : target;
+// Renders eight normal-mode samples into the bus and dry accumulators and
+// returns the synthFinishBlock stages they need.
+static inline __attribute__((always_inline)) uint8_t renderNormalBlock(
+  int16_t *busQ7, int16_t *dryQ7)
+{
+  // The PLAY VCA and morph LFOs advance once per block (2.5 kHz).
+  if (playVcaLfoFTW != 0) {
+    const uint32_t phase = playVcaLfoPCW + playVcaLfoFTW;
+    playVcaLfoPCW = phase;
+    const uint8_t triangle = lfoTriangle(phase >> 24);
+    const uint16_t attenuation = (playVcaAttenuationDepth * triangle + 64) >> 7;
+    playVcaGain = 256 - attenuation;
+  }
+  if (playMorphActive) {
+    const uint32_t phase = playMorphLfoPCW + playMorphLfoFTW;
+    playMorphLfoPCW = phase;
+    playMorphAmount = lfoTriangle(phase >> 24);
+  }
+
+  const uint8_t morph = playMorphActive ? SYNTH_RENDER_MORPH : 0;
+  if (morph) {
+    uint16_t primary = playMorphPrimarySource;
+    uint16_t secondary = playMorphSecondarySource;
+    uint8_t amount = playMorphAmount;
+    uint8_t kinds = sourceKind(primary, SYNTH_KIND_A_SQUARE, SYNTH_KIND_A_NOISE) |
+      sourceKind(secondary, SYNTH_KIND_B_SQUARE, SYNTH_KIND_B_NOISE);
+    if (kinds == SYNTH_KIND_A_SQUARE || kinds == SYNTH_KIND_A_NOISE) {
+      // a + floor((b - a) * m / 128) == b + floor((a - b) * (128 - m) / 128),
+      // so a generated/table pair can use a faster table-first kernel.
+      const uint16_t swap = primary;
+      primary = secondary;
+      secondary = swap;
+      amount = 128 - amount;
+      kinds <<= 2;
     }
-    droneAmp[rampVoice] = amplitude;
-
-    const uint8_t pair = (droneMixPair + 1) & 0x03;
-    droneMixPair = pair;
-    int16_t pairMixQ7 = 0;
-    const uint8_t firstVoice = pair << 1;
-    for (uint8_t voice = firstVoice; voice < firstVoice + 2; ++voice) {
-      amplitude = droneAmp[voice];
-      if (amplitude != 0) {
-        const uint16_t phase = dronePCW[voice] += droneFTW[voice] << 2;
-        const uint16_t source = droneWaveSources[voice];
-        const int16_t sample = source == SYNTH_GENERATED_SQUARE ?
-          generatedSquareSample(phase, SYNTH_DEFAULT_PULSE_WIDTH) :
-          readSigned9Sample(source, phase >> SYNTH_WAVETABLE_SHIFT);
-        pairMixQ7 += scaleSigned9Sample(sample, amplitude, 4);
-      }
-    }
-
-    const uint32_t lfoStep = droneLfoFTW[pair];
-    if (lfoStep != 0) {
-      const uint32_t lfoPhase = droneLfoPCW[pair] + lfoStep;
-      droneLfoPCW[pair] = lfoPhase;
-      const uint8_t trianglePhase = (uint8_t)(lfoPhase >> 24);
-      const uint8_t triangleAmount = (trianglePhase & 0x80) ?
-        (uint8_t)(256U - trianglePhase) : trianglePhase;
-      const uint16_t gain = (uint16_t)triangleAmount << 1;
-      if (gain < 256) {
-        pairMixQ7 = scalePlayMix(pairMixQ7, (uint8_t)gain);
-      }
-    }
-    dronePairMixQ7[pair] = pairMixQ7;
-    mixQ7 = dronePairMixQ7[0] + dronePairMixQ7[1] +
-      dronePairMixQ7[2] + dronePairMixQ7[3];
-  } else {
-    if (voiceIndex == 0) {
-      vibratoLfoPCW += SYNTH_VIBRATO_LFO_STEP;
-    }
-    const uint8_t vibratoPhase = ((uint8_t*)&vibratoLfoPCW)[3];
-    const uint8_t vibratoTriangle = (vibratoPhase & 0x80) ?
-      (uint8_t)(256U - vibratoPhase) : vibratoPhase;
-    // Center the triangle at zero and halve it to keep the pitch math 16-bit.
-    const int8_t vibratoLfo = (int8_t)(vibratoTriangle >> 1) - 32;
-
-    const uint16_t envelopePhase = EPCW[voiceIndex];
-    if (envelopePhase & 0x8000) {
-      AMP[voiceIndex] = 0;
+    synthMorphSourceA = primary;
+    synthMorphSourceB = secondary;
+    synthMorphAmount = amount;
+    synthMorphKinds = kinds;
+  }
+  // Voice 0 is either the dry PLAY background (sequence note or drum) or a
+  // regular bus voice; the drum replaces it while it plays.
+  const bool background = voiceZeroBackground;
+  for (uint8_t sub = 0; sub < SYNTH_BLOCK_SAMPLES; sub += SYNTH_VOICE_BLOCK_SAMPLES) {
+    updateVoiceControls();
+    int16_t *bus = busQ7 + sub;
+    int16_t *dry = dryQ7 + sub;
+    if (drumActive) {
+      synthRenderDrum(background ? dry : bus);
+      synthRenderVoices(&synthVoices[1], SYNTH_VOICE_COUNT - 1, bus,
+        background ? morph | SYNTH_RENDER_CLEAR : morph, dry);
     } else {
-      const uint16_t nextEnvelopePhase = envelopePhase + EFTW[voiceIndex];
-      EPCW[voiceIndex] = nextEnvelopePhase;
-      const uint8_t envelopeIndex = nextEnvelopePhase >> 8;
-      AMP[voiceIndex] = (envelopeIndex & 0x80) ? 0 :
-        pgm_read_byte(envs[voiceIndex] + envelopeIndex);
-    }
-
-    bool updatePlayVcaLfo = false;
-    bool updatePlayMorphLfo = false;
-    if (voiceIndex == 0) {
-      playLfoDivider ^= 1;
-      updatePlayVcaLfo = playLfoDivider == 0;
-      updatePlayMorphLfo = !updatePlayVcaLfo;
-    }
-    if (updatePlayVcaLfo && playVcaLfoFTW != 0) {
-      playVcaLfoPCW += playVcaLfoFTW;
-      const uint8_t phase = ((uint8_t*)&playVcaLfoPCW)[3];
-      const uint8_t triangle = (phase & 0x80) ? (uint8_t)(256U - phase) : phase;
-      const uint16_t attenuation = (playVcaAttenuationDepth * triangle + 64) >> 7;
-      playVcaGain = 256 - attenuation;
-    }
-
-    int16_t sourceZeroQ7 = 0;
-    bool renderDrum = drumActive;
-    if (renderDrum) {
-      const uint32_t samplePhase = drumSamplePhase;
-      const uint16_t envelope = drumEnvelope;
-      const uint16_t sampleIndex = samplePhase >> 16;
-      if (sampleIndex >= drumSampleLength || envelope == 0) {
-        drumEnvelope = 0;
-        drumActive = false;
-        renderDrum = false;
-      } else {
-        const int16_t sample = readPackedUnsigned9Sample(drumSampleAddress, sampleIndex);
-        drumSamplePhase = samplePhase + drumSampleStep;
-        const uint8_t gain = envelope >> 8;
-        sourceZeroQ7 = scaleSigned9Sample(sample, gain, 3);
-        const uint16_t envelopeStep = drumEnvelopeStep;
-        drumEnvelope = envelope <= envelopeStep ? 0 : envelope - envelopeStep;
-      }
-    } else {
-      sourceZeroQ7 = playMorphActive ?
-        nextScaledMorphedVoiceSample(0, playMorphPrimarySource,
-          playMorphSecondarySource, playMorphAmount, AMP[0]) :
-        nextScaledVoiceSample(0, AMP[0]);
-    }
-
-    int16_t liveMixQ7;
-    if (playMorphActive) {
-      if (updatePlayMorphLfo) {
-        playMorphLfoPCW += playMorphLfoFTW;
-        const uint8_t phase = ((uint8_t*)&playMorphLfoPCW)[3];
-        playMorphAmount = (phase & 0x80) ? (uint8_t)(256U - phase) : phase;
-      }
-      liveMixQ7 = nextScaledMorphedVoiceSample(1, playMorphPrimarySource,
-        playMorphSecondarySource, playMorphAmount, AMP[1]) +
-        nextScaledMorphedVoiceSample(2, playMorphPrimarySource,
-          playMorphSecondarySource, playMorphAmount, AMP[2]) +
-        nextScaledMorphedVoiceSample(3, playMorphPrimarySource,
-          playMorphSecondarySource, playMorphAmount, AMP[3]);
-    } else {
-      liveMixQ7 = nextScaledVoiceSample(1, AMP[1]) + nextScaledVoiceSample(2, AMP[2]) +
-        nextScaledVoiceSample(3, AMP[3]);
-    }
-    const int16_t scaledLiveMixQ7 = playVcaGain >= 256 ? liveMixQ7 :
-      scalePlayMix(liveMixQ7, (uint8_t)playVcaGain);
-    mixQ7 = sourceZeroQ7 + (chorusActive && chorusLiveOnly ?
-      applyChorus(scaledLiveMixQ7) : scaledLiveMixQ7);
-
-    if (!renderDrum || voiceIndex != 0) {
-      const uint16_t pitch = PITCH[voiceIndex];
-      const int8_t modulation = MOD[voiceIndex];
-      const uint8_t vibratoDepth = modulation < 0 ? -modulation : modulation;
-      if (vibratoDepth == 0) {
-        FTW[voiceIndex] = pitch;
-      } else {
-        // Full depth is about +/- 6% of pitch.  MOD is a depth, so values on
-        // either side of 64 produce the same centered, continuous vibrato.
-        const uint16_t peakOffset =
-          (modulationCoarse(pitch) * vibratoDepth) >> 4;
-        const int16_t pitchOffset =
-          ((int16_t)peakOffset * (int16_t)vibratoLfo) >> 5;
-        FTW[voiceIndex] = pitch + pitchOffset;
-      }
+      synthRenderVoices(&synthVoices[0], SYNTH_VOICE_COUNT, bus,
+        morph | SYNTH_RENDER_CLEAR | (background ? SYNTH_RENDER_SPLIT : 0), dry);
     }
   }
 
-  if (!renderDrone && chorusActive && !chorusLiveOnly) {
-    mixQ7 = applyChorus(mixQ7);
-  }
+  uint8_t flags = background ? SYNTH_FINISH_DRY : 0;
+  if (playVcaGain < 256) flags |= SYNTH_FINISH_VCA;
+  if (chorusActive) flags |= SYNTH_FINISH_CHORUS;
+  return flags;
+}
 
-  const uint8_t feedback = (pwmDitherLfsr & 0x01) ? 0xB8 : 0x00;
-  const uint8_t lfsr = (pwmDitherLfsr >> 1) ^ feedback;
-  pwmDitherLfsr = lfsr;
-  const uint8_t highNibble = lfsr / 16U;
-  const int16_t dither =
-    ((int8_t)(lfsr & 0x0F) - (int8_t)highNibble) << 2;
-  mixQ7 += pwmQuantizationError + dither;
-
-  const int16_t quantizedMix = (mixQ7 + 64) >> 7;
-  pwmQuantizationError = mixQ7 - (quantizedMix << 7);
-
-  int16_t nextPwmSample = 256 + quantizedMix;
-  if (nextPwmSample < 0) {
-    nextPwmSample = 0;
-  } else if (nextPwmSample > 511) {
-    nextPwmSample = 511;
-  }
-  const uint16_t pwmSample = (uint16_t)nextPwmSample;
-
-#if defined(SYNTH_FIXED_OUTPUT_MODE)
-  #if SYNTH_FIXED_OUTPUT_MODE == CHA
-    OCR1A = pwmSample;
-  #elif SYNTH_FIXED_OUTPUT_MODE == CHB
-    OCR1B = pwmSample;
-  #else
-    OCR1A = OCR1B = pwmSample;
-  #endif
+// Outputs one PWM sample per 20 kHz period and, after each played half,
+// enables TIMER2_COMPB to render it again. Its compare match occurs every
+// period just after this one, so it is already pending. This tiny handler is
+// naked so that it saves only the registers it touches.
+#if !defined(SYNTH_FIXED_OUTPUT_MODE) || SYNTH_FIXED_OUTPUT_MODE == DIFF
+  #define SYNTH_PWM_STORE "sts %[ocrah], r25\n\t" "sts %[ocrbh], r25\n\t" \
+    "ld r25, Z\n\t" "sts %[ocral], r25\n\t" "sts %[ocrbl], r25\n\t"
+#elif SYNTH_FIXED_OUTPUT_MODE == CHB
+  #define SYNTH_PWM_STORE "sts %[ocrbh], r25\n\t" "ld r25, Z\n\t" "sts %[ocrbl], r25\n\t"
 #else
-  OCR1A = OCR1B = pwmSample;
+  #define SYNTH_PWM_STORE "sts %[ocrah], r25\n\t" "ld r25, Z\n\t" "sts %[ocral], r25\n\t"
 #endif
+static_assert(SYNTH_OUTPUT_RING_SAMPLES == 16 && SYNTH_BLOCK_SAMPLES == 8,
+  "TIMER2_COMPA assumes a sixteen-sample ring of eight-sample halves");
+static_assert(SYNTH_VOICE_BLOCK_SAMPLES == 4, "synth_voices.S renders four-sample voice blocks");
 
+ISR(TIMER2_COMPA_vect, ISR_NAKED)
+{
+  asm volatile(
+    "push r24\n\t"
+    "in r24, __SREG__\n\t"
+    "push r24\n\t"
+    "push r25\n\t"
+    "push r30\n\t"
+    "push r31\n\t"
+    "lds r24, %[index]\n\t"
+    "mov r30, r24\n\t"
+    "lsl r30\n\t"
+    "clr r31\n\t"
+    "subi r30, lo8(-(%[ring]))\n\t"
+    "sbci r31, hi8(-(%[ring]))\n\t"
+    // 16-bit timer registers take the high byte first.
+    "ldd r25, Z+1\n\t"
+    SYNTH_PWM_STORE
+    "inc r24\n\t"
+    "andi r24, 15\n\t"
+    "sts %[index], r24\n\t"
+    "andi r24, 7\n\t"
+    "brne 1f\n\t"
+    "lds r24, %[busy]\n\t"
+    "tst r24\n\t"
+    "brne 1f\n\t"
+    "lds r24, %[timsk]\n\t"
+    "ori r24, %[ocie]\n\t"
+    "sts %[timsk], r24\n\t"
+    "1:\n\t"
+    "pop r31\n\t"
+    "pop r30\n\t"
+    "pop r25\n\t"
+    "pop r24\n\t"
+    "out __SREG__, r24\n\t"
+    "pop r24\n\t"
+    "reti\n\t"
+    :
+    : [index] "i"(&audioOutputIndex), [ring] "i"(audioOutputRing),
+      [busy] "i"(&audioRenderBusy), [timsk] "n"(_SFR_MEM_ADDR(TIMSK2)),
+      [ocie] "n"(_BV(OCIE2B)),
+      [ocrah] "n"(_SFR_MEM_ADDR(OCR1AH)), [ocral] "n"(_SFR_MEM_ADDR(OCR1AL)),
+      [ocrbh] "n"(_SFR_MEM_ADDR(OCR1BH)), [ocrbl] "n"(_SFR_MEM_ADDR(OCR1BL)));
+}
+
+// Renders the eight-sample half that has just been played. Interrupts are
+// re-enabled so TIMER2_COMPA keeps exact output timing (and nests) while this
+// runs; the block must be ready within the seven following output periods.
+// audioRenderBusy stops a late block from being started twice.
+// O2 avoids slow size-optimized shift loops in the renderer.
+ISR(TIMER2_COMPB_vect, __attribute__((optimize("O2"))))
+{
+  TIMSK2 &= ~_BV(OCIE2B);
+  audioRenderBusy = true;
+  uint16_t *output = &audioOutputRing[(audioOutputIndex & SYNTH_BLOCK_SAMPLES) ^ SYNTH_BLOCK_SAMPLES];
+  sei();
+
+  // Every stage that is used stores before it adds.
+  int16_t busQ7[SYNTH_BLOCK_SAMPLES];
+  int16_t dryQ7[SYNTH_BLOCK_SAMPLES];
+  uint8_t flags = 0;
+  if (droneMode) {
+    renderDroneBlock(busQ7);
+  } else {
+    flags = renderNormalBlock(busQ7, dryQ7);
+  }
+  synthFinishBlock(busQ7, dryQ7, output, flags);
+  audioRenderBusy = false;
 }
 
 class synth
@@ -507,12 +530,22 @@ class synth
       return voice < SYNTH_VOICE_COUNT;
     }
 
+    // Full vibrato depth is about +/- 6% of pitch: (pitch / 64) * depth / 16,
+    // stored eight times larger for the ISR's 1/256-step multiply.
+    static uint16_t vibratoPeakFor(uint16_t pitch, uint8_t depth)
+    {
+      return (((pitch >> 6) * depth) >> 4) << 3;
+    }
+
     void configureTimer2()
     {
       TCCR2A = (1 << WGM21);
       TCCR2B = (1 << CS21);
       TCNT2 = 0;
       OCR2A = (uint8_t)((F_CPU / (8UL * FS)) - 1);
+      // Compare B matches just after every period wrap; its interrupt is
+      // enabled only when a rendered block is due.
+      OCR2B = 1;
     }
 
     void enableTimer2Interrupt()
@@ -585,6 +618,10 @@ class synth
           break;
       }
 
+      for (uint8_t i = 0; i < SYNTH_OUTPUT_RING_SAMPLES; ++i) {
+        audioOutputRing[i] = SYNTH_PWM_CENTER;
+      }
+      audioOutputIndex = 0;
       enableTimer2Interrupt();
       sei();
     }
@@ -608,7 +645,7 @@ class synth
       const uint16_t selectedWave = waveSource(wave);
 
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        waveSources[voice] = selectedWave;
+        synthVoices[voice].source = selectedWave;
       }
     }
 
@@ -617,7 +654,7 @@ class synth
     {
       if (!validVoice(voice)) return;
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        pulseWidths[voice] = pulseWidth;
+        synthVoices[voice].pulseWidth = pulseWidth;
       }
     }
 
@@ -684,8 +721,11 @@ class synth
         return;
       }
 
+      SynthVoice &state = synthVoices[voice];
+      const uint16_t peak = vibratoPeakFor(pitch, state.vibratoDepth);
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        PITCH[voice] = pitch;
+        state.pitch = pitch;
+        state.vibratoPeak = peak;
       }
     }
 
@@ -716,7 +756,7 @@ class synth
       }
 
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        envs[voice] = selectedEnvelope;
+        synthVoices[voice].envelope = selectedEnvelope;
       }
     }
 
@@ -732,7 +772,7 @@ class synth
 
       const uint16_t envelopeSpeed = pgm_read_word(&EFTWS[length]);
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        EFTW[voice] = envelopeSpeed;
+        synthVoices[voice].envelopeStep = envelopeSpeed;
       }
     }
 
@@ -747,8 +787,12 @@ class synth
         mod = 127;
       }
 
+      const uint8_t depth = mod < 64 ? 64 - mod : mod - 64;
+      SynthVoice &state = synthVoices[voice];
+      const uint16_t peak = vibratoPeakFor(state.pitch, depth);
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        MOD[voice] = (int16_t)mod - 64;
+        state.vibratoDepth = depth;
+        state.vibratoPeak = peak;
       }
     }
 
@@ -759,8 +803,8 @@ class synth
       }
 
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        EPCW[voice] = 0;
-        FTW[voice] = PITCH[voice];
+        synthVoices[voice].envelopePhase = 0;
+        synthVoices[voice].step = synthVoices[voice].pitch;
       }
     }
 
@@ -771,9 +815,9 @@ class synth
       }
 
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        EPCW[voice] = 0x8000;
-        AMP[voice] = 0;
-        FTW[voice] = 0;
+        synthVoices[voice].envelopePhase = 0x8000;
+        synthVoices[voice].amp = 0;
+        synthVoices[voice].step = 0;
       }
     }
 
@@ -811,9 +855,9 @@ class synth
 
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         drumActive = false;
-        EPCW[0] = 0x8000;
-        AMP[0] = 0;
-        FTW[0] = 0;
+        synthVoices[0].envelopePhase = 0x8000;
+        synthVoices[0].amp = 0;
+        synthVoices[0].step = 0;
         drumSampleAddress = sampleAddress;
         drumSampleLength = sampleLength;
         drumSamplePhase = 0;
@@ -833,21 +877,31 @@ class synth
       }
     }
 
-    // A macro-controlled, 50/50 dry/wet effect with no feedback path.
-    // PLAY scopes it to the three live voices; SEQ applies it to the final mix.
-    void configureChorus(uint8_t mode, bool liveOnly)
+    // A macro-controlled, 50/50 dry/wet effect with no feedback path on the
+    // voice bus; a running PLAY background sequence on voice 0 stays dry.
+    void configureChorus(uint8_t mode)
     {
       const uint32_t lfoStep = mode == SYNTH_CHORUS_1 ? SYNTH_CHORUS_1_LFO_STEP :
         mode == SYNTH_CHORUS_2 ? SYNTH_CHORUS_2_LFO_STEP : 0;
+      // The ISR leaves an inactive delay line untouched; clear stale audio
+      // so enabling the effect cannot replay an old signal.
+      if (!chorusActive) memset(chorusBuffer, 0, sizeof(chorusBuffer));
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        if (chorusActive != (lfoStep != 0) || chorusLiveOnly != liveOnly ||
-            chorusLfoFTW != lfoStep) {
+        if (chorusLfoFTW != lfoStep) {
           chorusActive = lfoStep != 0;
-          chorusLiveOnly = liveOnly;
           chorusWriteIndex = 0;
           chorusLfoPCW = 0;
           chorusLfoFTW = lfoStep;
         }
+      }
+    }
+
+    // While PLAY's background sequence runs, voice 0 bypasses morph, VCA,
+    // and chorus; otherwise it is mixed like voices 1-3.
+    void setVoiceZeroBackground(bool background)
+    {
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        voiceZeroBackground = background;
       }
     }
 
@@ -857,7 +911,6 @@ class synth
         droneMode = enabled;
         if (enabled) {
           chorusActive = false;
-          chorusLiveOnly = false;
           chorusLfoFTW = 0;
         }
         droneMixPair = 0;

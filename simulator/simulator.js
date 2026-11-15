@@ -21,8 +21,11 @@ const AUDIO_ISR_BUDGET_CYCLES = 800; // 16 MHz / 20 kHz sample rate.
 const CYCLE_METER_SMOOTHING = 0.15;
 const CYCLE_METER_UPDATE_MS = 500;
 const TIMER2_COMPA_VECTOR = timer2Config.compAInterrupt;
+const TIMER2_COMPB_VECTOR = timer2Config.compBInterrupt;
+const VECTOR_TABLE_WORDS = 52; // ATmega328P: 26 two-word vectors.
 const RETI_OPCODE = 0x9518;
-const INTERRUPT_ENTRY_CYCLES = 2; // Cycles AVR8js charges when dispatching an interrupt.
+const SREG = 0x5f;
+const AUDIO_BLOCK_CYCLES = 8 * AUDIO_ISR_BUDGET_CYCLES; // One eight-sample render block.
 const TCCR1A = 0x80;
 const TCCR1B = 0x81;
 const OCR1AL = 0x88;
@@ -691,8 +694,12 @@ class BitsynthMachine {
     this.sampleCycle = 0;
     this.antiAlias = null;
     this.antiAliasSampleRate = 0;
-    this.audioIsrActive = false;
-    this.audioIsrStartedAt = 0;
+    // Audio load: cycles whose innermost active interrupt is TIMER2_COMPA
+    // (sample output) or TIMER2_COMPB (block rendering, which nests COMPA).
+    this.isrStack = [];
+    this.audioIsrWindowCycles = 0;
+    this.audioIsrWindowStart = 0;
+    this.audioIsrCallbackCycles = 0;
     this.audioIsrCycles = 0;
     this.audioIsrMaxCycles = 0;
     this.audioIsrBlockMax = 0;
@@ -774,6 +781,65 @@ class BitsynthMachine {
     this.portC.setPin(3, !modePressed);
   }
 
+  // Runs the CPU until targetCycle. Like the hardware, one more instruction
+  // runs after SEI, RETI, or an SREG write enables interrupts before one is
+  // served; GCC's stack-pointer updates (out SPH; out SREG; out SPL) rely on it.
+  run(targetCycle) {
+    const cpu = this.cpu;
+    const data = cpu.data;
+    while (cpu.cycles < targetCycle) {
+      const enabled = data[SREG] & 0x80;
+      avrInstruction(cpu);
+      if (!enabled && (data[SREG] & 0x80)) {
+        data[SREG] &= 0x7f;
+        cpu.tick();
+        data[SREG] |= 0x80;
+      } else {
+        cpu.tick();
+      }
+    }
+  }
+
+  // The same loop with audio-interrupt accounting for the cycle meter.
+  runMetered(targetCycle) {
+    const cpu = this.cpu;
+    const data = cpu.data;
+    const program = this.program;
+    const stack = this.isrStack;
+    while (cpu.cycles < targetCycle) {
+      const pc = cpu.pc;
+      const before = cpu.cycles;
+      const returns = program[pc] === RETI_OPCODE;
+      const enabled = data[SREG] & 0x80;
+      avrInstruction(cpu);
+      if (!enabled && (data[SREG] & 0x80)) {
+        data[SREG] &= 0x7f;
+        cpu.tick();
+        data[SREG] |= 0x80;
+      } else {
+        cpu.tick();
+      }
+      const active = stack[stack.length - 1];
+      if (active === TIMER2_COMPA_VECTOR || active === TIMER2_COMPB_VECTOR) {
+        this.audioIsrWindowCycles += cpu.cycles - before;
+      }
+      if (returns && stack.length) stack.pop();
+      if (cpu.pc < VECTOR_TABLE_WORDS && cpu.pc !== pc + 1) stack.push(cpu.pc);
+      if (cpu.cycles - this.audioIsrWindowStart >= AUDIO_BLOCK_CYCLES) {
+        const perSample = this.audioIsrWindowCycles * AUDIO_ISR_BUDGET_CYCLES /
+          (cpu.cycles - this.audioIsrWindowStart);
+        if (this.audioIsrWindowWarm) {
+          this.audioIsrBlockMax = Math.max(this.audioIsrBlockMax, perSample);
+          this.audioIsrCallbackCycles += this.audioIsrWindowCycles;
+          this.audioIsrMeasuredCycles += cpu.cycles - this.audioIsrWindowStart;
+        }
+        this.audioIsrWindowWarm = true;
+        this.audioIsrWindowCycles = 0;
+        this.audioIsrWindowStart = cpu.cycles;
+      }
+    }
+  }
+
   renderAudio(outputLeft, outputRight, volume) {
     const outputSampleRate = audioContext.sampleRate;
     if (!this.antiAlias || this.antiAliasSampleRate !== outputSampleRate) {
@@ -781,26 +847,26 @@ class BitsynthMachine {
       this.antiAliasSampleRate = outputSampleRate;
     }
     this.audioIsrBlockMax = 0;
+    this.audioIsrCallbackCycles = 0;
+    const callbackStart = this.cpu.cycles;
+    // The meter samples two render blocks per callback; the first only
+    // resynchronizes interrupt tracking. Metering every instruction made
+    // playback too slow and caused periodic dropouts.
+    const meterUntil = ui.cycleMeter && !ui.cycleMeter.hidden ?
+      callbackStart + 2 * AUDIO_BLOCK_CYCLES : 0;
+    this.isrStack.length = 0;
+    this.audioIsrWindowCycles = 0;
+    this.audioIsrWindowStart = callbackStart;
+    this.audioIsrWindowWarm = false;
+    this.audioIsrMeasuredCycles = 0;
     const cyclesPerSubsample = CLOCK_HZ / (outputSampleRate * AUDIO_OVERSAMPLE);
     for (let index = 0; index < outputLeft.length; index++) {
       let sample = 0;
       for (let subSample = 0; subSample < AUDIO_OVERSAMPLE; subSample++) {
         this.sampleCycle += cyclesPerSubsample;
-        while (this.cpu.cycles < this.sampleCycle) {
-          const completesAudioIsr = this.audioIsrActive &&
-            this.program[this.cpu.pc] === RETI_OPCODE;
-          avrInstruction(this.cpu);
-          this.cpu.tick();
-          if (completesAudioIsr) {
-            const used = this.cpu.cycles - this.audioIsrStartedAt;
-            this.audioIsrBlockMax = Math.max(this.audioIsrBlockMax, used);
-            this.audioIsrActive = false;
-          }
-          if (!this.audioIsrActive && this.cpu.pc === TIMER2_COMPA_VECTOR) {
-            this.audioIsrActive = true;
-            this.audioIsrStartedAt = this.cpu.cycles - INTERRUPT_ENTRY_CYCLES;
-          }
-        }
+        // Accounting runs only while the meter is shown, keeping playback fast.
+        if (this.cpu.cycles < meterUntil) this.runMetered(Math.min(this.sampleCycle, meterUntil));
+        this.run(this.sampleCycle);
         this.pwm.advanceTo(this.cpu.cycles);
         const voltage = this.filter.sample(this.cpu.cycles);
         sample = this.antiAlias.process(voltage / 2.5);
@@ -811,11 +877,13 @@ class BitsynthMachine {
       this.scope[this.scopeIndex++ & (this.scope.length - 1)] = monitored;
     }
     if (this.audioIsrBlockMax) {
+      const average = this.audioIsrCallbackCycles * AUDIO_ISR_BUDGET_CYCLES /
+        Math.max(1, this.audioIsrMeasuredCycles);
       this.audioIsrCycles = this.audioIsrCycles
         ? this.audioIsrCycles * (1 - CYCLE_METER_SMOOTHING) +
-          this.audioIsrBlockMax * CYCLE_METER_SMOOTHING
-        : this.audioIsrBlockMax;
-      this.audioIsrMaxCycles = Math.max(this.audioIsrMaxCycles, this.audioIsrBlockMax);
+          average * CYCLE_METER_SMOOTHING
+        : average;
+      this.audioIsrMaxCycles = Math.max(this.audioIsrMaxCycles, Math.round(this.audioIsrBlockMax));
     }
   }
 }

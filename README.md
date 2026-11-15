@@ -9,7 +9,7 @@ The same firmware runs on the physical instrument and in the browser simulator. 
 - **Hardware:** Arduino Pro Mini, 5 V / 16 MHz, ATmega328P
 - **Firmware build:** PlatformIO environment `hardware`
 - **Browser simulator:** the physical front-panel view in `simulator/hardware.html`
-- **Last verified `hardware` build footprint:** 29,462 bytes flash (95.9%) and 973 bytes RAM (47.5%)
+- **Last verified `hardware` build footprint:** 29,746 bytes flash (96.8%) and 1,054 bytes RAM (51.5%)
 
 An Uno or Nano with the same ATmega328P clock and voltage can also run the firmware if wired to the same pins.
 
@@ -72,7 +72,7 @@ The simulator models the real 9-bit, 31.25 kHz PWM signal and the documented pas
 
 ### Audio ISR cycle meter
 
-Click the lower-right screw on the simulated front panel to reveal the audio ISR cycle meter. It shows the smoothed current ISR duration and its maximum, against the 800-cycle audio deadline. The screw does not change the firmware state or any control value.
+Click the lower-right screw on the simulated front panel to reveal the audio ISR cycle meter. It shows the smoothed audio interrupt load in cycles per 20 kHz sample period and the highest average over one eight-sample render block, against the 800-cycle budget. Both audio interrupts count, and a sample-output interrupt nested in block rendering is counted once. The screw does not change the firmware state or any control value.
 
 ## Hardware
 
@@ -159,7 +159,8 @@ places `MOR` second. `MOR` controls waveform-morph speed: `0` is off, while
 `1-127` span 0.16-20.32 Hz. A multi-voice preset crossfades only the first two
 waveforms in its voice recipes (`A-B-A`); a single-voice preset does not morph.
 Morphing crossfades waveform sources only, so each voice keeps its own pitch,
-envelope, modulation, and pulse-width settings.
+envelope, modulation, and pulse-width settings. While PLAY's background
+sequence runs, its voice 0 is neither morphed nor affected by the PLAY VCA.
 
 Each preset also stores one square-wave pulse width. It is applied to every
 square oscillator in that preset and otherwise has no effect; the stored value
@@ -170,8 +171,8 @@ Each melodic preset stores one default glide value (`0-127`) that applies in
 both SEQ and PLAY; `0` switches glide off.
 
 `CHR` selects a mono Juno-60-style chorus. In SEQ it follows the normal mix;
-in PLAY it processes only live voices 1-3, leaving voice 0's background
-sequence dry. `0` is off, `1` is chorus 1, and `2` is chorus 2. Both modes use a 16-bit,
+in PLAY it processes the live voices, leaving voice 0 dry while it plays the
+background sequence. `0` is off, `1` is chorus 1, and `2` is chorus 2. Both modes use a 16-bit,
 20 kHz delay line swept by a triangle LFO from 1.66 to 5.35 ms, with no
 feedback and a 50% wet mix. Chorus 1 runs at 0.513 Hz and chorus 2 at 0.863
 Hz. DRONE bypasses the effect.
@@ -202,8 +203,9 @@ and LFO rate/depth pairs into four-control pages; empty slots are skipped.
 Each PLAY program is melodic. Each voice recipe stores a signed
 `detuneCents` pitch offset (`-1200` to `+1200`), so it can use any whole-cent
 value from 1 to 1199 as well as semitone or octave intervals. In `POLY`, a
-multi-voice preset is played as a single detuned unison stack, using up to four
-oscillators (or three with the background sequence running). Single-voice
+multi-voice preset is played as a single detuned unison stack with each
+recipe's waveform, detune, and modulation, using up to four oscillators (or
+three with the background sequence running). Single-voice
 presets retain note polyphony. `CHRD` uses only the first voice recipe.
 
 Preset modulation is a fixed 5 Hz triangle vibrato. Its stored `MOD` value is
@@ -225,7 +227,9 @@ path and does not consume a normal voice.
 
 #### Program macros and LFOs
 
-Programs declare up to four direct macros and two optional LFO targets. The
+Programs declare up to four direct macros and two optional LFO targets. SEQ
+and PLAY keep separate macro and LFO values for their selected programs, and
+PLAY's background sequence uses the SEQ program's values. The
 LCD's upper row shows the current page's four three-character parameter names.
 While a parameter is being adjusted, its field temporarily shows the value,
 then returns to its name. In SEQ, the lower row remains the step-gate view; in
@@ -243,8 +247,10 @@ for selecting one of the six envelopes and its playback speed. `CHR` is a
 direct-only macro and is not an LFO target. `MOR` is also direct-only: it
 sets a preset's waveform-morph speed and is inactive for one-voice presets.
 `LEN` uses a
-logarithmic range from roughly 50 ms (1) to 1.6 s (127); `LEN` 0 is HOLD and
-uses the constant full-level envelope until note-off. Neither envelope macro is
+logarithmic range from roughly 50 ms (0) to 1.6 s (126); `LEN` 127 is HOLD and
+uses the constant full-level envelope until note-off. HOLD sits next to the
+longest length, so turning away from it shortens held notes gradually. Without a `LEN` macro a
+program plays its stored envelope length unchanged. Neither envelope macro is
 an LFO target.
 
 `NSE` is a generated white-noise source, not a wavetable. It uses an independent
@@ -284,14 +290,15 @@ On Windows, set `RAW_TO_H_OUTPUT_BITS` to `9` near the top of `util/raw_to_h.bat
 
 ## Architecture and critical implementation details
 
-- **Real-time audio:** Timer2 runs the audio interrupt at 20 kHz. Timer1 generates 9-bit Fast PWM on `D9` at 31.25 kHz.
+- **Real-time audio:** Timer2 compare A interrupts at 20 kHz and only writes the next sample from a 16-sample ring to Timer1, which generates 9-bit Fast PWM on `D9` at 31.25 kHz. After each eight-sample half has played, compare A enables Timer2 compare B, which re-enables interrupts and renders that half while the other plays, so output timing stays exact. Per-block work is shared by eight samples, adding 0.4-0.8 ms of output latency. Voices are rendered in two four-sample sub-blocks, each preceded by the envelope and vibrato update, keeping the 5 kHz per-voice control rate.
+- **Assembly renderer:** `src/synth_voices.S` holds the hot paths: voice blocks (wavetable, square, noise, and the two-source morph), drum playback, the chorus, the VCA, and the dithered quantizer. Each step is bit-exact with the C formulas documented in `src/synth.h`.
 - **Synthesis:** 256-sample wavetables, phase accumulators, four envelope-driven normal voices, and a separate eight-oscillator drone path. Core tables and drum data live in flash.
-- **Resource-aware mixing:** the drone engine recalculates one oscillator pair per audio interrupt. Each pair is therefore updated at 5 kHz while the PWM output remains at 20 kHz. This is an intentional quality/CPU trade-off for the 80-600 Hz range.
+- **Resource-aware mixing:** the drone engine recalculates one oscillator pair per output sample. Each pair is therefore updated at 5 kHz while the PWM output remains at 20 kHz. This is an intentional quality/CPU trade-off for the 80-600 Hz range.
 - **Chorus:** the macro-controlled post-mix effect uses a 108-sample, 16-bit delay line in SRAM and audio-rate fractional interpolation. DRONE bypasses it.
 - **PWM quality:** the internal mix uses additional fixed-point precision before conversion to 9-bit PWM, with quantization-error feedback and dither where appropriate.
 - **Stable controls:** multiplexed analog inputs use settling reads, median sampling, smoothing, movement confirmation, and hysteresis. Buttons are debounced in software.
 - **Efficient LCD updates:** a two-line shadow buffer writes only changed characters, avoiding visible flicker and unnecessary time in the control loop.
-- **Simulator fidelity:** Timer1 mode 6 is modeled explicitly. PWM edges feed an exact state-space model of the RC ladder and AC-coupling stage, followed by oversampling and a four-pole anti-alias filter before Web Audio output.
+- **Simulator fidelity:** Timer1 mode 6 is modeled explicitly. Like the hardware, the simulator executes one more instruction after interrupts are enabled before serving one, which GCC's stack-pointer updates rely on. PWM edges feed an exact state-space model of the RC ladder and AC-coupling stage, followed by oversampling and a four-pole anti-alias filter before Web Audio output.
 
 ## Limitations
 
