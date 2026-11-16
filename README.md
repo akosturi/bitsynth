@@ -170,6 +170,19 @@ uses a 35% pulse width, while the other presets retain the 50% default.
 Each melodic preset stores one default glide value (`0-127`) that applies in
 both SEQ and PLAY; `0` switches glide off.
 
+Output level is set automatically whenever a note or drum hit starts. One
+voice or the `DRM` sample can fill the whole 9-bit PWM range, and the voices
+that can sound at the same time share full scale equally, so the mix cannot
+clip. In SEQ, one-voice presets and `DRM` therefore play at full scale,
+two-voice presets at half per voice, three-voice presets at one third, and
+four-voice presets at one quarter. In PLAY, a running background sequence
+keeps one quarter and the live voices share the rest: single-voice `POLY`
+uses one quarter per note, a unison stack and `CHRD` divide their share by
+their voice count, and the monophonic arpeggios use the whole share (full
+scale, or three quarters with the background sequence running). Each melodic preset and the `DRM`
+program also store a level (`0-255`) that only attenuates this automatic
+level; every supplied program uses `255`, the full automatic level.
+
 `CHR` selects a mono Juno-60-style chorus. In SEQ it follows the normal mix;
 in PLAY it processes the live voices, leaving voice 0 dry while it plays the
 background sequence. `0` is off, `1` is chorus 1, and `2` is chorus 2. Both modes use a 16-bit,
@@ -299,6 +312,7 @@ On Windows, set `RAW_TO_H_OUTPUT_BITS` to `9` near the top of `util/raw_to_h.bat
 - **Resource-aware mixing:** the drone engine recalculates one oscillator pair per output sample. Each pair is therefore updated at 5 kHz while the PWM output remains at 20 kHz. This is an intentional quality/CPU trade-off for the 80-600 Hz range.
 - **Chorus:** the macro-controlled post-mix effect uses a 108-sample, 16-bit delay line in SRAM and audio-rate fractional interpolation. DRONE bypasses it.
 - **PWM quality:** the internal mix uses additional fixed-point precision before conversion to 9-bit PWM, with quantization-error feedback and dither where appropriate.
+- **Output level:** each voice's envelope is scaled by its level at the 5 kHz control rate, so it costs no per-sample work. The levels of all voices that can sound together never exceed the mix's full scale, which keeps the summed bus inside the PWM range without a limiter or clipping stage.
 - **Stable controls:** multiplexed analog inputs use settling reads, median sampling, smoothing, movement confirmation, and hysteresis. Buttons are debounced in software.
 - **Efficient LCD updates:** a two-line shadow buffer writes only changed characters, avoiding visible flicker and unnecessary time in the control loop.
 - **Simulator fidelity:** Timer1 mode 6 is modeled explicitly. Like the hardware, the simulator executes one more instruction after interrupts are enabled before serving one, which GCC's stack-pointer updates rely on. PWM edges feed an exact state-space model of the RC ladder and AC-coupling stage, followed by oversampling and a four-pole anti-alias filter before Web Audio output.

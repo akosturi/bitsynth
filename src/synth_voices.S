@@ -12,7 +12,7 @@
 ; instead of being loaded. With RENDER_SPLIT the first voice is rendered
 ; unmorphed and stored to dry[0..3], and the remaining voices start from zero.
 ; Per sample a voice advances its 16-bit phase by its step, reads a signed
-; 9-bit sample, and adds floor(sample * amp / 8). With RENDER_MORPH every
+; 9-bit sample, and adds floor(sample * amp / 2). With RENDER_MORPH every
 ; voice crossfades the two block-constant sources described by
 ; synthMorphSourceA/B, synthMorphKinds, and synthMorphAmount:
 ; a + floor((b - a) * amount / 128). The caller normalizes a square or noise A
@@ -39,7 +39,8 @@ VOICE_ENVELOPE = 15
 VOICE_PITCH = 17
 VOICE_VIBRATO_PEAK = 19
 VOICE_VIBRATO_DEPTH = 21
-VOICE_SIZE = 22
+VOICE_LEVEL = 22
+VOICE_SIZE = 23
 VOICE_COUNT = 4
 
 ; synthMorphKinds bits (a clear pair of bits means a flash wavetable)
@@ -63,7 +64,7 @@ SPLIT_MORPH = 6
 ;   r22:r23 sample B / difference        r24:r25 slot B     X accumulator ptr
 ;   Y voice pointer                      Z table pointer    T morph flag
 
-; Adds floor(\lo:\hi * amp / 8) to r2:r3 for a signed 9-bit sample. The high
+; Adds floor(\lo:\hi * amp / 2) to r2:r3 for a signed 9-bit sample. The high
 ; byte is 0x00 or 0xFF, so lo * amp - (hi & amp) * 256 is the exact 17-bit
 ; product; its sign is the subtraction's borrow, shifted back in by ror.
 .macro SCALE_ADD_TO lo, hi, alo, ahi
@@ -71,10 +72,6 @@ SPLIT_MORPH = 6
   and \hi, r16
   sub r1, \hi
   ror r1
-  ror r0
-  asr r1
-  ror r0
-  asr r1
   ror r0
   add \alo, r0
   adc \ahi, r1
@@ -297,11 +294,7 @@ synthRenderVoices:
   movw r14, r0
   lsr r15
   ror r14
-  lsr r15
-  ror r14
-  lsr r15
-  ror r14
-  ldi r20, 32
+  ldi r20, 128
   mul r16, r20
   movw r24, r0
   clr r1
@@ -840,8 +833,10 @@ synthFinishBlock:
 
 ; void synthUpdateVoices(int8_t vibratoLfo);
 ;
-; Once per block, for each of the four voices: advances the envelope and
-; looks up its amplitude, then sets the oscillator step from the pitch plus
+; Once per block, for each of the four voices: advances the envelope, looks
+; up its value, and scales it by the voice level to
+; amp = envelope * (level + 1) / 256, so level 255 keeps the envelope exact;
+; then it sets the oscillator step from the pitch plus
 ; the exact floor(vibratoPeak * vibratoLfo / 256) vibrato offset.
 
   .section .text.synthUpdateVoices,"ax",@progbits
@@ -873,6 +868,12 @@ synthUpdateVoices:
   add r30, r21
   adc r31, r1
   lpm r22, Z
+  ldd r18, Y + VOICE_LEVEL
+  mul r22, r18
+  add r0, r22
+  clr r22
+  adc r22, r1
+  clr r1
 1:
   std Y + VOICE_AMP, r22
   ldd r20, Y + VOICE_PITCH
@@ -908,7 +909,7 @@ synthUpdateVoices:
 ; Stores the active drum's four-sample block. Per sample, while the envelope
 ; is nonzero and the sample index is inside the sample, it reads the packed
 ; offset-binary 9-bit sample, scales it by the envelope's high byte with
-; floor(sample * gain / 8), advances the 16.16 sample phase, and decays the
+; floor(sample * gain / 2), advances the 16.16 sample phase, and decays the
 ; envelope. When the end is reached, drumActive is cleared and the rest of the
 ; block is silent, exactly like the C reference.
 ;
@@ -991,10 +992,6 @@ synthRenderDrum:
   and r9, r17
   sub r1, r9
   ror r1
-  ror r0
-  asr r1
-  ror r0
-  asr r1
   ror r0
   st X+, r0
   st X+, r1

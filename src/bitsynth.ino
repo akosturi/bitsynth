@@ -89,6 +89,7 @@ struct MelodicPreset {
   uint8_t morphSpeed;
   uint8_t macros[4];
   uint8_t lfoTargets[2];
+  uint8_t level;
 };
 
 struct DrumPreset {
@@ -96,6 +97,7 @@ struct DrumPreset {
   uint8_t decay;
   uint8_t macros[4];
   uint8_t lfoTargets[2];
+  uint8_t level;
 };
 
 struct SeqControls { uint8_t preset; uint8_t bpm; uint8_t drumTone; };
@@ -110,34 +112,35 @@ struct AnalogMotionState {
 
 // label, voice count, voices {wave, detune cents, envelope, modulation} x4,
 // envelope length, square pulse width, glide, PLAY VCA depth, PLAY VCA LFO rate,
-// chorus mode, morph speed, direct macros x4, LFO targets x2
+// chorus mode, morph speed, direct macros x4, LFO targets x2, output level
+// (255 keeps the automatic level; lower values only attenuate the preset)
 // Available macros: MACRO_NONE, MACRO_PULSE_WIDTH, MACRO_VIBRATO,
 // MACRO_DRUM_TUNE, MACRO_DRUM_DECAY, MACRO_VCA_DEPTH, MACRO_VCA_RATE,
 // MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH, MACRO_GLIDE, MACRO_CHORUS,
 // MACRO_MORPH.
 const MelodicPreset kMelodicPresets[] PROGMEM = {
-  {"GLA", 2, {{SAW, 0, ENVELOPE3, 64}, {TRIANGLE, 0, ENVELOPE3, 64}, {SAW, 0, ENVELOPE3, 64}, {TRIANGLE, 0, ENVELOPE3, 64}}, 127, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
-  {"TRI", 1, {{TRIANGLE, 0, ENVELOPE3, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 96, 0, 64}}, 127, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_MORPH, MACRO_CHORUS, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_VIBRATO, MACRO_NONE}},
-  {"FLY", 1, {{SAW, 0, ENVELOPE3, 69}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}, {SINE, 0, 0, 64}}, 127, 50, 17, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
-  {"SQR", 1, {{SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, 0, 64}, {SQUARE, 0, 0, 64}, {SINE, 0, 0, 64}}, 96, 35, 0, 256, 68, SYNTH_CHORUS_OFF, 0, {MACRO_PULSE_WIDTH, MACRO_MORPH, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_VIBRATO, MACRO_NONE}},
-  {"NSE", 1, {{NOISE, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 96, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_MORPH, MACRO_CHORUS, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_NONE, MACRO_NONE}},
-  {"SUB", 2, {{SINE, 0, ENVELOPE0, 64}, {SQUARE, -12, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
-  {"BA1", 2, {{SAW, 0, ENVELOPE1, 64}, {SQUARE, -12, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
-  {"PLK", 2, {{TRIANGLE, 0, ENVELOPE1, 64}, {SQUARE, 12, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
-  {"BEL", 3, {{SINE, 0, ENVELOPE2, 64}, {SINE, 12, ENVELOPE2, 64}, {TRIANGLE, 19, ENVELOPE2, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
-  {"LED", 2, {{SAW, 0, ENVELOPE0, 64}, {SAW, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
-  {"HYS", 4, {{SAW, -18, ENVELOPE3, 62}, {SAW, -6, ENVELOPE3, 63}, {SAW, 6, ENVELOPE3, 65}, {SAW, 18, ENVELOPE3, 66}}, 127, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
-  {"PUR", 3, {{SINE, 0, ENVELOPE3, 64}, {SINE, 0, ENVELOPE3, 64}, {SINE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}}, 116, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
-  {"SOF", 3, {{SINE, 0, ENVELOPE0, 64}, {SINE, 0, ENVELOPE0, 64}, {SINE, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
-  {"KEY", 3, {{TRIANGLE, 0, ENVELOPE2, 64}, {TRIANGLE, 0, ENVELOPE2, 64}, {TRIANGLE, 0, ENVELOPE2, 64}, {SINE, 0, 0, 64}}, 82, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
-  {"PLK", 3, {{SQUARE, 0, ENVELOPE1, 64}, {SQUARE, 0, ENVELOPE1, 64}, {SQUARE, 0, ENVELOPE1, 64}, {SINE, 0, 0, 64}}, 46, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
-  {"BA2", 3, {{SAW, 0, ENVELOPE0, 58}, {SAW, 0, ENVELOPE0, 58}, {SAW, 0, ENVELOPE0, 58}, {SINE, 0, 0, 64}}, 92, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
-  {"UNI", 3, {{SAW, -9, ENVELOPE3, 64}, {SAW, 0, ENVELOPE3, 64}, {SAW, 9, ENVELOPE3, 64}, {SINE, 0, 0, 64}}, 127, 50, 12, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}},
-  {"ORG", 3, {{SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}}, 116, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}}
+  {"GLA", 2, {{SAW, 0, ENVELOPE3, 64}, {TRIANGLE, 0, ENVELOPE3, 64}, {SAW, 0, ENVELOPE3, 64}, {TRIANGLE, 0, ENVELOPE3, 64}}, 127, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"TRI", 1, {{TRIANGLE, 0, ENVELOPE3, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 96, 0, 64}}, 127, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_MORPH, MACRO_CHORUS, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_VIBRATO, MACRO_NONE}, 255},
+  {"FLY", 1, {{SAW, 0, ENVELOPE3, 69}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}, {SINE, 0, 0, 64}}, 127, 50, 17, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"SQR", 1, {{SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, 0, 64}, {SQUARE, 0, 0, 64}, {SINE, 0, 0, 64}}, 96, 35, 0, 256, 68, SYNTH_CHORUS_OFF, 0, {MACRO_PULSE_WIDTH, MACRO_MORPH, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_VIBRATO, MACRO_NONE}, 255},
+  {"NSE", 1, {{NOISE, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 96, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_MORPH, MACRO_CHORUS, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"SUB", 2, {{SINE, 0, ENVELOPE0, 64}, {SQUARE, -12, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"BA1", 2, {{SAW, 0, ENVELOPE1, 64}, {SQUARE, -12, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"PLK", 2, {{TRIANGLE, 0, ENVELOPE1, 64}, {SQUARE, 12, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"BEL", 3, {{SINE, 0, ENVELOPE2, 64}, {SINE, 12, ENVELOPE2, 64}, {TRIANGLE, 19, ENVELOPE2, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"LED", 2, {{SAW, 0, ENVELOPE0, 64}, {SAW, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"HYS", 4, {{SAW, -18, ENVELOPE3, 62}, {SAW, -6, ENVELOPE3, 63}, {SAW, 6, ENVELOPE3, 65}, {SAW, 18, ENVELOPE3, 66}}, 127, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"PUR", 3, {{SINE, 0, ENVELOPE3, 64}, {SINE, 0, ENVELOPE3, 64}, {SINE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}}, 116, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"SOF", 3, {{SINE, 0, ENVELOPE0, 64}, {SINE, 0, ENVELOPE0, 64}, {SINE, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"KEY", 3, {{TRIANGLE, 0, ENVELOPE2, 64}, {TRIANGLE, 0, ENVELOPE2, 64}, {TRIANGLE, 0, ENVELOPE2, 64}, {SINE, 0, 0, 64}}, 82, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"PLK", 3, {{SQUARE, 0, ENVELOPE1, 64}, {SQUARE, 0, ENVELOPE1, 64}, {SQUARE, 0, ENVELOPE1, 64}, {SINE, 0, 0, 64}}, 46, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"BA2", 3, {{SAW, 0, ENVELOPE0, 58}, {SAW, 0, ENVELOPE0, 58}, {SAW, 0, ENVELOPE0, 58}, {SINE, 0, 0, 64}}, 92, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"UNI", 3, {{SAW, -9, ENVELOPE3, 64}, {SAW, 0, ENVELOPE3, 64}, {SAW, 9, ENVELOPE3, 64}, {SINE, 0, 0, 64}}, 127, 50, 12, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"ORG", 3, {{SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}}, 116, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255}
 };
 
 const DrumPreset kDrumPreset PROGMEM =
-  {"DRM", 127, {MACRO_DRUM_DECAY, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}};
+  {"DRM", 127, {MACRO_DRUM_DECAY, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255};
 const uint8_t kPlayPresetCount = 18;
 
 const char kDrumLabels[kDrumCount][5] PROGMEM = {"KICK", "SNAR", "CHH"};
@@ -189,6 +192,12 @@ uint8_t currentStep = 0;
 uint8_t playingStep = 255;
 unsigned long lastStepMs = 0;
 uint16_t nextStepIntervalMs = 119;
+// One voice or the drum reaches full PWM scale, so every voice that can sound
+// at once shares SYNTH_LEVEL_BUDGET. PLAY's background voice keeps a fixed
+// quarter, so live style changes never need to rescale a ringing sequence.
+const uint8_t kBackgroundVoiceLevel = 63;
+uint8_t sequenceVoiceLevel = kBackgroundVoiceLevel;
+uint8_t liveVoiceLevel = kBackgroundVoiceLevel;
 uint16_t normalCurrentPitch[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
 uint16_t normalTargetPitch[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
 uint8_t normalGlide[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
@@ -1177,12 +1186,21 @@ uint16_t pitchForNoteWithDetuneCents(int16_t note, int16_t detuneCents) {
   return constrain(result, 1, 65535);
 }
 
+// Splits budget evenly between voices, capped at full level; a preset level
+// below 255 only attenuates that share.
+__attribute__((noinline)) uint8_t outputLevel(uint16_t budget, uint8_t voices, uint8_t presetLevel) {
+  uint16_t share = budget / voices;
+  if (share > 255) share = 255;
+  return (share * (presetLevel + 1U)) >> 8;
+}
+
 void triggerNormalVoice(uint8_t voice, uint16_t pitch, uint8_t glide) {
   normalTargetPitch[voice] = pitch; normalGlide[voice] = glide;
   if (glide == 0 || normalCurrentPitch[voice] == 0) {
     normalCurrentPitch[voice] = pitch; edgar.setPitchWord(voice, pitch);
   }
-  edgar.trigger(voice);
+  edgar.trigger(voice, instrumentMode == MODE_PLAY && voice >= firstLiveVoice() ?
+    liveVoiceLevel : sequenceVoiceLevel);
 }
 
 // Moves active voices toward their target pitch once per millisecond.
@@ -1209,7 +1227,11 @@ void triggerSequencerNote(uint8_t note, bool backgroundOnly) {
   const uint8_t glide = activeMacroValue(MACRO_GLIDE, preset.glide);
   const uint16_t pulseWidth = pulseWidthForPercent(
     lfoModulatedMacroValue(MACRO_PULSE_WIDTH, preset.squarePulseWidthPercent));
+  sequenceVoiceLevel = outputLevel(backgroundOnly ? kBackgroundVoiceLevel : SYNTH_LEVEL_BUDGET,
+    voiceCount, preset.level);
 
+  // Unused voices stop first, so louder new levels never overlap them.
+  if (!backgroundOnly) for (uint8_t voice = voiceCount; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
   for (uint8_t voice = 0; voice < voiceCount; ++voice) {
     const VoiceRecipe &recipe = preset.voices[voice];
     edgar.setWave(voice, recipe.wave); edgar.setEnvelope(voice, envelope);
@@ -1218,7 +1240,6 @@ void triggerSequencerNote(uint8_t note, bool backgroundOnly) {
     edgar.setMod(voice, lfoModulatedMacroValue(MACRO_VIBRATO, recipe.modulation));
     triggerNormalVoice(voice, pitchForNoteWithDetuneCents(note, recipe.detuneCents), glide);
   }
-  if (!backgroundOnly) for (uint8_t voice = voiceCount; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
 }
 
 void triggerDrum(uint8_t drum, bool backgroundOnly) {
@@ -1230,7 +1251,8 @@ void triggerDrum(uint8_t drum, bool backgroundOnly) {
   DrumPreset preset; readDrumPreset(preset);
   const uint8_t decay = lfoModulatedMacroValue(MACRO_DRUM_DECAY, preset.decay);
   const uint8_t tone = lfoModulatedMacroValue(MACRO_DRUM_TUNE, seqControls.drumTone);
-  edgar.triggerDrum(min(drum, (uint8_t)(kDrumCount - 1)), tone, decay);
+  edgar.triggerDrum(min(drum, (uint8_t)(kDrumCount - 1)), tone, decay,
+    outputLevel(backgroundOnly ? kBackgroundVoiceLevel : SYNTH_LEVEL_BUDGET, 1, preset.level));
 }
 
 void triggerSequencerStep(uint8_t step, bool backgroundOnly) {
@@ -1285,6 +1307,16 @@ void applyLiveConfiguration() {
   uint8_t envelope, envelopeLength;
   presetEnvelope(preset, envelope, envelopeLength);
   playGlide = activeMacroValue(MACRO_GLIDE, preset.glide);
+  // Live notes take effect at their next trigger. Every setting that changes
+  // the simultaneous voice count also stops and revoices the live notes.
+  uint8_t liveVoices = 1;
+  if (playControls.style == STYLE_CHORD) liveVoices = 3;
+  else if (playControls.style == STYLE_POLY) {
+    liveVoices = min(preset.voiceCount > 1 ? preset.voiceCount : SYNTH_VOICE_COUNT,
+      SYNTH_VOICE_COUNT - playSequencerEnabled);
+  }
+  liveVoiceLevel = outputLevel(playSequencerEnabled ?
+    SYNTH_LEVEL_BUDGET - kBackgroundVoiceLevel : SYNTH_LEVEL_BUDGET, liveVoices, preset.level);
   edgar.configurePlayVca(lfoModulatedMacroValue(MACRO_VCA_DEPTH, preset.vcaDepth),
     presetVcaRateHundredths((uint8_t)lfoModulatedMacroValue(MACRO_VCA_RATE, preset.vcaModulation)));
   applyCurrentProgramMorph();

@@ -102,7 +102,7 @@ bool audioRenderBusy = false;
 
 // Per-voice state, grouped so the assembly renderer (synth_voices.S)
 // reaches every field through one pointer. Keep the field order and the
-// 22-byte size in sync with the VOICE_* offsets there.
+// 23-byte size in sync with the VOICE_* offsets there.
 extern "C" {
 struct SynthVoice {
   // Per-sample oscillator state.
@@ -126,11 +126,19 @@ struct SynthVoice {
   // peak), precomputed from pitch and vibratoDepth by the foreground.
   uint16_t vibratoPeak;
   uint8_t vibratoDepth;
+  // Output level; amp = envelope * (level + 1) / 256, so amp <= level.
+  uint8_t level;
 };
+
+// Each voice adds floor(sample * amp / 2), so one voice reaches full scale.
+// The bus has no headroom above full PWM scale: the levels of all voices that
+// can sound at once (the drum counts as voice 0) must sum to at most
+// SYNTH_LEVEL_BUDGET. The chorus, VCA, and morph never increase the peak.
+const uint16_t SYNTH_LEVEL_BUDGET = 255;
 
 #define SYNTH_VOICE_INIT(noiseSeed) \
   {0, 0, SYNTH_GENERATED_SQUARE, SYNTH_DEFAULT_PULSE_WIDTH, noiseSeed, 0, \
-   0x8000, 10, 0, 500, 0, 0}
+   0x8000, 10, 0, 500, 0, 0, 63}
 SynthVoice synthVoices[SYNTH_VOICE_COUNT] = {
   SYNTH_VOICE_INIT(0xA5C3), SYNTH_VOICE_INIT(0xD72B),
   SYNTH_VOICE_INIT(0x9E37), SYNTH_VOICE_INIT(0xF1A5)
@@ -172,7 +180,7 @@ const uint8_t SYNTH_FINISH_DRY = 0x04;
 void synthFinishBlock(int16_t *bus, const int16_t *dry, uint16_t *output,
   uint8_t flags);
 }
-static_assert(sizeof(SynthVoice) == 22, "synth_voices.S expects a 22-byte SynthVoice");
+static_assert(sizeof(SynthVoice) == 23, "synth_voices.S expects a 23-byte SynthVoice");
 
 uint32_t vibratoLfoPCW = 0x40000000UL;
 int16_t pwmQuantizationError = 0;
@@ -345,7 +353,8 @@ static __attribute__((noinline, optimize("O2"))) void renderDroneBlock(int16_t *
 // Updates all per-voice control state once per block (5 kHz per voice).
 // synthUpdateVoices computes, for every voice:
 //   if (!(envelopePhase & 0x8000)) { envelopePhase += envelopeStep;
-//     amp = (envelopePhase & 0x8000) ? 0 : envelope[envelopePhase >> 8]; }
+//     amp = (envelopePhase & 0x8000) ? 0 :
+//       envelope[envelopePhase >> 8] * (level + 1) >> 8; }
 //   else amp = 0
 //   step = pitch + floor(vibratoPeak * vibratoLfo / 256) when vibratoDepth != 0
 static inline __attribute__((always_inline)) void updateVoiceControls()
@@ -796,13 +805,15 @@ class synth
       }
     }
 
-    void trigger(uint8_t voice)
+    // Restarts the envelope at an output level (see SYNTH_LEVEL_BUDGET).
+    void trigger(uint8_t voice, uint8_t level)
     {
       if (!validVoice(voice)) {
         return;
       }
 
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        synthVoices[voice].level = level;
         synthVoices[voice].envelopePhase = 0;
         synthVoices[voice].step = synthVoices[voice].pitch;
       }
@@ -821,8 +832,10 @@ class synth
       }
     }
 
-    // Starts packed sample playback with tone and decay scaling.
-    void triggerDrum(uint8_t type, uint8_t tone, uint8_t decay)
+    // Starts packed sample playback with tone, decay, and level scaling. The
+    // envelope starts at level * 256 + 255, so its high byte peaks at level,
+    // and its step still reaches zero after the same duration.
+    void triggerDrum(uint8_t type, uint8_t tone, uint8_t decay, uint8_t level)
     {
       if (type >= DRUM_SAMPLE_COUNT) type = DRUM_SAMPLE_COUNT - 1;
       if (tone > 127) tone = 127;
@@ -849,8 +862,9 @@ class synth
         (((uint16_t)decay * 96U + 63U) / 127U);
       uint32_t durationFrames = (playbackFrames * decayScale) >> 7;
       if (durationFrames == 0) durationFrames = 1;
+      const uint16_t envelopeStart = ((uint16_t)level << 8) | 0xFF;
       uint16_t envelopeStep =
-        (65535UL + durationFrames - 1) / durationFrames;
+        (envelopeStart + durationFrames - 1) / durationFrames;
       if (envelopeStep == 0) envelopeStep = 1;
 
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
@@ -862,7 +876,7 @@ class synth
         drumSampleLength = sampleLength;
         drumSamplePhase = 0;
         drumSampleStep = sampleStep;
-        drumEnvelope = 65535;
+        drumEnvelope = envelopeStart;
         drumEnvelopeStep = envelopeStep;
         drumActive = sampleLength != 0;
       }
