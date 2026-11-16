@@ -454,7 +454,7 @@ uint16_t macroValueForRaw(uint8_t parameter, uint16_t raw) {
   }
 }
 
-// LEN is a perceptual control, not the raw EFTWS index: 0-126 span roughly
+// LEN is a perceptual control, not the raw envelope-step index: 0-126 span roughly
 // 50 ms to 1.6 s, and 127 is a held note. The engine's slowest non-zero
 // phase increment is one, so the upper value is necessarily approximate.
 const uint8_t kEnvelopeLengthRateAnchors[] PROGMEM = {33, 22, 15, 10, 7, 5, 3, 2, 1};
@@ -477,7 +477,7 @@ uint8_t envelopeLengthIndexForRate(uint8_t rate) {
   uint8_t bestIndex = 0;
   uint16_t bestDifference = 0xFFFF;
   for (uint8_t index = 0; index < 118; ++index) {
-    const uint16_t speed = pgm_read_word(&EFTWS[index]);
+    const uint16_t speed = envelopeStepForLength(index);
     const uint16_t difference = speed > rate ? speed - rate : rate - speed;
     if (difference < bestDifference) { bestDifference = difference; bestIndex = index; }
   }
@@ -489,7 +489,7 @@ uint8_t envelopeLengthIndexForControl(uint8_t control) {
 }
 
 uint8_t envelopeLengthControlForPreset(uint8_t length) {
-  const uint16_t rate = pgm_read_word(&EFTWS[length]);
+  const uint16_t rate = envelopeStepForLength(length);
   if (rate == 0) return kEnvelopeHoldControl;
   uint8_t bestControl = 0;
   uint16_t bestDifference = 0xFFFF;
@@ -501,7 +501,7 @@ uint8_t envelopeLengthControlForPreset(uint8_t length) {
   return bestControl;
 }
 
-// Resolves a melodic preset's envelope and EFTWS length index. Without a LEN
+// Resolves a melodic preset's envelope and envelope-step length index. Without a LEN
 // macro the stored length is used unchanged; LEN 0, or a stored length whose
 // speed is zero, holds the constant full-level envelope until note-off.
 void presetEnvelope(const MelodicPreset &preset, uint8_t &envelope, uint8_t &length) {
@@ -513,7 +513,7 @@ void presetEnvelope(const MelodicPreset &preset, uint8_t &envelope, uint8_t &len
     hold = control >= kEnvelopeHoldControl;
   } else {
     length = preset.length;
-    hold = pgm_read_word(&EFTWS[length]) == 0;
+    hold = envelopeStepForLength(length) == 0;
   }
   envelope = hold ? ENVELOPE3 : activeMacroValue(MACRO_ENVELOPE, preset.voices[0].envelope);
 }
@@ -1160,7 +1160,7 @@ void stopNormalVoices() {
 
 uint16_t pitchForNote(int16_t note) {
   note = constrain(note, 0, SYNTH_MIDI_NOTE_MAX);
-  return pgm_read_word(&PITCHS[note]);
+  return pitchWordForNote(note);
 }
 
 // Presets may specify every integer cent from -1200 to +1200. A nearby pitch

@@ -712,7 +712,7 @@ class synth
         midiNote = SYNTH_MIDI_NOTE_MAX;
       }
 
-      setPitchWord(voice, pgm_read_word(&PITCHS[midiNote]));
+      setPitchWord(voice, pitchWordForNote(midiNote));
     }
 
     void setPitchWord(uint8_t voice, uint16_t pitch)
@@ -770,7 +770,7 @@ class synth
         length = SYNTH_LENGTH_MAX;
       }
 
-      const uint16_t envelopeSpeed = pgm_read_word(&EFTWS[length]);
+      const uint16_t envelopeSpeed = envelopeStepForLength(length);
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         synthVoices[voice].envelopeStep = envelopeSpeed;
       }
