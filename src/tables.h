@@ -86,6 +86,7 @@ const int16_t PROGMEM SawTable[] = {
     -32,  -30,  -28,  -26,  -24,  -22,  -20,  -18,  -16,  -14,  -12,  -10,   -8,   -6,   -4,   -2
 };
 
+// synth::releaseVoice() also uses Env0 as its note-off fade; it must start at 255.
 const uint8_t PROGMEM Env0[] =
 {
     255,  242,  229,  216,  203,  189,  176,  163,  150,  143,  135,  128,  120,  113,  105,   98,

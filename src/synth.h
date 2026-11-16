@@ -182,6 +182,19 @@ void synthFinishBlock(int16_t *bus, const int16_t *dry, uint16_t *output,
 }
 static_assert(sizeof(SynthVoice) == 23, "synth_voices.S expects a 23-byte SynthVoice");
 
+// A release borrows a voice's envelope and envelopeStep, so the configured
+// values are kept here and restored by trigger() and stopVoice(). While
+// releasing is set, setEnvelope() and setLength() only update this copy.
+struct SynthVoiceEnvelope {
+  uint16_t envelope;
+  uint16_t envelopeStep;
+  bool releasing;
+};
+SynthVoiceEnvelope synthVoiceEnvelopes[SYNTH_VOICE_COUNT];
+// Env0 starts at 255, so a step below 256 reads it first and the fade begins
+// exactly at the current amplitude; Env0 reaches zero after about 21 ms.
+const uint16_t SYNTH_RELEASE_STEP = 255;
+
 uint32_t vibratoLfoPCW = 0x40000000UL;
 int16_t pwmQuantizationError = 0;
 uint8_t pwmDitherLfsr = 0xA5;
@@ -534,6 +547,16 @@ class synth
       }
     }
 
+    // Ends a release and applies the configured envelope and length; call
+    // with interrupts disabled.
+    __attribute__((noinline)) void restoreEnvelope(uint8_t voice)
+    {
+      SynthVoiceEnvelope &configured = synthVoiceEnvelopes[voice];
+      configured.releasing = false;
+      synthVoices[voice].envelope = configured.envelope;
+      synthVoices[voice].envelopeStep = configured.envelopeStep;
+    }
+
     bool validVoice(uint8_t voice) const
     {
       return voice < SYNTH_VOICE_COUNT;
@@ -765,7 +788,8 @@ class synth
       }
 
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        synthVoices[voice].envelope = selectedEnvelope;
+        synthVoiceEnvelopes[voice].envelope = selectedEnvelope;
+        if (!synthVoiceEnvelopes[voice].releasing) restoreEnvelope(voice);
       }
     }
 
@@ -781,7 +805,8 @@ class synth
 
       const uint16_t envelopeSpeed = envelopeStepForLength(length);
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        synthVoices[voice].envelopeStep = envelopeSpeed;
+        synthVoiceEnvelopes[voice].envelopeStep = envelopeSpeed;
+        if (!synthVoiceEnvelopes[voice].releasing) restoreEnvelope(voice);
       }
     }
 
@@ -812,10 +837,12 @@ class synth
         return;
       }
 
+      SynthVoice &state = synthVoices[voice];
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        synthVoices[voice].level = level;
-        synthVoices[voice].envelopePhase = 0;
-        synthVoices[voice].step = synthVoices[voice].pitch;
+        restoreEnvelope(voice);
+        state.level = level;
+        state.envelopePhase = 0;
+        state.step = state.pitch;
       }
     }
 
@@ -825,10 +852,33 @@ class synth
         return;
       }
 
+      SynthVoice &state = synthVoices[voice];
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        synthVoices[voice].envelopePhase = 0x8000;
-        synthVoices[voice].amp = 0;
-        synthVoices[voice].step = 0;
+        restoreEnvelope(voice);
+        state.envelopePhase = 0x8000;
+        state.amp = 0;
+        state.step = 0;
+      }
+    }
+
+    // Click-free note-off: fades the voice from its current amplitude to
+    // silence in about 21 ms through the normal envelope path, so the audio
+    // ISR does no extra work. amp = 255 * (level + 1) / 256 = level on the
+    // first update, so the fade is continuous; a silent voice stays silent.
+    // The next trigger() or stopVoice() restores the configured envelope.
+    void releaseVoice(uint8_t voice)
+    {
+      if (!validVoice(voice)) {
+        return;
+      }
+
+      SynthVoice &state = synthVoices[voice];
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        synthVoiceEnvelopes[voice].releasing = true;
+        state.level = state.amp;
+        state.envelope = (uint16_t)Env0;
+        state.envelopeStep = SYNTH_RELEASE_STEP;
+        state.envelopePhase = 0;
       }
     }
 
@@ -879,6 +929,17 @@ class synth
         drumEnvelope = envelopeStart;
         drumEnvelopeStep = envelopeStep;
         drumActive = sampleLength != 0;
+      }
+    }
+
+    // Fades an active drum hit to silence within 512 samples (about 26 ms)
+    // instead of cutting it; the renderer already decays the envelope
+    // linearly and stops at zero, so only the foreground step changes.
+    void releaseDrum()
+    {
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        const uint16_t step = (drumEnvelope >> 9) + 1;
+        if (drumEnvelopeStep < step) drumEnvelopeStep = step;
       }
     }
 

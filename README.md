@@ -129,7 +129,9 @@ the background sequence; either MODE combination does not count as a tap gesture
 
 ### SEQ - eight-step sequencer
 
-The sequence runs in sixteenth notes.
+The sequence runs in sixteenth notes. A disabled step fades the previous
+step's notes or drum hit out in about 20 ms instead of cutting them, so rests
+do not click.
 
 | Control | Function |
 |---|---|
@@ -235,6 +237,11 @@ sweep.
   using the preset's first voice recipe.
 - `UP`, `DOWN`, and `UPDN` arpeggiate held buttons at step pot 3's division of the sequencer clock, including triplets; every division restarts in phase with sequencer step 1. Button presses and releases are applied at the next clock, so they cannot retrigger an off-grid note.
 - `CUP`, `CDWN`, and `CUDN` arpeggiate the 1-3-5 chord of the most recently held button upward, downward, or up then down, respectively, on that same clock; button changes are likewise clock-quantized.
+
+A live note-off does not cut the voice: it fades from its current level to
+silence in about 20 ms, so releasing a held or still-decaying note does not
+click. Background-sequence rests fade the same way. Mode changes stop voices
+immediately.
 
 The background sequence keeps its position when entering PLAY. Hold **MODE**
 and press step button 1 to toggle it. A `DRUM` sequence uses its dedicated PCM

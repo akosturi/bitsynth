@@ -828,6 +828,7 @@ uint8_t mapIndexHysteresis(uint16_t raw, uint8_t current, uint8_t count) {
 }
 
 void revoiceHeldButtons();
+void stopNormalVoice(uint8_t voice, bool release = false);
 
 void lockParameterPageControls() {
   for (uint8_t pot = 0; pot < kSettingCount; ++pot) {
@@ -1159,8 +1160,10 @@ void changeMode(InstrumentMode nextMode, unsigned long now) {
   displayDirty = true;
 }
 
-void stopNormalVoice(uint8_t voice) {
-  edgar.stopVoice(voice); normalCurrentPitch[voice] = 0; normalTargetPitch[voice] = 0; normalGlide[voice] = 0;
+// A PLAY note-off releases the voice with a short fade instead of cutting it.
+void stopNormalVoice(uint8_t voice, bool release) {
+  if (release) edgar.releaseVoice(voice); else edgar.stopVoice(voice);
+  normalCurrentPitch[voice] = 0; normalTargetPitch[voice] = 0; normalGlide[voice] = 0;
 }
 
 void stopNormalVoices() {
@@ -1275,12 +1278,14 @@ void runSequencer(unsigned long now) {
         selectMacroMode(MODE_SEQ);
         triggerSequencerStep(currentStep, true);
         selectMacroMode(MODE_PLAY);
-      } else { stopNormalVoice(0); edgar.stopDrum(); }
+      } else { stopNormalVoice(0, true); edgar.releaseDrum(); }
     }
   } else if (bitRead(seqGateMask, currentStep)) {
     triggerSequencerStep(currentStep, false);
   } else {
-    edgar.stopDrum(); stopNormalVoices();
+    // A rest fades the previous step out instead of cutting it.
+    edgar.releaseDrum();
+    for (uint8_t voice = 0; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice, true);
   }
   currentStep = (currentStep + 1) % kStepCount;
   if (instrumentMode == MODE_SEQ) displayDirty = true;
@@ -1400,7 +1405,7 @@ void triggerPolyButton(uint8_t button) {
 void triggerHeldChord() {
   const int8_t button = latestHeldButton();
   if (button < 0) {
-    for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
+    for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice, true);
     return;
   }
   const int16_t root = 24 + playControls.octave * 12 + playControls.root;
@@ -1421,8 +1426,8 @@ void advanceArpeggio() {
   uint8_t buttons[kStepCount];
   const uint8_t count = collectHeldButtons(buttons);
   const uint8_t voice = 1;
-  for (uint8_t other = voice + 1; other < SYNTH_VOICE_COUNT; ++other) stopNormalVoice(other);
-  if (count == 0) { stopNormalVoice(voice); arpPosition = 0; arpDirection = 1; return; }
+  for (uint8_t other = voice + 1; other < SYNTH_VOICE_COUNT; ++other) stopNormalVoice(other, true);
+  if (count == 0) { stopNormalVoice(voice, true); arpPosition = 0; arpDirection = 1; return; }
 
   const bool chordArpeggio = playControls.style >= STYLE_CHORD_ARP_UP;
   const uint8_t noteCount = chordArpeggio ? 3 : count;
@@ -1484,7 +1489,7 @@ void handleLiveRelease(uint8_t button) {
     }
     const int8_t voice = liveVoiceForButton[button];
     if (voice >= firstLiveVoice()) {
-      stopNormalVoice(voice); liveButtonForVoice[voice] = -1; liveVoiceForButton[button] = -1;
+      stopNormalVoice(voice, true); liveButtonForVoice[voice] = -1; liveVoiceForButton[button] = -1;
     }
   } else if (playControls.style == STYLE_CHORD) triggerHeldChord();
   // Keep the current arp note until the next sequencer clock, where the
@@ -1494,7 +1499,7 @@ void handleLiveRelease(uint8_t button) {
 // Rebuilds live voice assignments after a play setting changes.
 void revoiceHeldButtons() {
   if (instrumentMode != MODE_PLAY) return;
-  for (uint8_t voice = firstLiveVoice(); voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
+  for (uint8_t voice = firstLiveVoice(); voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice, true);
   resetLiveAssignments(); applyLiveConfiguration();
   if (playControls.style == STYLE_POLY) {
     uint8_t ordered[kStepCount];
