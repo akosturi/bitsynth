@@ -191,8 +191,10 @@ PLAY reserves voice 0 for the monophonic background sequence and uses voices
 | Control | Function |
 |---|---|
 | Parameter pots 1-4 | The four parameters on the selected control page |
-| Step pot 1 | Octave range, C2-C5 |
-| Step pots 2-4 | Unused |
+| Step pot 1 | Octave range, O1-O5 (C1-C5) |
+| Step pot 2 | Background-sequence and arpeggio tempo, 60-220 BPM; shared with SEQ, so it takes effect only after moving once PLAY is entered |
+| Step pot 3 | Arpeggio division: `1/2`, `1/4`, `1/4t`, `1/8`, `1/8t`, `1/16`, `1/16t`, `1/32` |
+| Step pot 4 | Unused |
 | Step pots 5-8 | Unused |
 | Step buttons 1-8 | Consecutive notes of the selected scale |
 
@@ -218,7 +220,7 @@ sweep.
   three notes; the next note steals the oldest live voice in either case.
 - `CHRD` plays a scale-derived 1-3-5 chord from the most recently held button,
   using the preset's first voice recipe.
-- `UP`, `DOWN`, and `UPDN` arpeggiate held buttons on the sequencer's sixteenth-note clock. Button presses and releases are applied at the next clock, so they cannot retrigger an off-grid note.
+- `UP`, `DOWN`, and `UPDN` arpeggiate held buttons at step pot 3's division of the sequencer clock, including triplets; every division restarts in phase with sequencer step 1. Button presses and releases are applied at the next clock, so they cannot retrigger an off-grid note.
 - `CUP`, `CDWN`, and `CUDN` arpeggiate the 1-3-5 chord of the most recently held button upward, downward, or up then down, respectively, on that same clock; button changes are likewise clock-quantized.
 
 The background sequence keeps its position when entering PLAY. Hold **MODE**
@@ -233,7 +235,8 @@ PLAY's background sequence uses the SEQ program's values. The
 LCD's upper row shows the current page's four three-character parameter names.
 While a parameter is being adjusted, its field temporarily shows the value,
 then returns to its name. In SEQ, the lower row remains the step-gate view; in
-PLAY it shows octave and background-sequence status. A macro slot without an
+PLAY it shows background-sequence status (`*` running, blank off) in its first
+character, then octave, tempo, and arpeggio division. A macro slot without an
 assigned parameter shows `---`. The first LFO supplies rate/depth pair 1; the
 second supplies pair 2. Their LCD rate values are steps 1-94, corresponding to
 the same 0.05-20 Hz range as DRONE.
@@ -278,7 +281,7 @@ DRONE stops the sequencer and switches to a dedicated eight-oscillator mixer.
 Available waveforms are sine, triangle, square, and saw. `NSE` is intentionally
 unavailable in DRONE. Gates use short amplitude ramps to reduce switching clicks.
 
-While holding **MODE**, parameter pots 1-4 set independent VCA triangle-LFO rates for oscillator pairs 1-2, 3-4, 5-6, and 7-8. Each offers off plus 94 rates: 0.05-0.20 Hz in 0.01 Hz steps, 0.2-5.0 Hz in 0.1 Hz steps, and 5-20 Hz in 0.5 Hz steps. The LCD shows 0 for off and 1-94 for the rates. The four pair VCAs use the same fine 9-bit linear amplitude scaling as PLAY. Soft takeover also applies when returning to waveform selection.
+While holding **MODE**, parameter pots 1-4 set independent VCA triangle-LFO rates for oscillator pairs 1-2, 3-4, 5-6, and 7-8. Each offers off plus 94 rates: 0.05-0.20 Hz in 0.01 Hz steps, 0.2-5.0 Hz in 0.1 Hz steps, and 5-20 Hz in 0.5 Hz steps. The LCD shows 0 for off and 1-94 for the rates. The four pair VCAs use the same fine 9-bit linear amplitude scaling as PLAY. Soft takeover applies whenever **MODE** is pressed or released, so a pot moved on one layer does not change the waveform or LFO rate on the other until it moves again.
 
 Leaving DRONE returns to SEQ and restarts the sequence from step 1.
 

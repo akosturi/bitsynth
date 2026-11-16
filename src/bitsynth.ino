@@ -99,7 +99,7 @@ struct DrumPreset {
 };
 
 struct SeqControls { uint8_t preset; uint8_t bpm; uint8_t drumTone; };
-struct PlayControls { uint8_t preset; uint8_t root; uint8_t scale; uint8_t style; uint8_t octave; };
+struct PlayControls { uint8_t preset; uint8_t root; uint8_t scale; uint8_t style; uint8_t octave; uint8_t arpDivision; };
 
 struct AnalogMotionState {
   uint16_t accepted;
@@ -151,11 +151,17 @@ const char kDroneWaveLabels[kDroneWaveCount][4] PROGMEM = {"SIN", "TRI", "SQR", 
 const char kRootLabels[12][3] PROGMEM = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
 const char kScaleLabels[kScaleCount][4] PROGMEM = {"MAJ", "MIN", "PEN", "BLU"};
 const char kStyleLabels[kPlayStyleCount][5] PROGMEM = {"POLY", "CHRD", "UP", "DOWN", "UPDN", "CUP", "CDWN", "CUDN"};
+// Arpeggio divisions in 24-PPQN ticks. 48 ticks equal one eight-step
+// sequencer cycle, so every division restarts in phase with step 1.
+const uint8_t kArpDivisionCount = 8;
+const uint8_t kArpDivisionTicks[kArpDivisionCount] PROGMEM = {48, 24, 16, 12, 8, 6, 4, 3};
+const char kArpDivisionLabels[kArpDivisionCount][6] PROGMEM = {"1/2", "1/4", "1/4t", "1/8", "1/8t", "1/16", "1/16t", "1/32"};
+const uint8_t kPlayOctaveCount = 5;
 synth edgar;
 InstrumentMode instrumentMode = MODE_SEQ;
 SeqControls seqControls = {PRESET_SINE, 126, 64};
 // PLAY indexes its melodic-only catalogue; SEQ indexes the complete catalogue.
-PlayControls playControls = {0, 0, SCALE_MAJOR, STYLE_POLY, 0};
+PlayControls playControls = {0, 0, SCALE_MAJOR, STYLE_POLY, 1, 5};
 uint8_t stepNotes[kStepCount] = {36, 38, 40, 41, 43, 45, 47, 48};
 uint8_t stepDrums[kStepCount] = {DRUM_KICK, DRUM_CLOSED_HAT, DRUM_SNARE, DRUM_CLOSED_HAT,
                                  DRUM_KICK, DRUM_CLOSED_HAT, DRUM_SNARE, DRUM_CLOSED_HAT};
@@ -163,7 +169,6 @@ uint8_t seqGateMask = 0xFF;
 uint8_t droneGateMask = 0;
 uint8_t dronePairWave[kSettingCount] = {SINE, TRIANGLE, SQUARE, SAW};
 uint16_t droneLfoRateHundredths[kSettingCount] = {0, 0, 0, 0};
-uint16_t droneLfoShiftRaw[kSettingCount] = {0, 0, 0, 0};
 uint16_t dronePitchWord[kStepCount] = {0};
 uint8_t playGlide = 0;
 // SEQ and PLAY keep separate macro and macro-LFO values for their selected
@@ -197,6 +202,9 @@ int8_t liveButtonForVoice[SYNTH_VOICE_COUNT] = {-1, -1, -1, -1};
 uint16_t liveVoiceAge[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
 uint8_t arpPosition = 0;
 int8_t arpDirection = 1;
+uint8_t arpTick = 0;
+bool playBpmPotLocked = true;
+uint16_t playBpmPotRaw = 0;
 
 uint8_t stepButtonStable[kStepCount] = {HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH};
 uint8_t stepButtonReading[kStepCount] = {HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH, HIGH};
@@ -685,6 +693,7 @@ void setup() {
 void loop() {
   unsigned long now = millis();
   runSequencer(now);
+  runArpeggio(now);
   updateGlide(now);
   updateMacroLfos(now);
   scanModeButton(now);
@@ -692,6 +701,7 @@ void loop() {
   readControls(now);
   now = millis();
   runSequencer(now);
+  runArpeggio(now);
   updateGlide(now);
   updateMacroLfos(now);
   renderDisplay(now);
@@ -837,7 +847,7 @@ void applyParameterControl(uint8_t control, uint8_t pot, uint16_t raw, unsigned 
       }
       break;
     case PARAM_SEQ_BPM:
-      next = mapByteHysteresis(raw, seqControls.bpm, 60, 220);
+      next = mapByteHysteresis(raw, seqControls.bpm, 220, 60);
       if (next != seqControls.bpm) { seqControls.bpm = next; showParameterEdit(pot, now); }
       break;
     case PARAM_SEQ_TUNE:
@@ -899,10 +909,11 @@ void readControls(unsigned long now) {
 
 // MODE + a DRONE parameter pot edits that pair's amplitude-LFO rate.
 void readDroneControls(const uint16_t values[], unsigned long now) {
+  // MODE press and release relock the pots, so neither layer jumps to the
+  // position left by the other until that pot moves again.
   if (modeButtonStable == LOW) {
     for (uint8_t pair = 0; pair < kSettingCount; ++pair) {
-      if (values[pair] == droneLfoShiftRaw[pair]) continue;
-      droneLfoShiftRaw[pair] = values[pair];
+      if (!parameterPotUnlocked(pair, values[pair])) continue;
       const uint16_t rate = lfoRateForRaw(values[pair], droneLfoRateHundredths[pair]);
       if (rate == droneLfoRateHundredths[pair]) continue;
       droneLfoRateHundredths[pair] = rate;
@@ -916,6 +927,7 @@ void readDroneControls(const uint16_t values[], unsigned long now) {
     return;
   }
   for (uint8_t pair = 0; pair < kSettingCount; ++pair) {
+    if (!parameterPotUnlocked(pair, values[pair])) continue;
     const uint8_t next = mapIndexHysteresis(values[pair], dronePairWave[pair], kDroneWaveCount);
     if (next != dronePairWave[pair]) {
       dronePairWave[pair] = next; edgar.setDroneWave(pair * 2, next); edgar.setDroneWave(pair * 2 + 1, next);
@@ -952,8 +964,19 @@ void readPlayStepPot(uint8_t step, unsigned long now) {
   const uint16_t filtered = filterAnalog(readMedianAnalog(kStepAnalogPin), filteredStepRaw[step], stepFilterReady[step]);
   const uint16_t raw = acceptAnalogMovement(filtered, stepMotion[step], kStepMovementThreshold);
   if (step == 0) {
-    const uint8_t next = mapIndexHysteresis(raw, playControls.octave, 4);
+    const uint8_t next = mapIndexHysteresis(raw, playControls.octave, kPlayOctaveCount);
     if (next != playControls.octave) { playControls.octave = next; revoiceHeldButtons(); displayDirty = true; }
+  } else if (step == 1) {
+    // The tempo is shared with SEQ, so it waits for movement after entering PLAY.
+    if (playBpmPotLocked) {
+      if (abs((int16_t)raw - (int16_t)playBpmPotRaw) < kStepMovementThreshold) return;
+      playBpmPotLocked = false;
+    }
+    const uint8_t next = mapByteHysteresis(raw, seqControls.bpm, 220, 60);
+    if (next != seqControls.bpm) { seqControls.bpm = next; displayDirty = true; }
+  } else if (step == 2) {
+    const uint8_t next = mapIndexHysteresis(raw, playControls.arpDivision, kArpDivisionCount);
+    if (next != playControls.arpDivision) { playControls.arpDivision = next; displayDirty = true; }
   }
 }
 
@@ -987,6 +1010,9 @@ void scanModeButton(unsigned long now) {
   if (reading != modeButtonReading) { modeButtonReading = reading; modeButtonChangedAt = now; }
   if ((unsigned long)(now - modeButtonChangedAt) >= kButtonDebounceMs && reading != modeButtonStable) {
     modeButtonStable = reading;
+    // DRONE's waveform and MODE + pot LFO layers share pots; soft takeover
+    // applies whenever MODE switches between them.
+    if (instrumentMode == MODE_DRONE) lockParameterPageControls();
     if (reading == LOW) {
       modeButtonPressedAt = now;
       modeButtonChordUsed = false;
@@ -995,9 +1021,6 @@ void scanModeButton(unsigned long now) {
       // debounced button.
       modeDoubleTapArmed = modePageTapPending &&
         (unsigned long)(now - modePageTapAt) <= kModeDoubleTapMs;
-      if (instrumentMode == MODE_DRONE) {
-        for (uint8_t pair = 0; pair < kSettingCount; ++pair) droneLfoShiftRaw[pair] = settingValues[pair];
-      }
     } else if (!modeButtonChordUsed &&
                (unsigned long)(now - modeButtonPressedAt) < kModeIgnoreHoldMs) {
       if (modeDoubleTapArmed) {
@@ -1108,6 +1131,9 @@ void changeMode(InstrumentMode nextMode, unsigned long now) {
     }
     edgar.setDroneMode(true);
   } else if (nextMode == MODE_PLAY) {
+    playBpmPotLocked = true;
+    playBpmPotRaw = stepMotion[1].accepted;
+    arpTick = playingStep < kStepCount ? playingStep * 6 : 0;
     applyLiveConfiguration();
   } else {
     applyCurrentProgramChorus();
@@ -1235,8 +1261,21 @@ void runSequencer(unsigned long now) {
     edgar.stopDrum(); stopNormalVoices();
   }
   currentStep = (currentStep + 1) % kStepCount;
-  if (instrumentMode == MODE_PLAY && playControls.style >= STYLE_ARP_UP) advanceArpeggio();
   if (instrumentMode == MODE_SEQ) displayDirty = true;
+}
+
+// Clocks arpeggios from the sequencer position: each step spans six ticks,
+// interpolated from the elapsed part of the current step interval.
+void runArpeggio(unsigned long now) {
+  if (instrumentMode != MODE_PLAY || playingStep >= kStepCount) return;
+  uint8_t sub = (uint16_t)(now - lastStepMs) * 6U / nextStepIntervalMs;
+  if (sub > 5) sub = 5;
+  const uint8_t tick = playingStep * 6 + sub;
+  if (tick == arpTick) return;
+  const uint8_t division = pgm_read_byte(&kArpDivisionTicks[playControls.arpDivision]);
+  const bool due = tick < arpTick || tick / division != arpTick / division;
+  arpTick = tick;
+  if (due && playControls.style >= STYLE_ARP_UP) advanceArpeggio();
 }
 
 void applyLiveConfiguration() {
@@ -1259,7 +1298,7 @@ void applyLiveConfiguration() {
 
 uint8_t liveNoteForButton(uint8_t button) {
   const int8_t offset = pgm_read_byte(&kScaleOffsets[playControls.scale][button]);
-  return constrain(36 + playControls.octave * 12 + playControls.root + offset, 0, 127);
+  return constrain(24 + playControls.octave * 12 + playControls.root + offset, 0, 127);
 }
 
 int8_t scaleDegreeOffset(uint8_t scale, uint8_t degree) {
@@ -1332,7 +1371,7 @@ void triggerHeldChord() {
     for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
     return;
   }
-  const int16_t root = 36 + playControls.octave * 12 + playControls.root;
+  const int16_t root = 24 + playControls.octave * 12 + playControls.root;
   for (uint8_t chordVoice = 0; chordVoice < 3; ++chordVoice) {
     const int8_t offset = scaleDegreeOffset(playControls.scale, button + chordVoice * 2);
     triggerNormalVoice(chordVoice + 1, pitchForNote(root + offset), playGlide);
@@ -1356,7 +1395,7 @@ void advanceArpeggio() {
   const bool chordArpeggio = playControls.style >= STYLE_CHORD_ARP_UP;
   const uint8_t noteCount = chordArpeggio ? 3 : count;
   const int8_t chordButton = chordArpeggio ? latestHeldButton() : -1;
-  const int16_t chordRoot = 36 + playControls.octave * 12 + playControls.root;
+  const int16_t chordRoot = 24 + playControls.octave * 12 + playControls.root;
 
   if (chordArpeggio) {
     arpPosition %= noteCount;
@@ -1599,8 +1638,10 @@ void renderSequencerDashboard(bool inlineEditVisible) {
 
 void renderPlayDashboard(bool inlineEditVisible) {
   for (uint8_t pot = 0; pot < 4; ++pot) renderParameterName(pot);
-  frameChar(1, 12, 'O'); frameChar(1, 13, '2' + playControls.octave);
-  frameText(1, 14, playSequencerEnabled ? F("+") : F("-"));
+  frameChar(1, 0, playSequencerEnabled ? '*' : ' ');
+  frameChar(1, 1, 'O'); frameChar(1, 2, '1' + playControls.octave);
+  frameNumber(1, seqControls.bpm < 100 ? 5 : 4, seqControls.bpm); frameText(1, 7, F("BPM"));
+  frameProgmemText(1, 11, kArpDivisionLabels[playControls.arpDivision]);
   if (inlineEditVisible && editedPlayShift > 0) renderParameterValue(editedPlayShift - 1);
 }
 
