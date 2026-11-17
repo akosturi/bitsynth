@@ -277,7 +277,8 @@ path and does not consume a normal voice.
 
 #### Program macros and LFOs
 
-Programs declare up to four direct macros and two optional LFO targets. SEQ
+Programs declare up to eight direct macros and two optional LFO targets, so a
+fully assigned program spans up to four parameter pages. SEQ
 and PLAY keep separate macro and LFO values for their selected programs, and
 PLAY's background sequence uses the SEQ program's values. The
 LCD's upper row shows the current page's four three-character parameter names;
