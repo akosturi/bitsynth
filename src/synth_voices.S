@@ -1,6 +1,6 @@
 ; BitSynth block renderer for the ATmega328P (called from TIMER2_COMPB in
 ; synth.h): voice blocks, drum playback, per-block voice control, and the
-; bus stage (VCA, chorus, dither, and quantizer). Every routine is bit-exact
+; bus stage (low-pass filter, VCA, chorus, dither, and quantizer). Every routine is bit-exact
 ; with the C formulas documented in synth.h and follows the avr-gcc ABI
 ; (r2-r17 and r28-r29 preserved, r1 zero on return).
 ;
@@ -830,6 +830,58 @@ synthFinishBlock:
   pop r2
   ret
   .size synthFinishBlock, . - synthFinishBlock
+
+; void synthFilterBlock(int16_t *bus, uint8_t coefficient);
+;
+; One-pole low-pass over an eight-sample bus block, in place. With
+; k = coefficient (1-255) and y = busFilterState, per sample exactly:
+;   d = (x >> 1) - (y >> 1); y = y + ((d * k) >> 7) modulo 2^16; x = y
+; d * k is a signed 24-bit product built from the low and signed high
+; partial products; its bits 7..22 are the 16-bit increment.
+;
+; Register use
+;   r18:r19 state y   r20:r21 x, then d   r22 k   r23 count
+;   r24:r25 product   X bus read pointer  Z bus write pointer
+
+  .section .text.synthFilterBlock,"ax",@progbits
+  .global synthFilterBlock
+  .type synthFilterBlock, @function
+synthFilterBlock:
+  movw r26, r24
+  movw r30, r24
+  lds r18, busFilterState
+  lds r19, busFilterState + 1
+  ldi r23, 8
+1:
+  ld r20, X+
+  ld r21, X+
+  asr r21
+  ror r20
+  movw r24, r18
+  asr r25
+  ror r24
+  sub r20, r24
+  sbc r21, r25
+  mul r20, r22
+  movw r24, r0
+  mulsu r21, r22
+  add r25, r0
+  clr r20
+  adc r1, r20
+  lsl r24
+  rol r25
+  rol r1
+  add r18, r25
+  adc r19, r1
+  st Z+, r18
+  st Z+, r19
+  dec r23
+  brne 1b
+  clr r1
+  sts busFilterState, r18
+  sts busFilterState + 1, r19
+  ret
+  .size synthFilterBlock, . - synthFilterBlock
 
 ; void synthUpdateVoices(int8_t vibratoLfo);
 ;

@@ -90,7 +90,7 @@ static_assert(sizeof(SawTable) / sizeof(SawTable[0]) == (1U << SYNTH_WAVETABLE_I
 // renders that half while the other half plays. Voices are rendered in two
 // four-sample sub-blocks, each preceded by the envelope and vibrato update,
 // so the per-voice control rate stays at 5 kHz; the PLAY VCA and morph LFOs
-// advance once per block (2.5 kHz).
+// and the bus filter slew advance once per block (2.5 kHz).
 const uint8_t SYNTH_BLOCK_SAMPLES = 8;
 const uint8_t SYNTH_VOICE_BLOCK_SAMPLES = 4;
 const uint8_t SYNTH_OUTPUT_RING_SAMPLES = 2 * SYNTH_BLOCK_SAMPLES;
@@ -133,7 +133,8 @@ struct SynthVoice {
 // Each voice adds floor(sample * amp / 2), so one voice reaches full scale.
 // The bus has no headroom above full PWM scale: the levels of all voices that
 // can sound at once (the drum counts as voice 0) must sum to at most
-// SYNTH_LEVEL_BUDGET. The chorus, VCA, and morph never increase the peak.
+// SYNTH_LEVEL_BUDGET. The chorus, VCA, and morph never increase the peak;
+// the filter adds at most one Q7 unit, well inside the quantizer margin.
 const uint16_t SYNTH_LEVEL_BUDGET = 255;
 
 #define SYNTH_VOICE_INIT(noiseSeed) \
@@ -179,6 +180,9 @@ const uint8_t SYNTH_FINISH_CHORUS = 0x02;
 const uint8_t SYNTH_FINISH_DRY = 0x04;
 void synthFinishBlock(int16_t *bus, const int16_t *dry, uint16_t *output,
   uint8_t flags);
+
+// Low-pass filters an eight-sample bus block in place (formula below).
+void synthFilterBlock(int16_t *bus, uint8_t coefficient);
 }
 static_assert(sizeof(SynthVoice) == 23, "synth_voices.S expects a 23-byte SynthVoice");
 
@@ -199,7 +203,7 @@ uint32_t vibratoLfoPCW = 0x40000000UL;
 int16_t pwmQuantizationError = 0;
 uint8_t pwmDitherLfsr = 0xA5;
 // Voice 0 is the PLAY background sequence while it runs. It then stays dry:
-// no waveform morph, VCA, or chorus. Otherwise it is a normal bus voice.
+// no waveform morph, filter, VCA, or chorus. Otherwise it is a normal bus voice.
 bool voiceZeroBackground = false;
 // Performance engines. Preset morphing crossfades two flash-resident waveform
 // sources and never duplicates oscillator state.
@@ -238,6 +242,11 @@ bool chorusActive = false;
 uint8_t chorusWriteIndex = 0;
 uint32_t chorusLfoPCW = 0;
 uint32_t chorusLfoFTW = 0;
+// Preset bus low-pass. The foreground sets the target coefficient (0 =
+// open); the renderer moves the active one by one step per block.
+uint8_t busFilterTarget = 0;
+uint8_t busFilterCoefficient = 0;
+int16_t busFilterState = 0;
 
 static_assert(SYNTH_CHORUS_BUFFER_SAMPLES <= 255, "chorus index must fit in one byte");
 
@@ -311,6 +320,12 @@ static inline __attribute__((always_inline)) uint8_t lfoTriangle(uint8_t phase)
 // and the quantizer, with an 8-bit Galois LFSR (taps 0xB8):
 //   s = mix + error + ((lfsr & 15) - (lfsr >> 4)) * 4; t = s + 64
 //   pwm = (t >> 7) + 256; error = (t & 127) - 64
+// The bus low-pass before them, synthFilterBlock, computes per sample with
+// k = busFilterCoefficient (1-255) and y = busFilterState:
+//   d = (x >> 1) - (y >> 1); y = y + ((d * k) >> 7) modulo 2^16; x = y
+// i.e. y += (x - y) * k / 256, a 6 dB/octave cutoff of about 100 Hz-8 kHz.
+// y never leaves its own and the input's range by more than one Q7 unit,
+// far inside the quantizer's margin, so the true sum always fits int16_t.
 
 // Renders one drone frame: one oscillator pair is recalculated per call.
 static inline __attribute__((always_inline)) int16_t renderDroneFrame()
@@ -433,6 +448,19 @@ static inline __attribute__((always_inline)) uint8_t renderNormalBlock(
         morph | SYNTH_RENDER_CLEAR | (background ? SYNTH_RENDER_SPLIT : 0), dry);
     }
   }
+
+  // Open (0) counts as 256 here, so the filter fades in and out through its
+  // brightest setting. While it is open, the state follows the bus.
+  uint8_t coefficient = busFilterCoefficient;
+  const uint8_t target = busFilterTarget;
+  if (coefficient != target) {
+    uint16_t current = coefficient ? coefficient : 256;
+    if ((target ? target : 256) > current) ++current; else --current;
+    coefficient = current;
+    busFilterCoefficient = coefficient;
+  }
+  if (coefficient) synthFilterBlock(busQ7, coefficient);
+  else busFilterState = busQ7[SYNTH_BLOCK_SAMPLES - 1];
 
   uint8_t flags = background ? SYNTH_FINISH_DRY : 0;
   if (playVcaGain < 256) flags |= SYNTH_FINISH_VCA;
@@ -971,8 +999,17 @@ class synth
       }
     }
 
-    // While PLAY's background sequence runs, voice 0 bypasses morph, VCA,
-    // and chorus; otherwise it is mixed like voices 1-3.
+    // Sets the bus low-pass coefficient k (y += (x - y) * k / 256; 0 is
+    // open). The renderer slews toward it, so changes are click-free.
+    void setBusFilter(uint8_t coefficient)
+    {
+      ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        busFilterTarget = coefficient;
+      }
+    }
+
+    // While PLAY's background sequence runs, voice 0 bypasses morph, filter,
+    // VCA, and chorus; otherwise it is mixed like voices 1-3.
     void setVoiceZeroBackground(bool background)
     {
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
@@ -988,6 +1025,8 @@ class synth
           chorusActive = false;
           chorusLfoFTW = 0;
         }
+        // The drone mix is unfiltered; leaving it, the filter fades in again.
+        busFilterCoefficient = 0;
         droneMixPair = 0;
         for (uint8_t pair = 0; pair < SYNTH_DRONE_COUNT / 2; ++pair) {
           dronePairMixQ7[pair] = 0;

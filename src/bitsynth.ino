@@ -44,6 +44,8 @@ const uint16_t kLfoFrequencyMinHundredths = 5;
 const uint16_t kLfoFrequencyMaxHundredths = 2000;
 const uint8_t kLfoRateCount = 94;
 const uint8_t kPresetVcaModulationCount = 99;
+// Filter cutoff control value that leaves the bus low-pass open.
+const uint8_t kFilterOpen = 127;
 
 enum InstrumentMode : uint8_t { MODE_SEQ = 0, MODE_PLAY = 1, MODE_DRONE = 2 };
 enum ScaleMode : uint8_t { SCALE_MAJOR = 0, SCALE_MINOR = 1, SCALE_PENTATONIC = 2, SCALE_BLUES = 3 };
@@ -56,7 +58,7 @@ enum MacroParam : uint8_t {
   MACRO_NONE = 0, MACRO_PULSE_WIDTH, MACRO_VIBRATO,
   MACRO_DRUM_TUNE, MACRO_DRUM_DECAY, MACRO_VCA_DEPTH, MACRO_VCA_RATE,
   MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH, MACRO_GLIDE, MACRO_CHORUS,
-  MACRO_MORPH
+  MACRO_MORPH, MACRO_FILTER
 };
 
 enum ParameterControl : uint8_t {
@@ -87,6 +89,7 @@ struct MelodicPreset {
   uint8_t vcaModulation;
   uint8_t chorusMode;
   uint8_t morphSpeed;
+  uint8_t filterCutoff;
   uint8_t macros[4];
   uint8_t lfoTargets[2];
   uint8_t level;
@@ -112,31 +115,32 @@ struct AnalogMotionState {
 
 // label, voice count, voices {wave, detune cents, envelope, modulation} x4,
 // envelope length, square pulse width, glide, PLAY VCA depth, PLAY VCA LFO rate,
-// chorus mode, morph speed, direct macros x4, LFO targets x2, output level
+// chorus mode, morph speed, filter cutoff (0 about 100 Hz - 126 about 7.7 kHz,
+// 127 open), direct macros x4, LFO targets x2, output level
 // (255 keeps the automatic level; lower values only attenuate the preset)
 // Available macros: MACRO_NONE, MACRO_PULSE_WIDTH, MACRO_VIBRATO,
 // MACRO_DRUM_TUNE, MACRO_DRUM_DECAY, MACRO_VCA_DEPTH, MACRO_VCA_RATE,
 // MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH, MACRO_GLIDE, MACRO_CHORUS,
-// MACRO_MORPH.
+// MACRO_MORPH, MACRO_FILTER.
 const MelodicPreset kMelodicPresets[] PROGMEM = {
-  {"GLA", 2, {{SAW, 0, ENVELOPE3, 64}, {TRIANGLE, 0, ENVELOPE3, 64}, {SAW, 0, ENVELOPE3, 64}, {TRIANGLE, 0, ENVELOPE3, 64}}, 127, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"TRI", 1, {{TRIANGLE, 0, ENVELOPE3, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 96, 0, 64}}, 127, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_MORPH, MACRO_CHORUS, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_VIBRATO, MACRO_NONE}, 255},
-  {"FLY", 1, {{SAW, 0, ENVELOPE3, 69}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}, {SINE, 0, 0, 64}}, 127, 50, 17, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"SQR", 1, {{SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, 0, 64}, {SQUARE, 0, 0, 64}, {SINE, 0, 0, 64}}, 96, 35, 0, 256, 68, SYNTH_CHORUS_OFF, 0, {MACRO_PULSE_WIDTH, MACRO_MORPH, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_VIBRATO, MACRO_NONE}, 255},
-  {"NSE", 1, {{NOISE, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 96, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_MORPH, MACRO_CHORUS, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"SUB", 2, {{SINE, 0, ENVELOPE0, 64}, {SQUARE, -12, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"BA1", 2, {{SAW, 0, ENVELOPE1, 64}, {SQUARE, -12, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"PLK", 2, {{TRIANGLE, 0, ENVELOPE1, 64}, {SQUARE, 12, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"BEL", 3, {{SINE, 0, ENVELOPE2, 64}, {SINE, 12, ENVELOPE2, 64}, {TRIANGLE, 19, ENVELOPE2, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"LED", 2, {{SAW, 0, ENVELOPE0, 64}, {SAW, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"HYS", 4, {{SAW, -18, ENVELOPE3, 62}, {SAW, -6, ENVELOPE3, 63}, {SAW, 6, ENVELOPE3, 65}, {SAW, 18, ENVELOPE3, 66}}, 127, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"PUR", 3, {{SINE, 0, ENVELOPE3, 64}, {SINE, 0, ENVELOPE3, 64}, {SINE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}}, 116, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"SOF", 3, {{SINE, 0, ENVELOPE0, 64}, {SINE, 0, ENVELOPE0, 64}, {SINE, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"KEY", 3, {{TRIANGLE, 0, ENVELOPE2, 64}, {TRIANGLE, 0, ENVELOPE2, 64}, {TRIANGLE, 0, ENVELOPE2, 64}, {SINE, 0, 0, 64}}, 82, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"PLK", 3, {{SQUARE, 0, ENVELOPE1, 64}, {SQUARE, 0, ENVELOPE1, 64}, {SQUARE, 0, ENVELOPE1, 64}, {SINE, 0, 0, 64}}, 46, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"BA2", 3, {{SAW, 0, ENVELOPE0, 58}, {SAW, 0, ENVELOPE0, 58}, {SAW, 0, ENVELOPE0, 58}, {SINE, 0, 0, 64}}, 92, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"UNI", 3, {{SAW, -9, ENVELOPE3, 64}, {SAW, 0, ENVELOPE3, 64}, {SAW, 9, ENVELOPE3, 64}, {SINE, 0, 0, 64}}, 127, 50, 12, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"ORG", 3, {{SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}}, 116, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255}
+  {"GLA", 2, {{SAW, 0, ENVELOPE3, 64}, {TRIANGLE, 0, ENVELOPE3, 64}, {SAW, 0, ENVELOPE3, 64}, {TRIANGLE, 0, ENVELOPE3, 64}}, 127, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"TRI", 1, {{TRIANGLE, 0, ENVELOPE3, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 96, 0, 64}}, 127, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_MORPH, MACRO_CHORUS, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_VIBRATO, MACRO_NONE}, 255},
+  {"FLY", 1, {{SAW, 0, ENVELOPE3, 69}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}, {SINE, 0, 0, 64}}, 127, 50, 17, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"SQR", 1, {{SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, 0, 64}, {SQUARE, 0, 0, 64}, {SINE, 0, 0, 64}}, 96, 35, 0, 256, 68, SYNTH_CHORUS_OFF, 0, 127, {MACRO_PULSE_WIDTH, MACRO_MORPH, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_VIBRATO, MACRO_NONE}, 255},
+  {"NSE", 1, {{NOISE, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 96, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_MORPH, MACRO_CHORUS, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"SUB", 2, {{SINE, 0, ENVELOPE0, 64}, {SQUARE, -12, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"BA1", 2, {{SAW, 0, ENVELOPE1, 64}, {SQUARE, -12, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"PLK", 2, {{TRIANGLE, 0, ENVELOPE1, 64}, {SQUARE, 12, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"BEL", 3, {{SINE, 0, ENVELOPE2, 64}, {SINE, 12, ENVELOPE2, 64}, {TRIANGLE, 19, ENVELOPE2, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"LED", 2, {{SAW, 0, ENVELOPE0, 64}, {SAW, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_FILTER, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"HYS", 4, {{SAW, -18, ENVELOPE3, 62}, {SAW, -6, ENVELOPE3, 63}, {SAW, 6, ENVELOPE3, 65}, {SAW, 18, ENVELOPE3, 66}}, 127, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_FILTER, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"PUR", 3, {{SINE, 0, ENVELOPE3, 64}, {SINE, 0, ENVELOPE3, 64}, {SINE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}}, 116, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"SOF", 3, {{SINE, 0, ENVELOPE0, 64}, {SINE, 0, ENVELOPE0, 64}, {SINE, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"KEY", 3, {{TRIANGLE, 0, ENVELOPE2, 64}, {TRIANGLE, 0, ENVELOPE2, 64}, {TRIANGLE, 0, ENVELOPE2, 64}, {SINE, 0, 0, 64}}, 82, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"PLK", 3, {{SQUARE, 0, ENVELOPE1, 64}, {SQUARE, 0, ENVELOPE1, 64}, {SQUARE, 0, ENVELOPE1, 64}, {SINE, 0, 0, 64}}, 46, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"BA2", 3, {{SAW, 0, ENVELOPE0, 58}, {SAW, 0, ENVELOPE0, 58}, {SAW, 0, ENVELOPE0, 58}, {SINE, 0, 0, 64}}, 92, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_FILTER, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"UNI", 3, {{SAW, -9, ENVELOPE3, 64}, {SAW, 0, ENVELOPE3, 64}, {SAW, 9, ENVELOPE3, 64}, {SINE, 0, 0, 64}}, 127, 50, 12, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_FILTER, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
+  {"ORG", 3, {{SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}}, 116, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255}
 };
 
 const DrumPreset kDrumPreset PROGMEM =
@@ -418,7 +422,8 @@ uint16_t macroMaximum(uint8_t parameter) {
     case MACRO_GLIDE: return 127;
     case MACRO_VCA_DEPTH: return 256;
     case MACRO_VCA_RATE: return kPresetVcaModulationCount - 1;
-    case MACRO_MORPH: return 127;
+    case MACRO_MORPH:
+    case MACRO_FILTER: return 127;
     case MACRO_CHORUS: return SYNTH_CHORUS_2;
     default: return 0;
   }
@@ -459,6 +464,7 @@ uint16_t macroValueForRaw(uint8_t parameter, uint16_t raw) {
     case MACRO_CHORUS: return mapIndexHysteresis(raw,
       activeMacroValue(parameter, SYNTH_CHORUS_OFF), SYNTH_CHORUS_2 + 1);
     case MACRO_MORPH: return mapByteHysteresis(raw, activeMacroValue(parameter, 0), 127, 0);
+    case MACRO_FILTER: return mapByteHysteresis(raw, activeMacroValue(parameter, kFilterOpen), 127, 0);
     default: return 0;
   }
 }
@@ -473,13 +479,34 @@ const uint8_t kEnvelopeLengthRateAnchors[] PROGMEM = {33, 22, 15, 10, 7, 5, 3, 2
 // cutting held notes off with the shortest one.
 const uint8_t kEnvelopeHoldControl = 127;
 
+// Interpolates a descending nine-anchor flash table at index 0-127.
+uint8_t descendingAnchorValue(const uint8_t *anchors, uint8_t index) {
+  const uint8_t segment = index >> 4;
+  const uint8_t fraction = index & 0x0F;
+  const uint8_t start = pgm_read_byte(&anchors[segment]);
+  const uint8_t end = pgm_read_byte(&anchors[segment + 1]);
+  return start - (((uint16_t)(start - end) * fraction + 8) >> 4);
+}
+
 uint8_t envelopeRateForControl(uint8_t control) {
   if (control >= kEnvelopeHoldControl) return 0;
-  const uint8_t segment = control >> 4;
-  const uint8_t fraction = control & 0x0F;
-  const uint8_t start = pgm_read_byte(&kEnvelopeLengthRateAnchors[segment]);
-  const uint8_t end = pgm_read_byte(&kEnvelopeLengthRateAnchors[segment + 1]);
-  return start - (((uint16_t)(start - end) * fraction + 8) >> 4);
+  return descendingAnchorValue(kEnvelopeLengthRateAnchors, control);
+}
+
+// Bus low-pass coefficients k = 256 * (1 - exp(-2 pi fc / 20 kHz)) for an
+// exponential 8 kHz-100 Hz cutoff sweep. Control 0-126 reads them in reverse,
+// so higher values are brighter (about 101 Hz-7.7 kHz); 127 is open.
+const uint8_t kFilterCoefficientAnchors[] PROGMEM = {235, 196, 146, 99, 63, 38, 23, 14, 8};
+
+void applyCurrentProgramFilter() {
+  const uint8_t programId = macroProgramId();
+  uint8_t cutoff = kFilterOpen;
+  if (!isDrumProgram(programId)) {
+    MelodicPreset preset; readMelodicPreset(programId, preset);
+    cutoff = lfoModulatedMacroValue(MACRO_FILTER, preset.filterCutoff);
+  }
+  edgar.setBusFilter(cutoff >= kFilterOpen ? 0 :
+    descendingAnchorValue(kFilterCoefficientAnchors, kFilterOpen - cutoff));
 }
 
 uint8_t envelopeLengthIndexForRate(uint8_t rate) {
@@ -545,7 +572,8 @@ void showParameterEdit(uint8_t slot, unsigned long now) {
   displayDirty = true;
 }
 
-void applyCurrentProgramChorus() {
+void applyCurrentProgramBusEffects() {
+  applyCurrentProgramFilter();
   const uint8_t programId = macroProgramId();
   if (isDrumProgram(programId)) { edgar.configureChorus(SYNTH_CHORUS_OFF); return; }
   MelodicPreset preset; readMelodicPreset(programId, preset);
@@ -590,6 +618,8 @@ void applyMacroValue(uint8_t slot, uint8_t displaySlot, uint16_t raw, unsigned l
     edgar.configureChorus(next);
   } else if (parameter == MACRO_MORPH) {
     applyCurrentProgramMorph();
+  } else if (parameter == MACRO_FILTER) {
+    applyCurrentProgramFilter();
   } else if (parameter == MACRO_VCA_DEPTH || parameter == MACRO_VCA_RATE) {
     edgar.configurePlayVca(lfoModulatedMacroValue(MACRO_VCA_DEPTH, 0),
       presetVcaRateHundredths((uint8_t)lfoModulatedMacroValue(MACRO_VCA_RATE, 0)));
@@ -641,9 +671,10 @@ void loadProgramMacroDefaults(uint8_t programId) {
       if (preset.macros[slot] == MACRO_GLIDE) macroState->values[slot] = preset.glide;
       if (preset.macros[slot] == MACRO_CHORUS) macroState->values[slot] = preset.chorusMode;
       if (preset.macros[slot] == MACRO_MORPH) macroState->values[slot] = preset.morphSpeed;
+      if (preset.macros[slot] == MACRO_FILTER) macroState->values[slot] = preset.filterCutoff;
     }
   }
-  applyCurrentProgramChorus();
+  applyCurrentProgramBusEffects();
   applyCurrentProgramMorph();
 }
 
@@ -667,6 +698,8 @@ void updateMacroLfos(unsigned long now) {
     } else if (target == MACRO_VCA_DEPTH || target == MACRO_VCA_RATE) {
       edgar.configurePlayVca(lfoModulatedMacroValue(MACRO_VCA_DEPTH, 0),
         presetVcaRateHundredths((uint8_t)lfoModulatedMacroValue(MACRO_VCA_RATE, 0)));
+    } else if (target == MACRO_FILTER) {
+      applyCurrentProgramFilter();
     }
   }
 }
@@ -1146,7 +1179,7 @@ void changeMode(InstrumentMode nextMode, unsigned long now) {
     arpTick = playingStep < kStepCount ? playingStep * 6 : 0;
     applyLiveConfiguration();
   } else {
-    applyCurrentProgramChorus();
+    applyCurrentProgramBusEffects();
     applyCurrentProgramMorph();
     if (previous == MODE_DRONE) {
       currentStep = 0;
@@ -1307,7 +1340,7 @@ void runArpeggio(unsigned long now) {
 
 void applyLiveConfiguration() {
   MelodicPreset preset; readMelodicPreset(playProgramId(), preset);
-  applyCurrentProgramChorus();
+  applyCurrentProgramBusEffects();
   const uint16_t pulseWidth = pulseWidthForPercent(lfoModulatedMacroValue(MACRO_PULSE_WIDTH, preset.squarePulseWidthPercent));
   uint8_t envelope, envelopeLength;
   presetEnvelope(preset, envelope, envelopeLength);
@@ -1601,6 +1634,7 @@ void frameMacroName(uint8_t column, uint8_t parameter) {
     case MACRO_GLIDE: frameText(0, column, F("GLD")); break;
     case MACRO_CHORUS: frameText(0, column, F("CHR")); break;
     case MACRO_MORPH: frameText(0, column, F("MOR")); break;
+    case MACRO_FILTER: frameText(0, column, F("FLT")); break;
     default: frameText(0, column, F("---")); break;
   }
 }

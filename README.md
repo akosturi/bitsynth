@@ -152,7 +152,8 @@ SEQ contains `GLA`, `TRI`, `FLY`, `SQR`, `DRM`, `NSE`, `SUB`, `BA1`, `PLK`,
 `BEL`, `LED`, `HYS`, `PUR`, `SOF`, `KEY`, `PLK`, `BA2`, `UNI`, and `ORG`.
 PLAY contains the same melodic programs but omits `DRM`. The restored programs
 retain their stored voice recipes, envelopes, lengths, modulation, and detune
-values; their macro and LFO assignments are intentionally empty. The PCM `DRM`
+values; apart from the `FLT` macro on `LED`, `HYS`, `BA2`, and `UNI`, their
+macro and LFO assignments are intentionally empty. The PCM `DRM`
 program has its own compact data instead of unused oscillator fields.
 
 Melodic programs retain their stored PLAY VCA depth and rate. `MOR` is the
@@ -191,6 +192,17 @@ background sequence. `0` is off, `1` is chorus 1, and `2` is chorus 2. Both mode
 20 kHz delay line swept by a triangle LFO from 1.66 to 5.35 ms, with no
 feedback and a 50% wet mix. Chorus 1 runs at 0.513 Hz and chorus 2 at 0.863
 Hz. DRONE bypasses the effect.
+
+Each melodic preset also stores a low-pass filter cutoff (`0-127`), and `FLT`
+adjusts it as a direct macro. It is a simple one-pole, 6 dB/octave filter
+without resonance, placed before the PLAY VCA and the chorus on the same
+signal path: in SEQ it filters the normal mix, in PLAY the live voices, while
+the background sequence's voice 0 stays dry. `0-126` sweep exponentially from
+about 100 Hz to 7.7 kHz, and `127` leaves the filter open. Every supplied
+preset stores `127`, so none of them sounds different by default. Cutoff
+changes glide over at most about 0.1 s, so moving the control or switching
+presets does not click; very fast, deep LFO sweeps are smoothed by the same
+limit. The filter cannot raise the mix level. `DRM` and DRONE bypass it.
 
 #### DRUM preset
 
@@ -262,8 +274,8 @@ second supplies pair 2. Their LCD rate values are steps 1-94, corresponding to
 the same 0.05-20 Hz range as DRONE.
 Macro LFOs are resolved outside the audio interrupt;
 the ISR receives only the resulting engine values. An LFO may target any
-numeric macro declared by its program (`PWM`, `VIB`, `TUN`, `DEC`, `VCD`, or
-`VCR`); depth sets a centred triangle sweep, with 127 spanning that parameter's
+numeric macro declared by its program (`PWM`, `VIB`, `TUN`, `DEC`, `VCD`,
+`VCR`, or `FLT`); depth sets a centred triangle sweep, with 127 spanning that parameter's
 complete valid range before clamping. Drum tune and decay are resolved when a
 new hit starts. The melodic programs also expose `ENV` and `LEN` direct macros
 for selecting one of the six envelopes and its playback speed. `CHR` is a
@@ -314,10 +326,11 @@ On Windows, set `RAW_TO_H_OUTPUT_BITS` to `9` near the top of `util/raw_to_h.bat
 ## Architecture and critical implementation details
 
 - **Real-time audio:** Timer2 compare A interrupts at 20 kHz and only writes the next sample from a 16-sample ring to Timer1, which generates 9-bit Fast PWM on `D9` at 31.25 kHz. After each eight-sample half has played, compare A enables Timer2 compare B, which re-enables interrupts and renders that half while the other plays, so output timing stays exact. Per-block work is shared by eight samples, adding 0.4-0.8 ms of output latency. Voices are rendered in two four-sample sub-blocks, each preceded by the envelope and vibrato update, keeping the 5 kHz per-voice control rate.
-- **Assembly renderer:** `src/synth_voices.S` holds the hot paths: voice blocks (wavetable, square, noise, and the two-source morph), drum playback, the chorus, the VCA, and the dithered quantizer. Each step is bit-exact with the C formulas documented in `src/synth.h`.
+- **Assembly renderer:** `src/synth_voices.S` holds the hot paths: voice blocks (wavetable, square, noise, and the two-source morph), drum playback, the low-pass filter, the chorus, the VCA, and the dithered quantizer. Each step is bit-exact with the C formulas documented in `src/synth.h`.
 - **Synthesis:** 256-sample wavetables, phase accumulators, four envelope-driven normal voices, and a separate eight-oscillator drone path. Core tables and drum data live in flash.
 - **Resource-aware mixing:** the drone engine recalculates one oscillator pair per output sample. Each pair is therefore updated at 5 kHz while the PWM output remains at 20 kHz. This is an intentional quality/CPU trade-off for the 80-600 Hz range.
 - **Chorus:** the macro-controlled post-mix effect uses a 108-sample, 16-bit delay line in SRAM and audio-rate fractional interpolation. DRONE bypasses it.
+- **Low-pass filter:** a one-pole filter with a 16-bit state and an 8-bit coefficient runs over each eight-sample block, before the VCA and the chorus, at about 33 cycles per sample. When it is open, it costs nothing and its state follows the mix, so it engages without a step. The coefficient moves one step per block toward its target.
 - **PWM quality:** the internal mix uses additional fixed-point precision before conversion to 9-bit PWM, with quantization-error feedback and dither where appropriate.
 - **Output level:** each voice's envelope is scaled by its level at the 5 kHz control rate, so it costs no per-sample work. The levels of all voices that can sound together never exceed the mix's full scale, which keeps the summed bus inside the PWM range without a limiter or clipping stage.
 - **Stable controls:** multiplexed analog inputs use settling reads, median sampling, smoothing, movement confirmation, and hysteresis. Buttons are debounced in software.
