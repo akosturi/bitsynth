@@ -2,7 +2,7 @@
 
 BitSynth is a compact, three-mode wavetable synthesizer and eight-step sequencer for a 16 MHz ATmega328P. It is a reimagining of a project I first built about ten years ago: the goal is to keep the deliberately limited hardware, but extract as much musical range and usability from it as possible.
 
-The same firmware runs on the physical instrument and in the browser simulator. It provides an eight-step sequencer, scale-quantized live playing, an eight-oscillator drone engine, PCM drums, a 16x2 LCD interface, and 9-bit PWM audio output.
+The same firmware runs on the physical instrument and in the browser simulator. It provides an eight-step sequencer with optional generative variation, scale-quantized live playing, an eight-oscillator drone engine, PCM drums, a 16x2 LCD interface, and 9-bit PWM audio output.
 
 ## Current targets
 
@@ -65,7 +65,7 @@ Simulator controls:
 
 - Drag a knob vertically, or place the pointer over it and use the mouse wheel.
 - Hold keys `1`-`8` for the eight step buttons.
-- Tap `M` to change a SEQ/PLAY parameter page; double-tap it to change mode.
+- Tap `M` to change a SEQ/PLAY parameter page; double-tap it to change mode. Hold `M` with `1` or `8` for the MODE + step-button combinations.
 - Every knob and button is also usable with the pointer.
 
 The simulator models the real 9-bit, 31.25 kHz PWM signal and the documented passive output filter, not just the synth's digital sample stream. Firmware execution, LCD output, multiplexed controls, audio generation, and filtering all run in the browser.
@@ -119,13 +119,15 @@ SEQ -> PLAY -> DRONE -> SEQ
 ```
 
 Holding **MODE** by itself does nothing. It remains a modifier for the documented
-MODE combinations, including PLAY's MODE + step button 1 background-sequence toggle.
+MODE combinations, including PLAY's MODE + step button 1 background-sequence toggle
+and the SEQ/PLAY MODE + step button 8 `GEN` toggle.
 
 There is no PANIC gesture. Each new SEQ/PLAY page uses soft takeover, so pots
 must move away from their position at the page change before they take effect.
 In DRONE, hold **MODE** while turning a parameter pot to set that oscillator
 pair's VCA-LFO rate. In PLAY, hold **MODE** and press step button 1 to toggle
-the background sequence; either MODE combination does not count as a tap gesture.
+the background sequence. In SEQ and PLAY, hold **MODE** and press step button 8
+to toggle `GEN`. None of these MODE combinations counts as a tap gesture.
 
 ### SEQ - eight-step sequencer
 
@@ -140,13 +142,25 @@ do not click.
 | Step buttons 1-8 | Toggle the corresponding step on or off |
 
 SEQ packs its available parameters left-to-right into pages of four: program,
-tempo (60-220 BPM), then the selected program's direct macros and LFO
+tempo (60-190 BPM at 1 BPM resolution), then the selected program's direct macros and LFO
 rate/depth pairs. `DRM` additionally exposes playback tuning after tempo; it
 does not appear for melodic programs. Empty macro and LFO slots are skipped,
 so no completely empty parameter page is shown. The `DRM` direct macro is
 `DEC` (decay).
 
-The LCD's upper row shows the selected control page's parameter names and briefly shows values when they change. The lower row shows the gate pattern: `x` is an enabled step, `-` is disabled, and `O`/`o` marks the current enabled/disabled step. Turning a step pot briefly shows its step number and note name, or drum name in `DRM`, at the lower right.
+The LCD's upper row shows the selected control page's parameter names, except program and tempo, which always show the selected program and BPM value, and briefly (about 1.5 s) shows values when they change. The lower row shows the gate pattern: `x` is an enabled step, `-` is disabled, and `O`/`o` marks the current enabled/disabled step. Turning a step pot briefly shows its step number and note name, or drum name in `DRM`, at the lower right. A `×` after the gate pattern shows that `GEN` is on.
+
+#### GEN - generative variation
+
+`GEN` slowly varies the melody of a melodic sequence while it runs, including
+as PLAY's background sequence. It has no parameters; MODE + step button 8
+switches it on or off. At the start of every eight-step cycle, it may change
+at most one step: that step takes the note of another enabled step, moves an
+octave up or back, or returns to its own note. Step 1 never changes, gates and
+rhythm are untouched, and only notes already in enabled steps are used, so the
+sequence keeps its pitch classes and key. Turning a step pot returns that step
+to its own note. Switching `GEN` on or off restores the programmed sequence.
+`DRM` is unaffected.
 
 SEQ contains `GLA`, `TRI`, `FLY`, `SQR`, `DRM`, `NSE`, `SUB`, `BA1`, `PLK`,
 `BEL`, `LED`, `HYS`, `PUR`, `SOF`, `KEY`, `PLK`, `BA2`, `UNI`, and `ORG`.
@@ -180,9 +194,10 @@ clip. In SEQ, one-voice presets and `DRM` therefore play at full scale,
 two-voice presets at half per voice, three-voice presets at one third, and
 four-voice presets at one quarter. In PLAY, a running background sequence
 keeps one quarter and the live voices share the rest: single-voice `POLY`
-uses one quarter per note, a unison stack and `CHRD` divide their share by
-their voice count, and the monophonic arpeggios use the whole share (full
-scale, or three quarters with the background sequence running). Each melodic preset and the `DRM`
+uses one quarter per note, a unison stack (in `POLY` or an arpeggio) and
+`CHRD` divide their share by their voice count, and single-voice arpeggios
+use the whole share (full scale, or three quarters with the background
+sequence running). Each melodic preset and the `DRM`
 program also store a level (`0-255`) that only attenuates this automatic
 level; every supplied program uses `255`, the full automatic level.
 
@@ -219,11 +234,11 @@ PLAY reserves voice 0 for the monophonic background sequence and uses voices
 |---|---|
 | Parameter pots 1-4 | The four parameters on the selected control page |
 | Step pot 1 | Octave range, O1-O5 (C1-C5) |
-| Step pot 2 | Background-sequence and arpeggio tempo, 60-220 BPM; shared with SEQ, so it takes effect only after moving once PLAY is entered |
+| Step pot 2 | Background-sequence and arpeggio tempo, 60-190 BPM; shared with SEQ, so it takes effect only after moving once PLAY is entered |
 | Step pot 3 | Arpeggio division: `1/2`, `1/4`, `1/4t`, `1/8`, `1/8t`, `1/16`, `1/16t`, `1/32` |
 | Step pot 4 | Unused |
 | Step pots 5-8 | Unused |
-| Step buttons 1-8 | Consecutive notes of the selected scale |
+| Step buttons 1-8 | Consecutive notes of the selected scale; MODE + button 1 toggles the background sequence, MODE + button 8 toggles `GEN` |
 
 PLAY packs program, root note, scale, style, then its available direct macros
 and LFO rate/depth pairs into four-control pages; empty slots are skipped.
@@ -234,8 +249,9 @@ Each PLAY program is melodic. Each voice recipe stores a signed
 value from 1 to 1199 as well as semitone or octave intervals. In `POLY`, a
 multi-voice preset is played as a single detuned unison stack with each
 recipe's waveform, detune, and modulation, using up to four oscillators (or
-three with the background sequence running). Single-voice
-presets retain note polyphony. `CHRD` uses only the first voice recipe.
+three with the background sequence running). The arpeggio styles play each
+arpeggio note as that same stack. Single-voice presets retain note polyphony
+in `POLY`. `CHRD` uses only the first voice recipe.
 
 Preset modulation is a fixed 5 Hz triangle vibrato. Its stored `MOD` value is
 neutral at 64; distance from 64 selects depth, so values above and below 64
@@ -264,11 +280,14 @@ path and does not consume a normal voice.
 Programs declare up to four direct macros and two optional LFO targets. SEQ
 and PLAY keep separate macro and LFO values for their selected programs, and
 PLAY's background sequence uses the SEQ program's values. The
-LCD's upper row shows the current page's four three-character parameter names.
-While a parameter is being adjusted, its field temporarily shows the value,
-then returns to its name. In SEQ, the lower row remains the step-gate view; in
-PLAY it shows background-sequence status (`*` running, blank off) in its first
-character, then octave, tempo, and arpeggio division. A macro slot without an
+LCD's upper row shows the current page's four three-character parameter names;
+program, tempo, and PLAY's root note, scale, and style, show their current
+values instead (for example `KEY C#  MIN UPDN`). While a parameter is being adjusted, its
+field shows the value for about 1.5 s, then returns to its name. In SEQ, the lower row remains the step-gate view; in
+PLAY it shows background-sequence status (`*` running, `×` running with
+`GEN`, blank off) in its first character, then octave, tempo, and arpeggio
+division. The HD44780 character ROM has no `×`, so it is a custom CGRAM
+character. A macro slot without an
 assigned parameter shows `---`. The first LFO supplies rate/depth pair 1; the
 second supplies pair 2. Their LCD rate values are steps 1-94, corresponding to
 the same 0.05-20 Hz range as DRONE.

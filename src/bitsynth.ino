@@ -35,7 +35,9 @@ const uint8_t kMuxSettleUs = 50;
 const uint8_t kButtonDebounceMs = 25;
 const uint16_t kModeDoubleTapMs = 350;
 const uint16_t kModeIgnoreHoldMs = 650;
-const uint16_t kEditViewMs = 900;
+const uint16_t kEditViewMs = 1500;
+const uint8_t kBpmMin = 60;
+const uint8_t kBpmMax = 190;
 const uint8_t kStepNoteMin = 36;
 const uint8_t kStepNoteMax = 59;
 const uint16_t kDroneFrequencyMin = 80;
@@ -227,11 +229,20 @@ uint8_t modeButtonReading = HIGH;
 unsigned long modeButtonChangedAt = 0;
 unsigned long modeButtonPressedAt = 0;
 bool modeButtonChordUsed = false;
-bool modeChordStepHeld = false;
+uint8_t modeChordStep = 255;
 bool modePageTapPending = false;
 bool modeDoubleTapArmed = false;
 unsigned long modePageTapAt = 0;
 bool playSequencerEnabled = true;
+// GEN plays each step from a source step (bits 0-2), optionally an octave up
+// (bit 7). The identity map is the programmed sequence.
+bool generativeEnabled = false;
+uint8_t genSource[kStepCount] = {0, 1, 2, 3, 4, 5, 6, 7};
+uint8_t genRandom = 1;
+// The HD44780 A00 ROM has no '×', so GEN uses CGRAM glyph 0, written as its
+// mirror code 8 so the LCD frame never contains a NUL.
+const char kGenChar = 8;
+const uint8_t kGenGlyph[8] PROGMEM = {0x00, 0x00, 0x0A, 0x04, 0x0A, 0x00, 0x00, 0x00};
 uint8_t parameterPage = 0;
 uint16_t parameterPageRaw[4] = {0, 0, 0, 0};
 bool parameterPageLocked[4] = {false, false, false, false};
@@ -728,6 +739,8 @@ void setup() {
   }
 
   lcd.begin(16, 2);
+  lcd.command(0x40);  // CGRAM glyph 0: the GEN '×'.
+  for (uint8_t row = 0; row < 8; ++row) lcd.write(pgm_read_byte(&kGenGlyph[row]));
   nextStepIntervalMs = 15000U / seqControls.bpm;
   lastStepMs = millis();
 }
@@ -816,25 +829,43 @@ uint16_t rawForMappedValue(int16_t value, int16_t outMin, int16_t outMax) {
   return constrain(map(value, outMin, outMax, 0, 1023), 0, 1023);
 }
 
+// Spreads the 959-count span between the endpoint margins over 0-1022 (x16/15
+// in 16 bits), so the margins do not swallow the values next to each endpoint.
+static_assert(kAnalogEndpointMargin == 32, "usableAnalogRaw scales the 959-count usable span");
+uint16_t usableAnalogRaw(uint16_t raw) {
+  return (uint16_t)((raw - kAnalogEndpointMargin) << 4) / 15U;
+}
+
 // Maps a control only after it clears the next value boundary and hysteresis.
 int16_t mapWithHysteresis(uint16_t raw, int16_t current, int16_t outMin, int16_t outMax) {
   const int16_t low = min(outMin, outMax);
   const int16_t high = max(outMin, outMax);
   if (raw <= kAnalogEndpointMargin) return outMin;
   if (raw >= 1023 - kAnalogEndpointMargin) return outMax;
+  raw = usableAnalogRaw(raw);
   const int16_t candidate = constrain(map(raw, 0, 1023, outMin, outMax), low, high);
   if (candidate == current) return current;
   const int16_t next = current + (candidate > current ? 1 : -1);
   const uint16_t currentRaw = rawForMappedValue(current, outMin, outMax);
   const uint16_t nextRaw = rawForMappedValue(next, outMin, outMax);
   const uint16_t boundary = (currentRaw + nextRaw) / 2;
-  if ((nextRaw > currentRaw && raw > boundary + kAnalogHysteresis) ||
-      (nextRaw < currentRaw && raw + kAnalogHysteresis < boundary)) return candidate;
-  return current;
+  const bool rising = nextRaw > currentRaw;
+  if (rising ? raw <= boundary + kAnalogHysteresis : raw + kAnalogHysteresis >= boundary) return current;
+  // Map the reading less the hysteresis, so a slow turn advances one value at a time.
+  const int16_t settled = constrain(map(rising ? raw - kAnalogHysteresis : raw + kAnalogHysteresis,
+                                        0, 1023, outMin, outMax), low, high);
+  return candidate > current ? max(settled, next) : min(settled, next);
 }
 
 uint8_t mapByteHysteresis(uint16_t raw, uint8_t current, int16_t outMin, int16_t outMax) {
   return (uint8_t)mapWithHysteresis(raw, current, outMin, outMax);
+}
+
+// raw and count are 16-bit on the ATmega328P.  Keep this product wide: the
+// LFO's 94 bins otherwise overflow above roughly two thirds of the pot,
+// making its 0.05-0.20 Hz range unreachable.
+uint8_t reversedIndexForRaw(uint16_t raw, uint8_t count) {
+  return count - 1 - min((uint8_t)(((uint32_t)raw * count) >> 10), (uint8_t)(count - 1));
 }
 
 // Maps a reversed control to a stable discrete index.
@@ -842,22 +873,21 @@ uint8_t mapIndexHysteresis(uint16_t raw, uint8_t current, uint8_t count) {
   if (count <= 1) return 0;
   if (raw <= kAnalogEndpointMargin) return count - 1;
   if (raw >= 1023 - kAnalogEndpointMargin) return 0;
+  raw = usableAnalogRaw(raw);
 
-  // raw and count are 16-bit on the ATmega328P.  Keep this product wide: the
-  // LFO's 94 bins otherwise overflow above roughly two thirds of the pot,
-  // making its 0.05-0.20 Hz range unreachable.
-  const uint8_t forwardBin = min((uint8_t)(((uint32_t)raw * count) >> 10), (uint8_t)(count - 1));
-  const uint8_t candidate = count - 1 - forwardBin;
+  const uint8_t candidate = reversedIndexForRaw(raw, count);
   if (current >= count || candidate == current) return candidate;
 
+  // Once past the boundary and hysteresis, map the reading less the
+  // hysteresis, so a slow turn advances one index at a time.
   if (candidate < current) {
     const uint16_t boundary = ((uint16_t)(count - current) << 10) / count;
-    if (raw > boundary + kAnalogHysteresis) return candidate;
-  } else {
-    const uint16_t boundary = ((uint16_t)(count - 1 - current) << 10) / count;
-    if (raw + kAnalogHysteresis < boundary) return candidate;
+    if (raw <= boundary + kAnalogHysteresis) return current;
+    return min(reversedIndexForRaw(raw - kAnalogHysteresis, count), (uint8_t)(current - 1));
   }
-  return current;
+  const uint16_t boundary = ((uint16_t)(count - 1 - current) << 10) / count;
+  if (raw + kAnalogHysteresis >= boundary) return current;
+  return max(reversedIndexForRaw(raw + kAnalogHysteresis, count), (uint8_t)(current + 1));
 }
 
 void revoiceHeldButtons();
@@ -890,7 +920,7 @@ void applyParameterControl(uint8_t control, uint8_t pot, uint16_t raw, unsigned 
       }
       break;
     case PARAM_SEQ_BPM:
-      next = mapByteHysteresis(raw, seqControls.bpm, 220, 60);
+      next = mapByteHysteresis(raw, seqControls.bpm, kBpmMax, kBpmMin);
       if (next != seqControls.bpm) { seqControls.bpm = next; showParameterEdit(pot, now); }
       break;
     case PARAM_SEQ_TUNE:
@@ -993,7 +1023,7 @@ void readSequencerStepPot(uint8_t step, unsigned long now) {
         : mapByteHysteresis(raw, current, kStepNoteMax, kStepNoteMin));
   if (next != current) {
     if (drumMode) stepDrums[step] = next;
-    else stepNotes[step] = next;
+    else { stepNotes[step] = next; genSource[step] = step; }
     editedStep = step;
     editedPlayShift = 0;
     editedDrone = 255;
@@ -1015,7 +1045,7 @@ void readPlayStepPot(uint8_t step, unsigned long now) {
       if (abs((int16_t)raw - (int16_t)playBpmPotRaw) < kStepMovementThreshold) return;
       playBpmPotLocked = false;
     }
-    const uint8_t next = mapByteHysteresis(raw, seqControls.bpm, 220, 60);
+    const uint8_t next = mapByteHysteresis(raw, seqControls.bpm, kBpmMax, kBpmMin);
     if (next != seqControls.bpm) { seqControls.bpm = next; displayDirty = true; }
   } else if (step == 2) {
     const uint8_t next = mapIndexHysteresis(raw, playControls.arpDivision, kArpDivisionCount);
@@ -1108,18 +1138,27 @@ void scanStepButtons(unsigned long now) {
 
 // Routes step buttons to gates, drone toggles, or live notes by mode.
 void handleStepButton(uint8_t button, bool pressed) {
-  if (button == 0 && modeChordStepHeld) {
-    if (!pressed) modeChordStepHeld = false;
+  if (button == modeChordStep) {
+    if (!pressed) modeChordStep = 255;
     return;
   }
-  if (instrumentMode == MODE_PLAY && button == 0 && pressed && modeButtonStable == LOW) {
-    playSequencerEnabled = !playSequencerEnabled;
-    edgar.setVoiceZeroBackground(playSequencerEnabled);
+  // MODE + step 8 toggles GEN in SEQ and PLAY; MODE + step 1 toggles PLAY's
+  // background sequence. The chord button's release is swallowed.
+  if (pressed && modeButtonStable == LOW && instrumentMode != MODE_DRONE &&
+      (button == 7 || (button == 0 && instrumentMode == MODE_PLAY))) {
     modeButtonChordUsed = true;
-    modeChordStepHeld = true;
+    modeChordStep = button;
     modePageTapPending = false;
-    stopNormalVoice(0); edgar.stopDrum();
-    revoiceHeldButtons();
+    if (button == 7) {
+      generativeEnabled = !generativeEnabled;
+      for (uint8_t step = 0; step < kStepCount; ++step) genSource[step] = step;
+      genRandom = (genRandom ^ TCNT0) | 1;
+    } else {
+      playSequencerEnabled = !playSequencerEnabled;
+      edgar.setVoiceZeroBackground(playSequencerEnabled);
+      stopNormalVoice(0); edgar.stopDrum();
+      revoiceHeldButtons();
+    }
     displayDirty = true;
     return;
   }
@@ -1293,7 +1332,30 @@ void triggerDrum(uint8_t drum, bool backgroundOnly) {
 
 void triggerSequencerStep(uint8_t step, bool backgroundOnly) {
   if (isDrumProgram(seqControls.preset)) triggerDrum(stepDrums[step], backgroundOnly);
-  else triggerSequencerNote(stepNotes[step], backgroundOnly);
+  else {
+    const uint8_t source = genSource[step];
+    triggerSequencerNote(stepNotes[source & 7] + (source & 0x80 ? 12 : 0), backgroundOnly);
+  }
+}
+
+uint8_t nextGenRandom() {
+  genRandom ^= genRandom << 7; genRandom ^= genRandom >> 5; genRandom ^= genRandom << 3;
+  return genRandom;
+}
+
+// GEN changes at most one step per eight-step cycle, using only gated steps'
+// own notes and octaves, so the pitch-class set and rhythm stay as programmed.
+// Step 1 never changes and anchors the key; reverts pull the line back home.
+void mutateGenerativeSteps() {
+  const uint8_t roll = nextGenRandom();
+  const uint8_t step = roll & 7;
+  const uint8_t action = roll >> 5;
+  if (step == 0 || action < 4) return;
+  if (action == 6) { genSource[step] ^= 0x80; return; }
+  if (action == 7) { genSource[step] = step; return; }
+  uint8_t source = nextGenRandom() & 7;
+  for (uint8_t tries = 0; tries < kStepCount && !bitRead(seqGateMask, source); ++tries) source = (source + 1) & 7;
+  genSource[step] = source;
 }
 
 uint16_t bpmStepMs() { return 15000U / max((uint8_t)1, seqControls.bpm); }
@@ -1304,6 +1366,7 @@ void runSequencer(unsigned long now) {
   lastStepMs += nextStepIntervalMs;
   nextStepIntervalMs = bpmStepMs();
   if ((unsigned long)(now - lastStepMs) >= nextStepIntervalMs) lastStepMs = now;
+  if (currentStep == 0 && generativeEnabled) mutateGenerativeSteps();
   playingStep = currentStep;
   if (instrumentMode == MODE_PLAY) {
     if (playSequencerEnabled) {
@@ -1347,9 +1410,10 @@ void applyLiveConfiguration() {
   playGlide = activeMacroValue(MACRO_GLIDE, preset.glide);
   // Live notes take effect at their next trigger. Every setting that changes
   // the simultaneous voice count also stops and revoices the live notes.
+  // Arpeggios play a multi-voice program as one unison stack, like POLY.
   uint8_t liveVoices = 1;
   if (playControls.style == STYLE_CHORD) liveVoices = 3;
-  else if (playControls.style == STYLE_POLY) {
+  else if (playControls.style == STYLE_POLY || preset.voiceCount > 1) {
     liveVoices = min(preset.voiceCount > 1 ? preset.voiceCount : SYNTH_VOICE_COUNT,
       SYNTH_VOICE_COUNT - playSequencerEnabled);
   }
@@ -1399,26 +1463,28 @@ void clearHeldNotes() {
   resetLiveAssignments();
 }
 
+// Plays one note as a multi-voice program's detuned unison stack across the
+// live pool: four oscillators normally, or three while voice 0 sequences.
+void triggerLiveStack(const MelodicPreset &preset, int16_t note, bool release) {
+  const uint8_t firstVoice = firstLiveVoice();
+  const uint8_t stackVoiceCount = min(preset.voiceCount, (uint8_t)(SYNTH_VOICE_COUNT - firstVoice));
+  for (uint8_t stackVoice = 0; stackVoice < stackVoiceCount; ++stackVoice) {
+    const uint8_t voice = firstVoice + stackVoice;
+    const VoiceRecipe recipe = preset.voices[stackVoice];
+    edgar.setWave(voice, recipe.wave);
+    edgar.setMod(voice, lfoModulatedMacroValue(MACRO_VIBRATO, recipe.modulation));
+    triggerNormalVoice(voice, pitchForNoteWithDetuneCents(note, recipe.detuneCents), playGlide);
+  }
+  for (uint8_t voice = firstVoice + stackVoiceCount; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice, release);
+}
+
 // Assigns a free live voice or steals the oldest active one.
 void triggerPolyButton(uint8_t button) {
   const uint8_t firstVoice = firstLiveVoice();
   MelodicPreset preset; readMelodicPreset(playProgramId(), preset);
   // A multi-voice program is a unison stack in POLY.  It consumes the whole
   // live pool: four oscillators normally, or three while voice 0 sequences.
-  if (preset.voiceCount > 1) {
-    const uint8_t availableVoiceCount = SYNTH_VOICE_COUNT - firstVoice;
-    const uint8_t stackVoiceCount = min(preset.voiceCount, availableVoiceCount);
-    const uint8_t note = liveNoteForButton(button);
-    for (uint8_t stackVoice = 0; stackVoice < stackVoiceCount; ++stackVoice) {
-      const uint8_t voice = firstVoice + stackVoice;
-      const VoiceRecipe recipe = preset.voices[stackVoice];
-      edgar.setWave(voice, recipe.wave);
-      edgar.setMod(voice, lfoModulatedMacroValue(MACRO_VIBRATO, recipe.modulation));
-      triggerNormalVoice(voice, pitchForNoteWithDetuneCents(note, recipe.detuneCents), playGlide);
-    }
-    for (uint8_t voice = firstVoice + stackVoiceCount; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
-    return;
-  }
+  if (preset.voiceCount > 1) { triggerLiveStack(preset, liveNoteForButton(button), false); return; }
   int8_t voice = -1;
   for (uint8_t candidate = firstVoice; candidate < SYNTH_VOICE_COUNT; ++candidate) {
     if (liveButtonForVoice[candidate] < 0) { voice = candidate; break; }
@@ -1454,54 +1520,42 @@ uint8_t collectHeldButtons(uint8_t buttons[kStepCount]) {
   return count;
 }
 
+// Sounds an arpeggio note: a single voice, or a multi-voice program's unison stack.
+void triggerArpeggioNote(int16_t note) {
+  MelodicPreset preset; readMelodicPreset(playProgramId(), preset);
+  if (preset.voiceCount > 1) { triggerLiveStack(preset, note, true); return; }
+  for (uint8_t voice = 2; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice, true);
+  triggerNormalVoice(1, pitchForNote(note), playGlide);
+}
+
 // Advances the current arpeggio pattern across held buttons, or the latest held chord.
 void advanceArpeggio() {
   uint8_t buttons[kStepCount];
   const uint8_t count = collectHeldButtons(buttons);
-  const uint8_t voice = 1;
-  for (uint8_t other = voice + 1; other < SYNTH_VOICE_COUNT; ++other) stopNormalVoice(other, true);
-  if (count == 0) { stopNormalVoice(voice, true); arpPosition = 0; arpDirection = 1; return; }
+  if (count == 0) {
+    for (uint8_t voice = firstLiveVoice(); voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice, true);
+    arpPosition = 0; arpDirection = 1; return;
+  }
 
   const bool chordArpeggio = playControls.style >= STYLE_CHORD_ARP_UP;
   const uint8_t noteCount = chordArpeggio ? 3 : count;
-  const int8_t chordButton = chordArpeggio ? latestHeldButton() : -1;
-  const int16_t chordRoot = 24 + playControls.octave * 12 + playControls.root;
-
-  if (chordArpeggio) {
-    arpPosition %= noteCount;
-    uint8_t chordVoice = arpPosition;
-    if (playControls.style == STYLE_CHORD_ARP_DOWN) chordVoice = noteCount - 1 - arpPosition;
-    else if (playControls.style == STYLE_CHORD_ARP_UPDOWN && noteCount > 1) {
-      if (arpPosition >= noteCount) arpPosition = noteCount - 1;
-      chordVoice = arpPosition;
-      if (arpDirection > 0 && arpPosition >= noteCount - 1) arpDirection = -1;
-      else if (arpDirection < 0 && arpPosition == 0) arpDirection = 1;
-      arpPosition += arpDirection;
-      triggerNormalVoice(voice, pitchForNote(chordRoot + scaleDegreeOffset(playControls.scale, chordButton + chordVoice * 2)), playGlide);
-      return;
-    }
-    triggerNormalVoice(voice, pitchForNote(chordRoot + scaleDegreeOffset(playControls.scale, chordButton + chordVoice * 2)), playGlide);
-    arpPosition = (arpPosition + 1) % noteCount;
-    return;
-  }
-
-  if (playControls.style == STYLE_ARP_DOWN) {
-    arpPosition %= count;
-    triggerNormalVoice(voice, pitchForNote(liveNoteForButton(buttons[count - 1 - arpPosition])), playGlide);
-    arpPosition = (arpPosition + 1) % count;
-    return;
-  }
-  if (playControls.style == STYLE_ARP_UPDOWN && count > 1) {
-    if (arpPosition >= count) arpPosition = count - 1;
-    triggerNormalVoice(voice, pitchForNote(liveNoteForButton(buttons[arpPosition])), playGlide);
-    if (arpDirection > 0 && arpPosition >= count - 1) arpDirection = -1;
+  const bool down = playControls.style == STYLE_ARP_DOWN || playControls.style == STYLE_CHORD_ARP_DOWN;
+  const bool upDown = playControls.style == STYLE_ARP_UPDOWN || playControls.style == STYLE_CHORD_ARP_UPDOWN;
+  uint8_t position;
+  if (upDown && noteCount > 1) {
+    if (arpPosition >= noteCount) arpPosition = noteCount - 1;
+    position = arpPosition;
+    if (arpDirection > 0 && arpPosition >= noteCount - 1) arpDirection = -1;
     else if (arpDirection < 0 && arpPosition == 0) arpDirection = 1;
     arpPosition += arpDirection;
-    return;
+  } else {
+    arpPosition %= noteCount;
+    position = down ? noteCount - 1 - arpPosition : arpPosition;
+    arpPosition = (arpPosition + 1) % noteCount;
   }
-  arpPosition %= count;
-  triggerNormalVoice(voice, pitchForNote(liveNoteForButton(buttons[arpPosition])), playGlide);
-  arpPosition = (arpPosition + 1) % count;
+  triggerArpeggioNote(chordArpeggio ?
+    24 + playControls.octave * 12 + playControls.root + scaleDegreeOffset(playControls.scale, latestHeldButton() + position * 2) :
+    liveNoteForButton(buttons[position]));
 }
 
 void handleLivePress(uint8_t button) {
@@ -1651,13 +1705,14 @@ void renderParameterName(uint8_t pot) {
     return;
   }
   switch (control) {
-    case PARAM_SEQ_PRESET:
-    case PARAM_PLAY_PRESET: frameText(0, column, F("PRS")); break;
-    case PARAM_SEQ_BPM: frameText(0, column, F("BPM")); break;
     case PARAM_SEQ_TUNE: frameText(0, column, F("TUN")); break;
-    case PARAM_PLAY_ROOT: frameText(0, column, F("ROT")); break;
-    case PARAM_PLAY_SCALE: frameText(0, column, F("SCL")); break;
-    case PARAM_PLAY_STYLE: frameText(0, column, F("STY")); break;
+    // Program, tempo, root, scale, and style values identify themselves, so they stay shown.
+    case PARAM_SEQ_PRESET:
+    case PARAM_PLAY_PRESET:
+    case PARAM_SEQ_BPM:
+    case PARAM_PLAY_ROOT:
+    case PARAM_PLAY_SCALE:
+    case PARAM_PLAY_STYLE: renderParameterValue(pot); break;
     default: frameText(0, column, F("---")); break;
   }
 }
@@ -1693,6 +1748,7 @@ void renderSequencerDashboard(bool inlineEditVisible) {
     const bool enabled = bitRead(seqGateMask, step);
     frameChar(1, step, step == playingStep ? (enabled ? 'O' : 'o') : (enabled ? 'x' : '-'));
   }
+  if (generativeEnabled) frameChar(1, 8, kGenChar);
   if (inlineEditVisible && editedStep < kStepCount) {
     frameChar(1, 9, 'S'); frameChar(1, 10, '1' + editedStep); frameChar(1, 11, ':');
     if (isDrumProgram(seqControls.preset)) frameProgmemText(1, 12, kDrumLabels[stepDrums[editedStep]]);
@@ -1709,7 +1765,7 @@ void renderSequencerDashboard(bool inlineEditVisible) {
 
 void renderPlayDashboard(bool inlineEditVisible) {
   for (uint8_t pot = 0; pot < 4; ++pot) renderParameterName(pot);
-  frameChar(1, 0, playSequencerEnabled ? '*' : ' ');
+  if (playSequencerEnabled) frameChar(1, 0, generativeEnabled ? kGenChar : '*');
   frameChar(1, 1, 'O'); frameChar(1, 2, '1' + playControls.octave);
   frameNumber(1, seqControls.bpm < 100 ? 5 : 4, seqControls.bpm); frameText(1, 7, F("BPM"));
   frameProgmemText(1, 11, kArpDivisionLabels[playControls.arpDivision]);

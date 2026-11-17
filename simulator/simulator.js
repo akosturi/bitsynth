@@ -119,6 +119,7 @@ const LCD_FONT_5X8 = new Uint8Array(`
 
 let lcdText = ui.lcdLines.map((line) => (line?.textContent ?? '').padEnd(16).slice(0, 16));
 let lcdDrawFrame = 0;
+let lcdCgram = new Uint8Array(64);
 
 function drawLcdDotMatrix() {
   const canvas = ui.lcdCanvas;
@@ -171,7 +172,10 @@ function drawLcdDotMatrix() {
       for (let column = 0; column < 5; column++) {
         const bits = LCD_FONT_5X8[glyph * 5 + column];
         for (let row = 0; row < 8; row++) {
-          if (!(bits & (1 << row))) continue;
+          const lit = code < 16
+            ? lcdCgram[(code & 7) * 8 + row] & (0x10 >> column)
+            : bits & (1 << row);
+          if (!lit) continue;
           const x = originX + (character * 6 + column) * unit + dotInset;
           const y = originY + (line * 10 + row) * unit + dotInset;
           context.fillRect(x, y, dotSize, dotSize);
@@ -181,10 +185,13 @@ function drawLcdDotMatrix() {
   }
 }
 
-function setLcdLines(line1, line2) {
+function setLcdLines(line1, line2, cgram = lcdCgram) {
+  lcdCgram = cgram;
   lcdText = [line1, line2].map((line) => String(line).padEnd(16).slice(0, 16));
   ui.lcdLines.forEach((element, index) => {
-    if (element.textContent !== lcdText[index]) element.textContent = lcdText[index];
+    // The text fallback cannot show CGRAM glyphs; GEN's '×' is the only one.
+    const text = lcdText[index].replace(/[\x00-\x0f]/g, '×');
+    if (element.textContent !== text) element.textContent = text;
   });
   scheduleLcdDotMatrix();
 }
@@ -378,6 +385,8 @@ class HD44780 {
 
   reset() {
     this.ddram = new Uint8Array(0x80).fill(32);
+    this.cgram = new Uint8Array(64);
+    this.cgramMode = false;
     this.address = 0;
     this.pendingNibble = null;
     this.fourBit = false;
@@ -410,26 +419,38 @@ class HD44780 {
     if (value === 0x01) {
       this.ddram.fill(32);
       this.address = 0;
+      this.cgramMode = false;
       this.paint();
-    } else if (value === 0x02) {
+    } else if ((value & 0xfe) === 0x02) {
       this.address = 0;
+      this.cgramMode = false;
     } else if (value & 0x80) {
       this.address = value & 0x7f;
+      this.cgramMode = false;
+    } else if (value & 0x40) {
+      this.address = value & 0x3f;
+      this.cgramMode = true;
     } else if ((value & 0xfc) === 0x04) {
       this.increment = Boolean(value & 0x02);
     }
   }
 
   writeData(value) {
-    this.ddram[this.address & 0x7f] = value;
-    this.address = (this.address + (this.increment ? 1 : -1)) & 0x7f;
+    if (this.cgramMode) {
+      this.cgram[this.address & 0x3f] = value & 0x1f;
+      this.address = (this.address + (this.increment ? 1 : -1)) & 0x3f;
+    } else {
+      this.ddram[this.address & 0x7f] = value;
+      this.address = (this.address + (this.increment ? 1 : -1)) & 0x7f;
+    }
     this.paint();
   }
 
+  // Codes 0-15 keep their value and draw from CGRAM; 8-15 mirror 0-7.
   paint() {
     const line = (offset) => Array.from(this.ddram.slice(offset, offset + 16), (code) =>
-      code >= 32 && code <= 126 ? String.fromCharCode(code) : ' ').join('');
-    this.render(line(0x00), line(0x40));
+      code < 16 || (code >= 32 && code <= 126) ? String.fromCharCode(code) : ' ').join('');
+    this.render(line(0x00), line(0x40), this.cgram);
   }
 }
 
