@@ -16,7 +16,6 @@ const uint8_t kStepCount = 8;
 const uint8_t kSettingCount = 4;
 const uint8_t kStepPotsPerLoop = 2;
 const uint8_t kDroneWaveCount = 4;
-const uint8_t kPresetCount = 18;
 const uint8_t kDrumCount = DRUM_SAMPLE_COUNT;
 const uint8_t kScaleCount = 4;
 const uint8_t kPlayStyleCount = 8;
@@ -53,14 +52,12 @@ enum InstrumentMode : uint8_t { MODE_SEQ = 0, MODE_PLAY = 1, MODE_DRONE = 2 };
 enum ScaleMode : uint8_t { SCALE_MAJOR = 0, SCALE_MINOR = 1, SCALE_PENTATONIC = 2, SCALE_BLUES = 3 };
 enum PlayStyle : uint8_t { STYLE_POLY = 0, STYLE_CHORD = 1, STYLE_ARP_UP = 2, STYLE_ARP_DOWN = 3, STYLE_ARP_UPDOWN = 4,
                            STYLE_CHORD_ARP_UP = 5, STYLE_CHORD_ARP_DOWN = 6, STYLE_CHORD_ARP_UPDOWN = 7 };
-enum PresetId : uint8_t { PRESET_SINE = 0, PRESET_TRIANGLE, PRESET_SAW,
-                          PRESET_SQUARE, PRESET_DRUM, PRESET_NOISE };
 enum DrumId : uint8_t { DRUM_KICK = 0, DRUM_SNARE, DRUM_CLOSED_HAT };
 enum MacroParam : uint8_t {
   MACRO_NONE = 0, MACRO_PULSE_WIDTH, MACRO_VIBRATO,
   MACRO_DRUM_TUNE, MACRO_DRUM_DECAY, MACRO_VCA_DEPTH, MACRO_VCA_RATE,
   MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH, MACRO_GLIDE, MACRO_CHORUS,
-  MACRO_MORPH, MACRO_FILTER
+  MACRO_MORPH, MACRO_FILTER, MACRO_RESONANCE, MACRO_FILTER_ENVELOPE
 };
 
 // Direct-macro slots per program. The two LFO target slots follow them, so
@@ -99,8 +96,12 @@ struct MelodicPreset {
   uint8_t chorusMode;
   uint8_t morphSpeed;
   uint8_t filterCutoff;
+  uint8_t filterResonance;
+  uint8_t filterEnvelopeAmount;
   uint8_t macros[kMacroSlotCount];
   uint8_t lfoTargets[kMacroLfoCount];
+  uint8_t lfoRates[kMacroLfoCount];
+  uint8_t lfoDepths[kMacroLfoCount];
   uint8_t level;
 };
 
@@ -127,39 +128,103 @@ struct AnalogMotionState {
   bool ready;
 };
 
-// label, voice count, voices {wave, detune cents, envelope, modulation} x4,
-// envelope length, square pulse width, glide, PLAY VCA depth, PLAY VCA LFO rate,
-// chorus mode, morph speed, filter cutoff (0 about 100 Hz - 126 about 7.7 kHz,
-// 127 open), direct macros x8, LFO targets x2, output level
-// (255 keeps the automatic level; lower values only attenuate the preset)
+// label, voice count, voices {wave, detune cents (-2400 to +2400), envelope,
+// modulation} x4, envelope length, square pulse width, glide, VCA depth,
+// VCA LFO rate, chorus mode, morph speed, filter cutoff (0 about 100 Hz -
+// 126 about 3.3 kHz, 127 open), filter resonance (0 Q about 1 - 127 Q about
+// 6), filter envelope amount (0 off - 127), direct macros x8, LFO targets x2, LFO rate
+// indexes x2 (0-15 = 0.05-0.20 Hz, 16-63 = 0.3-5.0 Hz, 64-93 = 5.5-20 Hz),
+// LFO depths x2 (0 off), output level (255 keeps the automatic level; lower
+// values only attenuate the preset). Every voice uses voice 0's envelope.
 // Available macros: MACRO_NONE, MACRO_PULSE_WIDTH, MACRO_VIBRATO,
 // MACRO_DRUM_TUNE, MACRO_DRUM_DECAY, MACRO_VCA_DEPTH, MACRO_VCA_RATE,
 // MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH, MACRO_GLIDE, MACRO_CHORUS,
-// MACRO_MORPH, MACRO_FILTER.
+// MACRO_MORPH, MACRO_FILTER, MACRO_RESONANCE, MACRO_FILTER_ENVELOPE. An LFO that targets PWM or VIB should also have
+// that direct macro, so it sweeps around the preset value.
+// Letters group the catalogue: A bass, B lead, C pad, D keys, E sequence/effect.
 const MelodicPreset kMelodicPresets[] PROGMEM = {
-  {"GLA", 2, {{SAW, 0, ENVELOPE3, 64}, {TRIANGLE, 0, ENVELOPE3, 64}, {SAW, 0, ENVELOPE3, 64}, {TRIANGLE, 0, ENVELOPE3, 64}}, 127, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"TRI", 1, {{TRIANGLE, 0, ENVELOPE3, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 96, 0, 64}}, 127, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_MORPH, MACRO_CHORUS, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_VIBRATO, MACRO_NONE}, 255},
-  {"FLY", 1, {{SAW, 0, ENVELOPE3, 69}, {TRIANGLE, 0, 0, 64}, {TRIANGLE, 0, 0, 64}, {SINE, 0, 0, 64}}, 127, 50, 17, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"SQR", 1, {{SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, 0, 64}, {SQUARE, 0, 0, 64}, {SINE, 0, 0, 64}}, 96, 35, 0, 256, 68, SYNTH_CHORUS_OFF, 0, 127, {MACRO_PULSE_WIDTH, MACRO_MORPH, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_VIBRATO, MACRO_NONE}, 255},
-  {"NSE", 1, {{NOISE, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 96, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_MORPH, MACRO_CHORUS, MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"SUB", 2, {{SINE, 0, ENVELOPE0, 64}, {SQUARE, -12, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"BA1", 2, {{SAW, 0, ENVELOPE1, 64}, {SQUARE, -12, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"PLK", 2, {{TRIANGLE, 0, ENVELOPE1, 64}, {SQUARE, 12, ENVELOPE1, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"BEL", 3, {{SINE, 0, ENVELOPE2, 64}, {SINE, 12, ENVELOPE2, 64}, {TRIANGLE, 19, ENVELOPE2, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"LED", 2, {{SAW, 0, ENVELOPE0, 64}, {SAW, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_FILTER, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"HYS", 4, {{SAW, -18, ENVELOPE3, 62}, {SAW, -6, ENVELOPE3, 63}, {SAW, 6, ENVELOPE3, 65}, {SAW, 18, ENVELOPE3, 66}}, 127, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_FILTER, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"PUR", 3, {{SINE, 0, ENVELOPE3, 64}, {SINE, 0, ENVELOPE3, 64}, {SINE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}}, 116, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"SOF", 3, {{SINE, 0, ENVELOPE0, 64}, {SINE, 0, ENVELOPE0, 64}, {SINE, 0, ENVELOPE0, 64}, {SINE, 0, 0, 64}}, 102, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"KEY", 3, {{TRIANGLE, 0, ENVELOPE2, 64}, {TRIANGLE, 0, ENVELOPE2, 64}, {TRIANGLE, 0, ENVELOPE2, 64}, {SINE, 0, 0, 64}}, 82, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"PLK", 3, {{SQUARE, 0, ENVELOPE1, 64}, {SQUARE, 0, ENVELOPE1, 64}, {SQUARE, 0, ENVELOPE1, 64}, {SINE, 0, 0, 64}}, 46, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"BA2", 3, {{SAW, 0, ENVELOPE0, 58}, {SAW, 0, ENVELOPE0, 58}, {SAW, 0, ENVELOPE0, 58}, {SINE, 0, 0, 64}}, 92, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_FILTER, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"UNI", 3, {{SAW, -9, ENVELOPE3, 64}, {SAW, 0, ENVELOPE3, 64}, {SAW, 9, ENVELOPE3, 64}, {SINE, 0, 0, 64}}, 127, 50, 12, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_FILTER, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255},
-  {"ORG", 3, {{SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, ENVELOPE3, 64}, {SQUARE, 0, ENVELOPE3, 64}, {SINE, 0, 0, 64}}, 116, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 127, {MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255}
+  // A01 funk bass: a Minimoog-style line in the manner of "Thriller"; two
+  // slowly beating saws over a square sub-octave with a punchy decay.
+  {"A01", 3, {{SAW, 0, ENVELOPE5, 64}, {SAW, 8, ENVELOPE5, 64}, {SQUARE, -1200, ENVELOPE5, 64}, {SINE, 0, ENVELOPE5, 64}},
+   72, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 52, 24, 88,
+   {MACRO_FILTER, MACRO_RESONANCE, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_GLIDE, MACRO_FILTER_ENVELOPE, MACRO_NONE, MACRO_NONE},
+   {MACRO_NONE, MACRO_NONE}, {0, 0}, {0, 0}, 255},
+  // A02 Reese bass: drum and bass detuned saws over a sine sub-octave; a slow
+  // filter LFO adds motion, and a faster LFO 1 rate turns it into a wobble.
+  {"A02", 3, {{SAW, -14, ENVELOPE4, 64}, {SAW, 14, ENVELOPE4, 64}, {SINE, -1200, ENVELOPE4, 64}, {SINE, 0, ENVELOPE4, 64}},
+   106, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 60, 16, 0,
+   {MACRO_FILTER, MACRO_RESONANCE, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_GLIDE, MACRO_NONE, MACRO_NONE, MACRO_NONE},
+   {MACRO_FILTER, MACRO_NONE}, {16, 0}, {12, 0}, 255},
+  // A03 808 bass: a long sine with pitch slides between notes.
+  {"A03", 1, {{SINE, 0, ENVELOPE1, 64}, {SINE, 0, ENVELOPE1, 64}, {SINE, 0, ENVELOPE1, 64}, {SINE, 0, ENVELOPE1, 64}},
+   90, 50, 72, 0, 0, SYNTH_CHORUS_OFF, 0, 127, 0, 0,
+   {MACRO_GLIDE, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE},
+   {MACRO_NONE, MACRO_NONE}, {0, 0}, {0, 0}, 255},
+  // B01 pulse lead: the bright, staccato "Axel F" style; a 30% pulse and a
+  // slightly detuned saw, one octave up.
+  {"B01", 2, {{SQUARE, 1200, ENVELOPE5, 64}, {SAW, 1205, ENVELOPE5, 64}, {SINE, 0, ENVELOPE5, 64}, {SINE, 0, ENVELOPE5, 64}},
+   87, 30, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 88, 16, 80,
+   {MACRO_PULSE_WIDTH, MACRO_FILTER, MACRO_RESONANCE, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_GLIDE, MACRO_VIBRATO, MACRO_FILTER_ENVELOPE},
+   {MACRO_NONE, MACRO_NONE}, {0, 0}, {0, 0}, 255},
+  // B02 supersaw: a trance lead in the MicroKorg/JP-8000 manner; three spread
+  // saws one octave up plus one at the played octave, with chorus and glide.
+  // VCD raises a fast 8 Hz VCA pulse; LFO 1 depth adds a slow filter sweep.
+  {"B02", 4, {{SAW, 1200, ENVELOPE4, 64}, {SAW, 1185, ENVELOPE4, 64}, {SAW, 1215, ENVELOPE4, 64}, {SAW, 0, ENVELOPE4, 64}},
+   106, 50, 12, 0, 74, SYNTH_CHORUS_1, 0, 101, 0, 0,
+   {MACRO_FILTER, MACRO_RESONANCE, MACRO_GLIDE, MACRO_CHORUS, MACRO_VIBRATO, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_VCA_DEPTH},
+   {MACRO_FILTER, MACRO_NONE}, {5, 0}, {0, 0}, 255},
+  // C01 PWM pad: a Juno-style pulse-width-modulated pad with chorus 1 and a
+  // soft attack; LFO 2 depth adds a slow filter sweep.
+  {"C01", 1, {{SQUARE, 0, ENVELOPE2, 64}, {SQUARE, 0, ENVELOPE2, 64}, {SQUARE, 0, ENVELOPE2, 64}, {SQUARE, 0, ENVELOPE2, 64}},
+   99, 50, 0, 0, 0, SYNTH_CHORUS_1, 0, 84, 16, 0,
+   {MACRO_PULSE_WIDTH, MACRO_FILTER, MACRO_RESONANCE, MACRO_CHORUS, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_NONE, MACRO_NONE},
+   {MACRO_PULSE_WIDTH, MACRO_FILTER}, {18, 5}, {49, 0}, 255},
+  // C02 string machine: Jean-Michel Jarre's "Oxygene" style ensemble strings;
+  // a mellow saw with chorus 2, light vibrato, and a slow filter drift.
+  {"C02", 1, {{SAW, 0, ENVELOPE2, 66}, {SAW, 0, ENVELOPE2, 66}, {SAW, 0, ENVELOPE2, 66}, {SAW, 0, ENVELOPE2, 66}},
+   99, 50, 0, 0, 0, SYNTH_CHORUS_2, 0, 80, 0, 0,
+   {MACRO_FILTER, MACRO_RESONANCE, MACRO_CHORUS, MACRO_VIBRATO, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_NONE, MACRO_NONE},
+   {MACRO_FILTER, MACRO_NONE}, {7, 0}, {16, 0}, 255},
+  // D01 poly brass: the Oberheim-style saw brass of "Jump", for chords.
+  {"D01", 1, {{SAW, 0, ENVELOPE4, 64}, {SAW, 0, ENVELOPE4, 64}, {SAW, 0, ENVELOPE4, 64}, {SAW, 0, ENVELOPE4, 64}},
+   106, 50, 0, 0, 0, SYNTH_CHORUS_1, 0, 88, 0, 64,
+   {MACRO_FILTER, MACRO_RESONANCE, MACRO_CHORUS, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_GLIDE, MACRO_VIBRATO, MACRO_FILTER_ENVELOPE},
+   {MACRO_NONE, MACRO_NONE}, {0, 0}, {0, 0}, 255},
+  // D02 vibraphone: a struck, long-decaying triangle with motor tremolo,
+  // which also passes for a suitcase electric piano.
+  {"D02", 1, {{TRIANGLE, 0, ENVELOPE5, 64}, {TRIANGLE, 0, ENVELOPE5, 64}, {TRIANGLE, 0, ENVELOPE5, 64}, {TRIANGLE, 0, ENVELOPE5, 64}},
+   99, 50, 0, 96, 69, SYNTH_CHORUS_OFF, 0, 90, 0, 0,
+   {MACRO_VCA_DEPTH, MACRO_VCA_RATE, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_FILTER, MACRO_RESONANCE, MACRO_CHORUS, MACRO_NONE},
+   {MACRO_NONE, MACRO_NONE}, {0, 0}, {0, 0}, 255},
+  // D03 rock organ: 8', 4', 5 1/3', and 16' sine drawbars with key click,
+  // a fast Leslie-like VCA tremolo, vibrato, and chorus 2. VCR sets the speed.
+  {"D03", 4, {{SINE, 0, ENVELOPE3, 66}, {SINE, 1200, ENVELOPE3, 66}, {SINE, 702, ENVELOPE3, 66}, {SINE, -1200, ENVELOPE3, 66}},
+   127, 50, 0, 40, 70, SYNTH_CHORUS_2, 0, 127, 0, 0,
+   {MACRO_VCA_RATE, MACRO_VCA_DEPTH, MACRO_VIBRATO, MACRO_CHORUS, MACRO_FILTER, MACRO_RESONANCE, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE},
+   {MACRO_NONE, MACRO_NONE}, {0, 0}, {0, 0}, 255},
+  // E01 dark arpeggio: the "Stranger Things" style sequence; a saw and a
+  // detuned pulse slowly morph between each other while LFO 1 opens and
+  // closes the filter and LFO 2 modulates the pulse width.
+  {"E01", 2, {{SAW, 0, ENVELOPE1, 64}, {SQUARE, 6, ENVELOPE1, 64}, {SINE, 0, ENVELOPE1, 64}, {SINE, 0, ENVELOPE1, 64}},
+   66, 40, 0, 0, 0, SYNTH_CHORUS_OFF, 1, 72, 48, 64,
+   {MACRO_FILTER, MACRO_RESONANCE, MACRO_MORPH, MACRO_PULSE_WIDTH, MACRO_CHORUS, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_GLIDE},
+   {MACRO_FILTER, MACRO_PULSE_WIDTH}, {5, 20}, {40, 28}, 255},
+  // E02 surf: the sea and wind noise of Jarre's "Oxygene"; held white noise
+  // whose filter LFO and slower VCA drift against each other. A short LEN
+  // with ENV 0 turns it into hi-hat-like ticks in SEQ.
+  {"E02", 1, {{NOISE, 0, ENVELOPE3, 64}, {NOISE, 0, ENVELOPE3, 64}, {NOISE, 0, ENVELOPE3, 64}, {NOISE, 0, ENVELOPE3, 64}},
+   127, 50, 0, 200, 10, SYNTH_CHORUS_OFF, 0, 68, 48, 0,
+   {MACRO_FILTER, MACRO_RESONANCE, MACRO_VCA_DEPTH, MACRO_VCA_RATE, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_CHORUS, MACRO_NONE},
+   {MACRO_FILTER, MACRO_NONE}, {7, 0}, {45, 0}, 255}
 };
+const uint8_t kMelodicPresetCount = sizeof(kMelodicPresets) / sizeof(kMelodicPresets[0]);
+// SEQ lists every melodic program and then DRM; PLAY omits DRM.
+const uint8_t PRESET_DRUM = kMelodicPresetCount;
+const uint8_t kPresetCount = kMelodicPresetCount + 1;
+const uint8_t kPlayPresetCount = kMelodicPresetCount;
 
 const DrumPreset kDrumPreset PROGMEM =
   {"DRM", 127, {MACRO_DRUM_DECAY, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE}, {MACRO_NONE, MACRO_NONE}, 255};
-const uint8_t kPlayPresetCount = 18;
 
 const char kDrumLabels[kDrumCount][5] PROGMEM = {"KICK", "SNAR", "CHH"};
 
@@ -180,7 +245,7 @@ const char kArpDivisionLabels[kArpDivisionCount][6] PROGMEM = {"1/2", "1/4", "1/
 const uint8_t kPlayOctaveCount = 5;
 synth edgar;
 InstrumentMode instrumentMode = MODE_SEQ;
-SeqControls seqControls = {PRESET_SINE, 126, 64};
+SeqControls seqControls = {0, 126, 64};
 // PLAY indexes its melodic-only catalogue; SEQ indexes the complete catalogue.
 PlayControls playControls = {0, 0, SCALE_MAJOR, STYLE_POLY, 1, 5};
 uint8_t stepNotes[kStepCount] = {36, 38, 40, 41, 43, 45, 47, 48};
@@ -289,15 +354,14 @@ void copyProgmemLabel(char *destination, const char *source, uint8_t size) {
 }
 
 void readMelodicPreset(uint8_t programId, MelodicPreset &preset) {
-  const uint8_t index = programId - (programId > PRESET_DRUM);
-  memcpy_P(&preset, &kMelodicPresets[index], sizeof(MelodicPreset));
+  memcpy_P(&preset, &kMelodicPresets[programId], sizeof(MelodicPreset));
 }
 
 void readDrumPreset(DrumPreset &preset) {
   memcpy_P(&preset, &kDrumPreset, sizeof(DrumPreset));
 }
 
-uint8_t playProgramId() { return playControls.preset + (playControls.preset >= PRESET_DRUM); }
+uint8_t playProgramId() { return playControls.preset; }
 
 bool isDrumProgram(uint8_t programId) {
   return programId == PRESET_DRUM;
@@ -325,7 +389,7 @@ bool isLfoControl(uint8_t control) { return (uint8_t)(control - PARAM_LFO_0_RATE
 uint8_t macroForCurrentProgram(uint8_t slot) {
   const uint8_t programId = macroProgramId();
   const uint8_t *slots = isDrumProgram(programId) ? kDrumPreset.macros :
-    kMelodicPresets[programId - (programId > PRESET_DRUM)].macros;
+    kMelodicPresets[programId].macros;
   return pgm_read_byte(slots + slot);
 }
 
@@ -447,7 +511,8 @@ uint16_t macroMaximum(uint8_t parameter) {
     case MACRO_VCA_DEPTH: return 256;
     case MACRO_VCA_RATE: return kPresetVcaModulationCount - 1;
     case MACRO_MORPH:
-    case MACRO_FILTER: return 127;
+    case MACRO_FILTER:
+    case MACRO_RESONANCE: return 127;
     case MACRO_CHORUS: return SYNTH_CHORUS_2;
     default: return 0;
   }
@@ -489,12 +554,14 @@ uint16_t macroValueForRaw(uint8_t parameter, uint16_t raw) {
       activeMacroValue(parameter, SYNTH_CHORUS_OFF), SYNTH_CHORUS_2 + 1);
     case MACRO_MORPH: return mapByteHysteresis(raw, activeMacroValue(parameter, 0), 127, 0);
     case MACRO_FILTER: return mapByteHysteresis(raw, activeMacroValue(parameter, kFilterOpen), 127, 0);
+    case MACRO_RESONANCE:
+    case MACRO_FILTER_ENVELOPE: return mapByteHysteresis(raw, activeMacroValue(parameter, 0), 127, 0);
     default: return 0;
   }
 }
 
 // LEN is a perceptual control, not the raw envelope-step index: 0-126 span roughly
-// 50 ms to 1.6 s, and 127 is a held note. The engine's slowest non-zero
+// 0.2 s to 6.5 s at the 5 kHz envelope rate, and 127 is a held note. The engine's slowest non-zero
 // phase increment is one, so the upper value is necessarily approximate.
 const uint8_t kEnvelopeLengthRateAnchors[] PROGMEM = {33, 22, 15, 10, 7, 5, 3, 2, 1};
 
@@ -517,20 +584,30 @@ uint8_t envelopeRateForControl(uint8_t control) {
   return descendingAnchorValue(kEnvelopeLengthRateAnchors, control);
 }
 
-// Bus low-pass coefficients k = 256 * (1 - exp(-2 pi fc / 20 kHz)) for an
-// exponential 8 kHz-100 Hz cutoff sweep. Control 0-126 reads them in reverse,
-// so higher values are brighter (about 101 Hz-7.7 kHz); 127 is open.
-const uint8_t kFilterCoefficientAnchors[] PROGMEM = {235, 196, 146, 99, 63, 38, 23, 14, 8};
+// State-variable filter coefficients f = 2 sin(pi fc / 20 kHz) * 256 for an
+// exponential 3.3 kHz-100 Hz cutoff sweep. Control 0-126 reads them in
+// reverse, so higher values are brighter (about 100 Hz-3.3 kHz); 127 is open.
+const uint8_t kFilterCoefficientAnchors[] PROGMEM = {255, 169, 110, 72, 46, 30, 19, 12, 8};
+// Damping q = 128 / Q for an exponential Q of 1-6 across RES 0-127.
+const uint8_t kFilterDampingAnchors[] PROGMEM = {128, 102, 82, 65, 52, 42, 33, 27, 21};
 
 void applyCurrentProgramFilter() {
   const uint8_t programId = macroProgramId();
   uint8_t cutoff = kFilterOpen;
+  uint8_t resonance = 0;
+  uint8_t envelopeAmount = 0;
   if (!isDrumProgram(programId)) {
     MelodicPreset preset; readMelodicPreset(programId, preset);
     cutoff = lfoModulatedMacroValue(MACRO_FILTER, preset.filterCutoff);
+    resonance = lfoModulatedMacroValue(MACRO_RESONANCE, preset.filterResonance);
+    envelopeAmount = activeMacroValue(MACRO_FILTER_ENVELOPE, preset.filterEnvelopeAmount);
   }
+  // FEG 0-127 maps quadratically to the engine's 0-252 amount, giving finer
+  // control over small sweeps.
   edgar.setBusFilter(cutoff >= kFilterOpen ? 0 :
-    descendingAnchorValue(kFilterCoefficientAnchors, kFilterOpen - cutoff));
+    descendingAnchorValue(kFilterCoefficientAnchors, kFilterOpen - cutoff),
+    descendingAnchorValue(kFilterDampingAnchors, resonance),
+    (uint8_t)((uint16_t)(envelopeAmount * envelopeAmount) >> 6));
 }
 
 uint8_t envelopeLengthIndexForRate(uint8_t rate) {
@@ -596,8 +673,18 @@ void showParameterEdit(uint8_t slot, unsigned long now) {
   displayDirty = true;
 }
 
+// The VCA follows the stored depth and rate unless a macro or LFO moves them.
+void applyCurrentProgramVca() {
+  const uint8_t programId = macroProgramId();
+  if (isDrumProgram(programId)) { edgar.disablePlayVca(); return; }
+  MelodicPreset preset; readMelodicPreset(programId, preset);
+  edgar.configurePlayVca(lfoModulatedMacroValue(MACRO_VCA_DEPTH, preset.vcaDepth),
+    presetVcaRateHundredths((uint8_t)lfoModulatedMacroValue(MACRO_VCA_RATE, preset.vcaModulation)));
+}
+
 void applyCurrentProgramBusEffects() {
   applyCurrentProgramFilter();
+  applyCurrentProgramVca();
   const uint8_t programId = macroProgramId();
   if (isDrumProgram(programId)) { edgar.configureChorus(SYNTH_CHORUS_OFF); return; }
   MelodicPreset preset; readMelodicPreset(programId, preset);
@@ -642,11 +729,11 @@ void applyMacroValue(uint8_t slot, uint8_t displaySlot, uint16_t raw, unsigned l
     edgar.configureChorus(next);
   } else if (parameter == MACRO_MORPH) {
     applyCurrentProgramMorph();
-  } else if (parameter == MACRO_FILTER) {
+  } else if (parameter >= MACRO_FILTER) {
+    // FLT, RES, and FEG are the last macro IDs.
     applyCurrentProgramFilter();
   } else if (parameter == MACRO_VCA_DEPTH || parameter == MACRO_VCA_RATE) {
-    edgar.configurePlayVca(lfoModulatedMacroValue(MACRO_VCA_DEPTH, 0),
-      presetVcaRateHundredths((uint8_t)lfoModulatedMacroValue(MACRO_VCA_RATE, 0)));
+    applyCurrentProgramVca();
   }
   showParameterEdit(displaySlot, now);
 }
@@ -686,6 +773,8 @@ void loadProgramMacroDefaults(uint8_t programId) {
     }
   } else {
     MelodicPreset preset; readMelodicPreset(programId, preset);
+    memcpy(macroState->lfoRateIndex, preset.lfoRates, kMacroLfoCount);
+    memcpy(macroState->lfoDepth, preset.lfoDepths, kMacroLfoCount);
     for (uint8_t slot = 0; slot < kMacroSlotCount; ++slot) {
       if (preset.macros[slot] == MACRO_PULSE_WIDTH) macroState->values[slot] = preset.squarePulseWidthPercent;
       if (preset.macros[slot] == MACRO_VIBRATO) macroState->values[slot] = preset.voices[0].modulation;
@@ -697,6 +786,8 @@ void loadProgramMacroDefaults(uint8_t programId) {
       if (preset.macros[slot] == MACRO_CHORUS) macroState->values[slot] = preset.chorusMode;
       if (preset.macros[slot] == MACRO_MORPH) macroState->values[slot] = preset.morphSpeed;
       if (preset.macros[slot] == MACRO_FILTER) macroState->values[slot] = preset.filterCutoff;
+      if (preset.macros[slot] == MACRO_RESONANCE) macroState->values[slot] = preset.filterResonance;
+      if (preset.macros[slot] == MACRO_FILTER_ENVELOPE) macroState->values[slot] = preset.filterEnvelopeAmount;
     }
   }
   applyCurrentProgramBusEffects();
@@ -721,9 +812,8 @@ void updateMacroLfos(unsigned long now) {
       const uint8_t modulation = lfoModulatedMacroValue(target, 64);
       for (uint8_t voice = firstMacroVoice(); voice < SYNTH_VOICE_COUNT; ++voice) edgar.setMod(voice, modulation);
     } else if (target == MACRO_VCA_DEPTH || target == MACRO_VCA_RATE) {
-      edgar.configurePlayVca(lfoModulatedMacroValue(MACRO_VCA_DEPTH, 0),
-        presetVcaRateHundredths((uint8_t)lfoModulatedMacroValue(MACRO_VCA_RATE, 0)));
-    } else if (target == MACRO_FILTER) {
+      applyCurrentProgramVca();
+    } else if (target == MACRO_FILTER || target == MACRO_RESONANCE) {
       applyCurrentProgramFilter();
     }
   }
@@ -1264,11 +1354,11 @@ uint16_t pitchForNote(int16_t note) {
   return pitchWordForNote(note);
 }
 
-// Presets may specify every integer cent from -1200 to +1200. A nearby pitch
+// Presets may specify every integer cent from -2400 to +2400. A nearby pitch
 // table value keeps the control-rate calculation compact; the residual is
 // then applied as a fixed-point detune correction.
 uint16_t pitchForNoteWithDetuneCents(int16_t note, int16_t detuneCents) {
-  detuneCents = constrain(detuneCents, -1200, 1200);
+  detuneCents = constrain(detuneCents, -2400, 2400);
   const int16_t semitones = detuneCents >= 0 ?
     (detuneCents + 50) / 100 : (detuneCents - 50) / 100;
   const int16_t residualCents = detuneCents - semitones * 100;
@@ -1436,8 +1526,6 @@ void applyLiveConfiguration() {
   }
   liveVoiceLevel = outputLevel(playSequencerEnabled ?
     SYNTH_LEVEL_BUDGET - kBackgroundVoiceLevel : SYNTH_LEVEL_BUDGET, liveVoices, preset.level);
-  edgar.configurePlayVca(lfoModulatedMacroValue(MACRO_VCA_DEPTH, preset.vcaDepth),
-    presetVcaRateHundredths((uint8_t)lfoModulatedMacroValue(MACRO_VCA_RATE, preset.vcaModulation)));
   applyCurrentProgramMorph();
   for (uint8_t voice = firstLiveVoice(); voice < SYNTH_VOICE_COUNT; ++voice) {
     edgar.setWave(voice, preset.voices[0].wave);
@@ -1706,6 +1794,8 @@ void frameMacroName(uint8_t column, uint8_t parameter) {
     case MACRO_CHORUS: frameText(0, column, F("CHR")); break;
     case MACRO_MORPH: frameText(0, column, F("MOR")); break;
     case MACRO_FILTER: frameText(0, column, F("FLT")); break;
+    case MACRO_RESONANCE: frameText(0, column, F("RES")); break;
+    case MACRO_FILTER_ENVELOPE: frameText(0, column, F("FEG")); break;
     default: frameText(0, column, F("---")); break;
   }
 }

@@ -831,56 +831,163 @@ synthFinishBlock:
   ret
   .size synthFinishBlock, . - synthFinishBlock
 
-; void synthFilterBlock(int16_t *bus, uint8_t coefficient);
+; void synthFilterBlock(int16_t *bus, uint8_t coefficient, uint8_t damping,
+;                       uint8_t gain);
 ;
-; One-pole low-pass over an eight-sample bus block, in place. With
-; k = coefficient (1-255) and y = busFilterState, per sample exactly:
-;   d = (x >> 1) - (y >> 1); y = y + ((d * k) >> 7) modulo 2^16; x = y
-; d * k is a signed 24-bit product built from the low and signed high
-; partial products; its bits 7..22 are the 16-bit increment.
+; Chamberlin state-variable low-pass over an eight-sample bus block, in
+; place. With f = coefficient (1-255), q = damping (1-128), g = gain
+; (1-128), L = busFilterLow and B = busFilterBand, per sample exactly
+; (int16_t values; sat() saturates a sum or difference to -32768..32767):
+;   h = x >> 2
+;   L = sat(L + ((B * f) >> 8))
+;   H = sat(sat(((h * g) >> 7) - ((B * q) >> 7)) - L)
+;   B = sat(B + ((H * f) >> 8))
+;   x = clamp(L, -8160, 8128) * 4
+; Each product is a signed 24-bit value built from the low and signed high
+; partial products; bits 8..23 (f) or 7..22 (g, q) are the 16-bit result.
+; After a signed overflow the result's sign is inverted, so each saturation
+; stub picks 0x7FFF for a negative and 0x8000 for a positive wrapped result.
 ;
 ; Register use
-;   r18:r19 state y   r20:r21 x, then d   r22 k   r23 count
-;   r24:r25 product   X bus read pointer  Z bus write pointer
+;   r24:r25 L   r20:r21 B   r22 f   r23 q   r18 g   r16:r17 x, h, then H
+;   r26 r27 partial-product bytes, then output   r14 r15 clamp limit high
+;   bytes   r28 count   r29 zero   Z bus pointer
 
   .section .text.synthFilterBlock,"ax",@progbits
   .global synthFilterBlock
   .type synthFilterBlock, @function
 synthFilterBlock:
-  movw r26, r24
+  push r14
+  push r15
+  push r16
+  push r17
+  push r28
+  push r29
   movw r30, r24
-  lds r18, busFilterState
-  lds r19, busFilterState + 1
-  ldi r23, 8
+  mov r23, r20
+  lds r24, busFilterLow
+  lds r25, busFilterLow + 1
+  lds r20, busFilterBand
+  lds r21, busFilterBand + 1
+  ldi r26, hi8(8129)
+  mov r14, r26
+  ldi r26, hi8(-8160)
+  mov r15, r26
+  ldi r28, 8
+  clr r29
+  rjmp 1f
+.Lfilter_sat_low:
+  lsl r25
+  sbc r24, r24
+  ldi r25, 0x80
+  sbc r25, r29
+  rjmp .Lfilter_low_done
 1:
-  ld r20, X+
-  ld r21, X+
-  asr r21
-  ror r20
-  movw r24, r18
-  asr r25
-  ror r24
-  sub r20, r24
-  sbc r21, r25
+  ld r16, Z
+  ldd r17, Z + 1
+  asr r17
+  ror r16
+  asr r17
+  ror r16
   mul r20, r22
-  movw r24, r0
+  mov r26, r1
   mulsu r21, r22
-  add r25, r0
-  clr r20
-  adc r1, r20
-  lsl r24
-  rol r25
+  add r0, r26
+  adc r1, r29
+  add r24, r0
+  adc r25, r1
+  brvs .Lfilter_sat_low
+.Lfilter_low_done:
+  mul r16, r18
+  mov r26, r1
+  mov r27, r0
+  mulsu r17, r18
+  add r0, r26
+  adc r1, r29
+  lsl r27
+  rol r0
   rol r1
-  add r18, r25
-  adc r19, r1
-  st Z+, r18
-  st Z+, r19
-  dec r23
+  movw r16, r0
+  mul r20, r23
+  mov r26, r1
+  mov r27, r0
+  mulsu r21, r23
+  add r0, r26
+  adc r1, r29
+  lsl r27
+  rol r0
+  rol r1
+  sub r16, r0
+  sbc r17, r1
+  brvs .Lfilter_sat_high_1
+.Lfilter_high_1_done:
+  sub r16, r24
+  sbc r17, r25
+  brvs .Lfilter_sat_high_2
+.Lfilter_high_2_done:
+  mul r16, r22
+  mov r26, r1
+  mulsu r17, r22
+  add r0, r26
+  adc r1, r29
+  add r20, r0
+  adc r21, r1
+  brvs .Lfilter_sat_band
+.Lfilter_band_done:
+  movw r26, r24
+  cpi r26, lo8(8129)
+  cpc r27, r14
+  brge 3f
+  cpi r26, lo8(-8160)
+  cpc r27, r15
+  brlt 4f
+  lsl r26
+  rol r27
+  lsl r26
+  rol r27
+2:
+  st Z+, r26
+  st Z+, r27
+  dec r28
   brne 1b
   clr r1
-  sts busFilterState, r18
-  sts busFilterState + 1, r19
+  sts busFilterLow, r24
+  sts busFilterLow + 1, r25
+  sts busFilterBand, r20
+  sts busFilterBand + 1, r21
+  pop r29
+  pop r28
+  pop r17
+  pop r16
+  pop r15
+  pop r14
   ret
+3:
+  ldi r26, lo8(32512)
+  ldi r27, hi8(32512)
+  rjmp 2b
+4:
+  ldi r26, lo8(-32640)
+  ldi r27, hi8(-32640)
+  rjmp 2b
+.Lfilter_sat_high_1:
+  lsl r17
+  sbc r16, r16
+  ldi r17, 0x80
+  sbc r17, r29
+  rjmp .Lfilter_high_1_done
+.Lfilter_sat_high_2:
+  lsl r17
+  sbc r16, r16
+  ldi r17, 0x80
+  sbc r17, r29
+  rjmp .Lfilter_high_2_done
+.Lfilter_sat_band:
+  lsl r21
+  sbc r20, r20
+  ldi r21, 0x80
+  sbc r21, r29
+  rjmp .Lfilter_band_done
   .size synthFilterBlock, . - synthFilterBlock
 
 ; void synthUpdateVoices(int8_t vibratoLfo);

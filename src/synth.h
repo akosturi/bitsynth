@@ -134,7 +134,8 @@ struct SynthVoice {
 // The bus has no headroom above full PWM scale: the levels of all voices that
 // can sound at once (the drum counts as voice 0) must sum to at most
 // SYNTH_LEVEL_BUDGET. The chorus, VCA, and morph never increase the peak;
-// the filter adds at most one Q7 unit, well inside the quantizer margin.
+// the resonant filter clamps its output, including clipped resonant peaks,
+// to the same voice-bus range.
 const uint16_t SYNTH_LEVEL_BUDGET = 255;
 
 #define SYNTH_VOICE_INIT(noiseSeed) \
@@ -182,7 +183,8 @@ void synthFinishBlock(int16_t *bus, const int16_t *dry, uint16_t *output,
   uint8_t flags);
 
 // Low-pass filters an eight-sample bus block in place (formula below).
-void synthFilterBlock(int16_t *bus, uint8_t coefficient);
+void synthFilterBlock(int16_t *bus, uint8_t coefficient, uint8_t damping,
+  uint8_t gain);
 }
 static_assert(sizeof(SynthVoice) == 23, "synth_voices.S expects a 23-byte SynthVoice");
 
@@ -242,11 +244,26 @@ bool chorusActive = false;
 uint8_t chorusWriteIndex = 0;
 uint32_t chorusLfoPCW = 0;
 uint32_t chorusLfoFTW = 0;
-// Preset bus low-pass. The foreground sets the target coefficient (0 =
-// open); the renderer moves the active one by one step per block.
+// Preset resonant bus low-pass. The foreground sets the target coefficient
+// (0 = open) and damping; the renderer moves the active ones by one step per
+// block. Damping SYNTH_FILTER_DAMPING_OPEN (Q about 1) has unity DC gain.
+const uint8_t SYNTH_FILTER_DAMPING_OPEN = 128;
 uint8_t busFilterTarget = 0;
 uint8_t busFilterCoefficient = 0;
-int16_t busFilterState = 0;
+uint8_t busFilterDampingTarget = SYNTH_FILTER_DAMPING_OPEN;
+uint8_t busFilterDamping = SYNTH_FILTER_DAMPING_OPEN;
+int16_t busFilterLow = 0;
+int16_t busFilterBand = 0;
+// Shared filter envelope. Each bus-voice trigger restarts it with the smooth
+// Env1 decay at four times that voice's envelope speed (eight times its step,
+// as it advances once per block), so the filter closes within the first
+// quarter of the note while the amplitude still sustains. A held note (step
+// 0) uses SYNTH_FILTER_ENV_HOLD_STEP, about 0.5 s. It adds amount * level of
+// the remaining distance to the brightest coefficient after the slew.
+const uint16_t SYNTH_FILTER_ENV_HOLD_STEP = 26;
+uint16_t filterEnvPhase = 0x8000;
+uint16_t filterEnvStep = 0;
+uint8_t filterEnvAmount = 0;
 
 static_assert(SYNTH_CHORUS_BUFFER_SAMPLES <= 255, "chorus index must fit in one byte");
 
@@ -303,6 +320,14 @@ static inline __attribute__((always_inline)) int16_t scalePlayMix(
   return negative ? -(int16_t)scaled : scaled;
 }
 
+// Returns (a * b) >> 8 with one 8x8 hardware multiply.
+static inline __attribute__((always_inline)) uint8_t multiplyHigh8(uint8_t a, uint8_t b)
+{
+  uint8_t high;
+  asm("mul %1, %2\n\t" "mov %0, r1\n\t" "clr r1" : "=r"(high) : "r"(a), "r"(b));
+  return high;
+}
+
 static inline __attribute__((always_inline)) uint8_t lfoTriangle(uint8_t phase)
 {
   return (phase & 0x80) ? (uint8_t)(256U - phase) : phase;
@@ -320,12 +345,24 @@ static inline __attribute__((always_inline)) uint8_t lfoTriangle(uint8_t phase)
 // and the quantizer, with an 8-bit Galois LFSR (taps 0xB8):
 //   s = mix + error + ((lfsr & 15) - (lfsr >> 4)) * 4; t = s + 64
 //   pwm = (t >> 7) + 256; error = (t & 127) - 64
-// The bus low-pass before them, synthFilterBlock, computes per sample with
-// k = busFilterCoefficient (1-255) and y = busFilterState:
-//   d = (x >> 1) - (y >> 1); y = y + ((d * k) >> 7) modulo 2^16; x = y
-// i.e. y += (x - y) * k / 256, a 6 dB/octave cutoff of about 100 Hz-8 kHz.
-// y never leaves its own and the input's range by more than one Q7 unit,
-// far inside the quantizer's margin, so the true sum always fits int16_t.
+// The bus low-pass before them, synthFilterBlock, is a Chamberlin state-
+// variable filter. With f = busFilterCoefficient (1-255), q =
+// busFilterDamping (1-128), g = (5 * q + 384) >> 3, L = busFilterLow, and
+// B = busFilterBand, it computes per sample in int16_t, where sat()
+// saturates a sum or difference to the int16_t range:
+//   h = x >> 2; L = sat(L + ((B * f) >> 8))
+//   H = sat(sat(((h * g) >> 7) - ((B * q) >> 7)) - L)
+//   B = sat(B + ((H * f) >> 8))
+//   x = clamp(L, -8160, 8128) * 4
+// i.e. f = 2 sin(pi fc / 20 kHz) * 256 for a 12 dB/octave cutoff of about
+// 100 Hz-3.3 kHz, and Q = 128 / q. The input gain g / 128 sits between 1
+// and 1/Q: the passband falls by g / 128 (at most about 6.5 dB) while the
+// resonant peak rises by g / q (at most about 9 dB) and is clipped. The
+// states run at a quarter of the bus scale, where full-scale square, saw,
+// and noise inputs stay below saturation, which only guards against wrapping.
+// The output is
+// clamped to the voice-bus range (-32640 to 32512), inside the quantizer's
+// margin.
 
 // Renders one drone frame: one oscillator pair is recalculated per call.
 static inline __attribute__((always_inline)) int16_t renderDroneFrame()
@@ -449,18 +486,41 @@ static inline __attribute__((always_inline)) uint8_t renderNormalBlock(
     }
   }
 
-  // Open (0) counts as 256 here, so the filter fades in and out through its
-  // brightest setting. While it is open, the state follows the bus.
+  // The filter opens and closes through its brightest setting with unity
+  // damping, where it is nearly transparent: opening, it switches to bypass
+  // only after reaching both. While it is open, the state follows the bus.
   uint8_t coefficient = busFilterCoefficient;
   const uint8_t target = busFilterTarget;
+  uint8_t damping = busFilterDamping;
+  const uint8_t dampingTarget = target ? busFilterDampingTarget : SYNTH_FILTER_DAMPING_OPEN;
+  if (damping != dampingTarget) {
+    if (dampingTarget > damping) ++damping; else --damping;
+    busFilterDamping = damping;
+  }
   if (coefficient != target) {
-    uint16_t current = coefficient ? coefficient : 256;
-    if ((target ? target : 256) > current) ++current; else --current;
-    coefficient = current;
+    if (coefficient == 0) coefficient = 255;
+    else if (target == 0) {
+      if (coefficient != 255) ++coefficient;
+      else if (damping == SYNTH_FILTER_DAMPING_OPEN) coefficient = 0;
+    } else if (target > coefficient) ++coefficient; else --coefficient;
     busFilterCoefficient = coefficient;
   }
-  if (coefficient) synthFilterBlock(busQ7, coefficient);
-  else busFilterState = busQ7[SYNTH_BLOCK_SAMPLES - 1];
+  // The filter envelope follows the same table/phase rule as the voices and
+  // bypasses the slew, so its attack is immediate.
+  uint16_t envelopePhase = filterEnvPhase;
+  uint8_t envelopeLevel = 0;
+  if (!(envelopePhase & 0x8000)) {
+    envelopePhase += filterEnvStep;
+    filterEnvPhase = envelopePhase;
+    if (!(envelopePhase & 0x8000))
+      envelopeLevel = pgm_read_byte(Env1 + (envelopePhase >> 8));
+  }
+  if (coefficient) {
+    coefficient += multiplyHigh8(255 - coefficient,
+      multiplyHigh8(envelopeLevel, filterEnvAmount));
+    synthFilterBlock(busQ7, coefficient, damping,
+      (uint8_t)((damping * 5U + 384) >> 3));
+  } else { busFilterLow = busQ7[SYNTH_BLOCK_SAMPLES - 1] >> 2; busFilterBand = 0; }
 
   uint8_t flags = background ? SYNTH_FINISH_DRY : 0;
   if (playVcaGain < 256) flags |= SYNTH_FINISH_VCA;
@@ -871,6 +931,12 @@ class synth
         state.level = level;
         state.envelopePhase = 0;
         state.step = state.pitch;
+        // The dry PLAY background voice does not retrigger the bus filter.
+        if (voice != 0 || !voiceZeroBackground) {
+          const uint16_t step = state.envelopeStep;
+          filterEnvStep = step ? step << 3 : SYNTH_FILTER_ENV_HOLD_STEP;
+          filterEnvPhase = 0;
+        }
       }
     }
 
@@ -999,12 +1065,16 @@ class synth
       }
     }
 
-    // Sets the bus low-pass coefficient k (y += (x - y) * k / 256; 0 is
-    // open). The renderer slews toward it, so changes are click-free.
-    void setBusFilter(uint8_t coefficient)
+    // Sets the bus low-pass coefficient f (2 sin(pi fc / fs) * 256; 0 is
+    // open) and damping q (128 / Q, 1-128). The renderer slews toward both,
+    // so changes are click-free. envelopeAmount (0-255) scales the shared
+    // filter envelope; 255 sweeps its peak to the brightest coefficient.
+    void setBusFilter(uint8_t coefficient, uint8_t damping, uint8_t envelopeAmount)
     {
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         busFilterTarget = coefficient;
+        busFilterDampingTarget = damping;
+        filterEnvAmount = envelopeAmount;
       }
     }
 
@@ -1025,8 +1095,12 @@ class synth
           chorusActive = false;
           chorusLfoFTW = 0;
         }
-        // The drone mix is unfiltered; leaving it, the filter fades in again.
+        // The drone mix is unfiltered; leaving it, the filter fades in again
+        // from silence.
         busFilterCoefficient = 0;
+        busFilterDamping = SYNTH_FILTER_DAMPING_OPEN;
+        busFilterLow = 0;
+        busFilterBand = 0;
         droneMixPair = 0;
         for (uint8_t pair = 0; pair < SYNTH_DRONE_COUNT / 2; ++pair) {
           dronePairMixQ7[pair] = 0;
