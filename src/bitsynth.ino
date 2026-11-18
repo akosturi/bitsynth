@@ -1,16 +1,17 @@
-#include <LiquidCrystal.h>
 #include <avr/pgmspace.h>
+#include <util/delay.h>
 #include "synth.h"
 
-LiquidCrystal lcd(2, 3, 4, 5, 6, 7);
-
-const uint8_t kMuxBit0Pin = 8;
-const uint8_t kMuxBit1Pin = 11;
-const uint8_t kMuxBit2Pin = 10;
-const uint8_t kSettingsAnalogPin = A0;
-const uint8_t kStepButtonPin = A1;
-const uint8_t kStepAnalogPin = A2;
-const uint8_t kModeButtonPin = A3;
+// Direct port I/O. Mux S0/S1/S2 = D8/D11/D10 (PB0/PB3/PB2); A0/A2 are the
+// parameter/step pot ADC channels, A1/A3 the step/MODE buttons (PC1/PC3).
+// The write-only 4-bit LCD uses RS/E/D4-D7 = D2-D7 (PD2-PD7); D0/D1 are unused.
+const uint8_t kMuxPortMask = _BV(PB0) | _BV(PB2) | _BV(PB3);
+const uint8_t kSettingsAdcChannel = 0;
+const uint8_t kStepButtonBit = PC1;
+const uint8_t kStepAdcChannel = 2;
+const uint8_t kModeButtonBit = PC3;
+const uint8_t kLcdRs = _BV(PD2);
+const uint8_t kLcdEnable = _BV(PD3);
 
 const uint8_t kStepCount = 8;
 const uint8_t kSettingCount = 4;
@@ -37,6 +38,8 @@ const uint16_t kModeIgnoreHoldMs = 650;
 const uint16_t kEditViewMs = 1500;
 const uint8_t kBpmMin = 60;
 const uint8_t kBpmMax = 190;
+// Swing starts each even-numbered step at this percentage of its step pair.
+const uint8_t kSwingPercent = 65;
 const uint8_t kStepNoteMin = 36;
 const uint8_t kStepNoteMax = 59;
 const uint16_t kDroneFrequencyMin = 80;
@@ -311,6 +314,7 @@ bool modePageTapPending = false;
 bool modeDoubleTapArmed = false;
 unsigned long modePageTapAt = 0;
 bool playSequencerEnabled = true;
+bool swingEnabled = false;
 // GEN plays each step from a source step (bits 0-2), optionally an octave up
 // (bit 7). The identity map is the programmed sequence.
 bool generativeEnabled = false;
@@ -820,9 +824,8 @@ void updateMacroLfos(unsigned long now) {
 }
 
 void setup() {
-  pinMode(kMuxBit0Pin, OUTPUT); pinMode(kMuxBit1Pin, OUTPUT); pinMode(kMuxBit2Pin, OUTPUT);
-  pinMode(kSettingsAnalogPin, INPUT); pinMode(kStepButtonPin, INPUT_PULLUP);
-  pinMode(kStepAnalogPin, INPUT); pinMode(kModeButtonPin, INPUT_PULLUP);
+  DDRB |= kMuxPortMask;
+  PORTC |= _BV(kStepButtonBit) | _BV(kModeButtonBit);
 
   edgar.begin(CHA);
   for (uint8_t voice = 0; voice < SYNTH_VOICE_COUNT; ++voice) {
@@ -842,10 +845,8 @@ void setup() {
     dronePitchWord[i] = lowPitch + ((highPitch - lowPitch) * i) / (kStepCount - 1);
   }
 
-  lcd.begin(16, 2);
-  lcd.command(0x40);  // CGRAM glyph 0: the GEN '×'.
-  for (uint8_t row = 0; row < 8; ++row) lcd.write(pgm_read_byte(&kGenGlyph[row]));
-  nextStepIntervalMs = 15000U / seqControls.bpm;
+  lcdBegin();
+  nextStepIntervalMs = stepIntervalMs(1);
   lastStepMs = millis();
 }
 
@@ -866,19 +867,28 @@ void loop() {
   renderDisplay(now);
 }
 
+// Channel bits 0/1/2 map to PB0/PB3/PB2. No ISR writes PORTB, so the
+// read-modify-write is safe; Timer1 owns PB1 through OC1A.
 void selectMuxChannel(uint8_t channel) {
-  digitalWrite(kMuxBit0Pin, bitRead(channel, 0));
-  digitalWrite(kMuxBit1Pin, bitRead(channel, 1));
-  digitalWrite(kMuxBit2Pin, bitRead(channel, 2));
-  delayMicroseconds(kMuxSettleUs);
+  PORTB = (PORTB & ~kMuxPortMask) | (channel & 0x05) | ((channel & 0x02) << 2);
+  _delay_us(kMuxSettleUs);
+}
+
+// One conversion with AVcc reference; the core's init() enabled the ADC at
+// clock/128, as analogRead() used.
+uint16_t readAdc() {
+  ADCSRA |= _BV(ADSC);
+  while (ADCSRA & _BV(ADSC)) {}
+  return ADC;
 }
 
 // Discards settling reads and returns the median to reject analog spikes.
-uint16_t readMedianAnalog(uint8_t pin) {
+uint16_t readMedianAnalog(uint8_t channel) {
   uint16_t samples[kAnalogSamples];
-  for (uint8_t i = 0; i < kAnalogDiscardSamples; ++i) analogRead(pin);
+  ADMUX = _BV(REFS0) | channel;
+  for (uint8_t i = 0; i < kAnalogDiscardSamples; ++i) readAdc();
   for (uint8_t i = 0; i < kAnalogSamples; ++i) {
-    uint16_t value = analogRead(pin);
+    uint16_t value = readAdc();
     uint8_t at = i;
     while (at > 0 && samples[at - 1] > value) { samples[at] = samples[at - 1]; --at; }
     samples[at] = value;
@@ -1067,7 +1077,7 @@ void readControls(unsigned long now) {
   const uint8_t setting = settingScanChannel;
   selectMuxChannel(setting);
   const uint16_t settingFiltered = filterAnalog(
-    readMedianAnalog(kSettingsAnalogPin), filteredSettingRaw[setting], settingFilterReady[setting]);
+    readMedianAnalog(kSettingsAdcChannel), filteredSettingRaw[setting], settingFilterReady[setting]);
   settingValues[setting] = acceptAnalogMovement(
     settingFiltered, settingMotion[setting], kSettingMovementThreshold);
   settingReadyMask |= 1 << setting;
@@ -1118,7 +1128,7 @@ void readDroneControls(const uint16_t values[], unsigned long now) {
 
 void readSequencerStepPot(uint8_t step, unsigned long now) {
   selectMuxChannel(step);
-  const uint16_t filtered = filterAnalog(readMedianAnalog(kStepAnalogPin), filteredStepRaw[step], stepFilterReady[step]);
+  const uint16_t filtered = filterAnalog(readMedianAnalog(kStepAdcChannel), filteredStepRaw[step], stepFilterReady[step]);
   const bool firstRead = !stepMotion[step].ready;
   const uint16_t raw = acceptAnalogMovement(filtered, stepMotion[step], kStepMovementThreshold);
   const bool drumMode = isDrumProgram(seqControls.preset);
@@ -1141,7 +1151,7 @@ void readSequencerStepPot(uint8_t step, unsigned long now) {
 
 void readPlayStepPot(uint8_t step, unsigned long now) {
   selectMuxChannel(step);
-  const uint16_t filtered = filterAnalog(readMedianAnalog(kStepAnalogPin), filteredStepRaw[step], stepFilterReady[step]);
+  const uint16_t filtered = filterAnalog(readMedianAnalog(kStepAdcChannel), filteredStepRaw[step], stepFilterReady[step]);
   const uint16_t raw = acceptAnalogMovement(filtered, stepMotion[step], kStepMovementThreshold);
   if (step == 0) {
     const uint8_t next = mapIndexHysteresis(raw, playControls.octave, kPlayOctaveCount);
@@ -1165,7 +1175,7 @@ void readDronePitchPot(uint8_t voice, unsigned long now) {
   const uint16_t lowPitch = pitchWordForFrequency(kDroneFrequencyMin);
   const uint16_t highPitch = pitchWordForFrequency(kDroneFrequencyMax);
   selectMuxChannel(voice);
-  const uint16_t filtered = filterAnalog(readMedianAnalog(kStepAnalogPin), filteredStepRaw[voice], stepFilterReady[voice]);
+  const uint16_t filtered = filterAnalog(readMedianAnalog(kStepAdcChannel), filteredStepRaw[voice], stepFilterReady[voice]);
   const uint16_t raw = acceptAnalogMovement(filtered, stepMotion[voice], kDroneMovementThreshold);
   const bool showEdit = droneRawReady[voice];
   if (showEdit && raw == lastDroneRaw[voice]) return;
@@ -1186,7 +1196,7 @@ void readDronePitchPot(uint8_t voice, unsigned long now) {
 
 // One short MODE tap pages through controls; two quick taps change mode.
 void scanModeButton(unsigned long now) {
-  const uint8_t reading = digitalRead(kModeButtonPin);
+  const uint8_t reading = (PINC >> kModeButtonBit) & 1;
   if (reading != modeButtonReading) { modeButtonReading = reading; modeButtonChangedAt = now; }
   if ((unsigned long)(now - modeButtonChangedAt) >= kButtonDebounceMs && reading != modeButtonStable) {
     modeButtonStable = reading;
@@ -1235,7 +1245,7 @@ void scanModeButton(unsigned long now) {
 void scanStepButtons(unsigned long now) {
   for (uint8_t button = 0; button < kStepCount; ++button) {
     selectMuxChannel(button);
-    const uint8_t reading = digitalRead(kStepButtonPin);
+    const uint8_t reading = (PINC >> kStepButtonBit) & 1;
     if (reading != stepButtonReading[button]) { stepButtonReading[button] = reading; stepButtonChangedAt[button] = now; }
     if ((unsigned long)(now - stepButtonChangedAt[button]) >= kButtonDebounceMs && reading != stepButtonStable[button]) {
       stepButtonStable[button] = reading; handleStepButton(button, reading == LOW);
@@ -1249,10 +1259,11 @@ void handleStepButton(uint8_t button, bool pressed) {
     if (!pressed) modeChordStep = 255;
     return;
   }
-  // MODE + step 8 toggles GEN in SEQ and PLAY; MODE + step 1 toggles PLAY's
-  // background sequence. The chord button's release is swallowed.
+  // MODE + step 8 toggles GEN and MODE + step 2 swing in SEQ and PLAY;
+  // MODE + step 1 toggles PLAY's background sequence. The chord button's
+  // release is swallowed.
   if (pressed && modeButtonStable == LOW && instrumentMode != MODE_DRONE &&
-      (button == 7 || (button == 0 && instrumentMode == MODE_PLAY))) {
+      (button == 7 || button == 1 || (button == 0 && instrumentMode == MODE_PLAY))) {
     modeButtonChordUsed = true;
     modeChordStep = button;
     modePageTapPending = false;
@@ -1260,6 +1271,9 @@ void handleStepButton(uint8_t button, bool pressed) {
       generativeEnabled = !generativeEnabled;
       for (uint8_t step = 0; step < kStepCount; ++step) genSource[step] = step;
       genRandom = (genRandom ^ TCNT0) | 1;
+    } else if (button == 1) {
+      // The new step lengths start with the next step.
+      swingEnabled = !swingEnabled;
     } else {
       playSequencerEnabled = !playSequencerEnabled;
       edgar.setVoiceZeroBackground(playSequencerEnabled);
@@ -1333,7 +1347,7 @@ void changeMode(InstrumentMode nextMode, unsigned long now) {
       if (bitRead(seqGateMask, 0)) triggerSequencerStep(0, false);
       currentStep = 1;
       lastStepMs = now;
-      nextStepIntervalMs = bpmStepMs();
+      nextStepIntervalMs = stepIntervalMs(0);
     }
   }
   displayDirty = true;
@@ -1465,13 +1479,20 @@ void mutateGenerativeSteps() {
   genSource[step] = source;
 }
 
-uint16_t bpmStepMs() { return 15000U / max((uint8_t)1, seqControls.bpm); }
+// A step pair lasts two sixteenths. Swing lengthens the odd-numbered (first)
+// step and delays the even-numbered step by the same amount, so pairs and the
+// tempo stay exact. 60 BPM x 65% is 32,500, inside 16 bits.
+uint16_t stepIntervalMs(uint8_t step) {
+  const uint16_t pair = 30000U / seqControls.bpm;
+  const uint16_t first = swingEnabled ? pair * kSwingPercent / 100U : pair / 2;
+  return (step & 1) ? pair - first : first;
+}
 
 // Advances the shared sequencer without accumulating large timing drift.
 void runSequencer(unsigned long now) {
   if (instrumentMode == MODE_DRONE || (unsigned long)(now - lastStepMs) < nextStepIntervalMs) return;
   lastStepMs += nextStepIntervalMs;
-  nextStepIntervalMs = bpmStepMs();
+  nextStepIntervalMs = stepIntervalMs(currentStep);
   if ((unsigned long)(now - lastStepMs) >= nextStepIntervalMs) lastStepMs = now;
   if (currentStep == 0 && generativeEnabled) mutateGenerativeSteps();
   playingStep = currentStep;
@@ -1742,6 +1763,44 @@ void frameNumber(uint8_t row, uint8_t column, uint16_t value) {
   frameText(row, column, text);
 }
 
+// Latches one LCD nibble (bits 7-4) with RS (bit 2); E is high for >= 1 us.
+void lcdNibble(uint8_t value) {
+  PORTD = value;
+  PORTD = value | kLcdEnable;
+  _delay_us(1);
+  PORTD = value;
+}
+
+// Writes a command (rs = 0) or data byte (rs = kLcdRs), then waits out the
+// 37 us execution time scaled to the slowest 190 kHz controller clock.
+void lcdWrite(uint8_t value, uint8_t rs) {
+  lcdNibble((value & 0xF0) | rs);
+  lcdNibble((uint8_t)(value << 4) | rs);
+  _delay_us(53);
+}
+
+// HD44780 4-bit initialization by instruction, then the GEN glyph in CGRAM 0.
+const uint8_t kLcdInitCommands[] PROGMEM = {
+  0x28,  // 4-bit, two lines, 5x8 font.
+  0x0C,  // Display on, cursor and blink off.
+  0x06,  // Increment, no shift.
+  0x01,  // Clear.
+  0x40,  // CGRAM address 0.
+};
+
+void lcdBegin() {
+  DDRD |= 0xFC;
+  _delay_ms(50);
+  for (uint8_t i = 0; i < 3; ++i) { lcdNibble(0x30); _delay_ms(4.1); }
+  lcdNibble(0x20);
+  _delay_us(53);
+  for (uint8_t i = 0; i < sizeof(kLcdInitCommands); ++i) {
+    lcdWrite(pgm_read_byte(&kLcdInitCommands[i]), 0);
+    _delay_ms(2);  // Covers clear's 1.52 ms at 270 kHz, scaled to 190 kHz.
+  }
+  for (uint8_t row = 0; row < 8; ++row) lcdWrite(pgm_read_byte(&kGenGlyph[row]), kLcdRs);
+}
+
 // Writes only LCD regions that differ from the rendered frame.
 void flushDisplayFrame() {
   for (uint8_t row = 0; row < 2; ++row) {
@@ -1750,10 +1809,10 @@ void flushDisplayFrame() {
       while (column < 16 && renderedFrameReady &&
              displayFrame[row][column] == renderedFrame[row][column]) ++column;
       if (column >= 16) break;
-      lcd.setCursor(column, row);
+      lcdWrite(0x80 | (row ? 0x40 : 0) | column, 0);  // Set DDRAM address.
       while (column < 16 && (!renderedFrameReady ||
              displayFrame[row][column] != renderedFrame[row][column])) {
-        lcd.write(displayFrame[row][column]);
+        lcdWrite(displayFrame[row][column], kLcdRs);
         renderedFrame[row][column] = displayFrame[row][column];
         ++column;
       }
@@ -1856,6 +1915,8 @@ void renderSequencerDashboard(bool inlineEditVisible) {
     frameChar(1, step, step == playingStep ? (enabled ? 'O' : 'o') : (enabled ? 'x' : '-'));
   }
   if (generativeEnabled) frameChar(1, 8, kGenChar);
+  // A four-letter drum name in the step edit briefly covers the swing mark.
+  if (swingEnabled) frameChar(1, 15, 'S');
   if (inlineEditVisible && editedStep < kStepCount) {
     frameChar(1, 9, 'S'); frameChar(1, 10, '1' + editedStep); frameChar(1, 11, ':');
     if (isDrumProgram(seqControls.preset)) frameProgmemText(1, 12, kDrumLabels[stepDrums[editedStep]]);

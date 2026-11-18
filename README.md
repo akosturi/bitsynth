@@ -9,7 +9,7 @@ The same firmware runs on the physical instrument and in the browser simulator. 
 - **Hardware:** Arduino Pro Mini, 5 V / 16 MHz, ATmega328P
 - **Firmware build:** PlatformIO environment `hardware`
 - **Browser simulator:** the physical front-panel view in `simulator/hardware.html`
-- **Last verified `hardware` build footprint:** 30,018 bytes flash (97.7%) and 1,084 bytes RAM (52.9%)
+- **Last verified `hardware` build footprint:** 29,640 bytes flash (96.5%) and 1,058 bytes RAM (51.7%)
 
 An Uno or Nano with the same ATmega328P clock and voltage can also run the firmware if wired to the same pins.
 
@@ -22,7 +22,7 @@ Install:
 1. [Visual Studio Code](https://code.visualstudio.com/)
 2. The **PlatformIO IDE** VS Code extension
 
-Alternatively, install PlatformIO Core and use the `pio` command directly. The only external firmware dependency is Arduino's `LiquidCrystal` library; PlatformIO installs the version declared in `platformio.ini` automatically. No Node.js packages are required.
+Alternatively, install PlatformIO Core and use the `pio` command directly. The firmware needs only the Arduino core that PlatformIO installs for the target declared in `platformio.ini`; the LCD, multiplexers, buttons, and ADC are driven directly through the ATmega328P registers, with no external libraries. No Node.js packages are required.
 
 Build the firmware:
 
@@ -120,14 +120,14 @@ SEQ -> PLAY -> DRONE -> SEQ
 
 Holding **MODE** by itself does nothing. It remains a modifier for the documented
 MODE combinations, including PLAY's MODE + step button 1 background-sequence toggle
-and the SEQ/PLAY MODE + step button 8 `GEN` toggle.
+and the SEQ/PLAY MODE + step button 2 swing and MODE + step button 8 `GEN` toggles.
 
 There is no PANIC gesture. Each new SEQ/PLAY page uses soft takeover, so pots
 must move away from their position at the page change before they take effect.
 In DRONE, hold **MODE** while turning a parameter pot to set that oscillator
 pair's VCA-LFO rate. In PLAY, hold **MODE** and press step button 1 to toggle
-the background sequence. In SEQ and PLAY, hold **MODE** and press step button 8
-to toggle `GEN`. None of these MODE combinations counts as a tap gesture.
+the background sequence. In SEQ and PLAY, hold **MODE** and press step button 2
+to toggle swing, or step button 8 to toggle `GEN`. None of these MODE combinations counts as a tap gesture.
 
 ### SEQ - eight-step sequencer
 
@@ -148,7 +148,19 @@ does not appear for melodic programs. Empty macro and LFO slots are skipped,
 so no completely empty parameter page is shown. The `DRM` direct macro is
 `DEC` (decay).
 
-The LCD's upper row shows the selected control page's parameter names, except program and tempo, which always show the selected program and BPM value, and briefly (about 1.5 s) shows values when they change. The lower row shows the gate pattern: `x` is an enabled step, `-` is disabled, and `O`/`o` marks the current enabled/disabled step. Turning a step pot briefly shows its step number and note name, or drum name in `DRM`, at the lower right. A `×` after the gate pattern shows that `GEN` is on.
+The LCD's upper row shows the selected control page's parameter names, except program and tempo, which always show the selected program and BPM value, and briefly (about 1.5 s) shows values when they change. The lower row shows the gate pattern: `x` is an enabled step, `-` is disabled, and `O`/`o` marks the current enabled/disabled step. Turning a step pot briefly shows its step number and note name, or drum name in `DRM`, at the lower right. A `×` after the gate pattern shows that `GEN` is on, and an `S` in the last character that swing is on; a four-letter drum name covers the `S` while it is shown.
+
+#### Swing
+
+Hold **MODE** and press step button 2 in SEQ or PLAY to switch swing on or
+off; it is off at power-up. SEQ marks it with an `S` in the last character
+of the lower row; PLAY has no mark. Swing delays the even-numbered steps (2, 4, 6, and
+8) to 65% of each pair of steps, a light shuffle between straight sixteenths
+(50%) and a triplet feel (67%). Each pair keeps its straight length, so the
+tempo is unchanged. It applies to every program, including `DRM`, and to
+PLAY's background sequence and arpeggios, which follow the same clock: `1/2`,
+`1/4`, and `1/8` keep their straight timing, while the other divisions follow
+the swung steps. The change takes effect from the next step.
 
 #### GEN - generative variation
 
@@ -292,7 +304,7 @@ PLAY reserves voice 0 for the monophonic background sequence and uses voices
 | Step pot 3 | Arpeggio division: `1/2`, `1/4`, `1/4t`, `1/8`, `1/8t`, `1/16`, `1/16t`, `1/32` |
 | Step pot 4 | Unused |
 | Step pots 5-8 | Unused |
-| Step buttons 1-8 | Consecutive notes of the selected scale; MODE + button 1 toggles the background sequence, MODE + button 8 toggles `GEN` |
+| Step buttons 1-8 | Consecutive notes of the selected scale; MODE + button 1 toggles the background sequence, MODE + button 2 swing, MODE + button 8 `GEN` |
 
 PLAY packs program, root note, scale, style, then its available direct macros
 and LFO rate/depth pairs into four-control pages; empty slots are skipped.
@@ -317,7 +329,7 @@ sweep.
   three notes; the next note steals the oldest live voice in either case.
 - `CHRD` plays a scale-derived 1-3-5 chord from the most recently held button,
   using the preset's first voice recipe.
-- `UP`, `DOWN`, and `UPDN` arpeggiate held buttons at step pot 3's division of the sequencer clock, including triplets; every division restarts in phase with sequencer step 1. Button presses and releases are applied at the next clock, so they cannot retrigger an off-grid note.
+- `UP`, `DOWN`, and `UPDN` arpeggiate held buttons at step pot 3's division of the sequencer clock, including triplets; every division restarts in phase with sequencer step 1. With swing on, `1/2`, `1/4`, and `1/8` keep their straight timing, while the other divisions follow the swung steps. Button presses and releases are applied at the next clock, so they cannot retrigger an off-grid note.
 - `CUP`, `CDWN`, and `CUDN` arpeggiate the 1-3-5 chord of the most recently held button upward, downward, or up then down, respectively, on that same clock; button changes are likewise clock-quantized.
 
 A live note-off does not cut the voice: it fades from its current level to
@@ -413,6 +425,7 @@ On Windows, set `RAW_TO_H_OUTPUT_BITS` to `9` near the top of `util/raw_to_h.bat
 - **Low-pass filter:** a fixed-point Chamberlin state-variable filter with two 16-bit states and 8-bit cutoff and damping coefficients runs over each eight-sample block, before the VCA and the chorus, at about 82 cycles per sample. Its states run at a quarter of the mix scale with saturating arithmetic, so no input can wrap them; its input gain is the damping moved three eighths of the way back toward unity, so resonance keeps more level and overdrives its peak, and its output is clamped to the mix range. At 20 kHz the structure stays stable and well tuned up to about fs/6, which sets the 3.3 kHz upper cutoff. When it is open, it costs nothing and its state follows the mix, so it engages without a step; it opens and closes through its brightest, unity-damping setting. Each coefficient moves one step per block toward its target. The shared filter envelope reads the smooth decay envelope `1` once per block at eight times the voice envelope step, on the same phase rules as the voice envelopes, and adds its share of the remaining distance to the brightest coefficient after that slew, with two 8-bit multiplies.
 - **PWM quality:** the internal mix uses additional fixed-point precision before conversion to 9-bit PWM, with quantization-error feedback and dither where appropriate.
 - **Output level:** each voice's envelope is scaled by its level at the 5 kHz control rate, so it costs no per-sample work. The levels of all voices that can sound together never exceed the mix's full scale, which keeps the summed bus inside the PWM range without a limiter or clipping stage.
+- **Direct I/O:** multiplexer address lines are set in one port write and the ADC is read through its registers. The LCD is driven write-only in 4-bit mode with only the HD44780 commands the firmware uses, waiting the controller's worst-case execution time instead of polling the busy flag.
 - **Stable controls:** multiplexed analog inputs use settling reads, median sampling, smoothing, movement confirmation, and hysteresis. Buttons are debounced in software.
 - **Efficient LCD updates:** a two-line shadow buffer writes only changed characters, avoiding visible flicker and unnecessary time in the control loop.
 - **Simulator fidelity:** Timer1 mode 6 is modeled explicitly. Like the hardware, the simulator executes one more instruction after interrupts are enabled before serving one, which GCC's stack-pointer updates rely on. PWM edges feed an exact state-space model of the RC ladder and AC-coupling stage, followed by oversampling and a four-pole anti-alias filter before Web Audio output.
@@ -431,7 +444,7 @@ src/             Firmware, synth engine, wavetables, envelopes, and drum samples
 simulator/       Browser front panel, AVR runtime, hardware mapping, and image assets
 schematic/       KiCad schematic/PCB project and wiring reference
 util/            Windows helpers for converting and previewing PCM sample headers
-platformio.ini   Build target and library dependency
+platformio.ini   Build target and flags
 ```
 
 ## License
