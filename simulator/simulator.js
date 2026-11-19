@@ -20,6 +20,9 @@ const AUDIO_BUFFER_SIZE = 2048;
 const AUDIO_ISR_BUDGET_CYCLES = 800; // 16 MHz / 20 kHz sample rate.
 const CYCLE_METER_SMOOTHING = 0.15;
 const CYCLE_METER_UPDATE_MS = 500;
+const CYCLE_METER_BLOCKS = 4; // Measured eight-sample blocks per audio callback.
+const INTERRUPT_ENTRY_CYCLES = 4; // ATmega328P interrupt response.
+const INTERRUPT_ENTRY_EXTRA_CYCLES = 2; // What AVR8js's avrInterrupt() omits.
 const TIMER2_COMPA_VECTOR = timer2Config.compAInterrupt;
 const TIMER2_COMPB_VECTOR = timer2Config.compBInterrupt;
 const VECTOR_TABLE_WORDS = 52; // ATmega328P: 26 two-word vectors.
@@ -570,7 +573,11 @@ class OutputFilter {
 }
 
 // Bitsynth-specific Timer1 mode 6 model: 9-bit, single-slope Fast PWM,
-// OCR1A double-buffered at BOTTOM, non-inverting output on OC1A/D9.
+// OCR1A double-buffered at BOTTOM, non-inverting output on OC1A/D9. Each
+// PWM period drives the output filter with its mean voltage, which is what
+// is audible. The 31.25 kHz carrier itself is ultrasonic on the instrument,
+// but sampled edges would alias it into the monitor's 48 kHz output (about
+// -37 dB at 16.75 kHz).
 class FastPwm9 {
   constructor(filter) {
     this.filter = filter;
@@ -581,13 +588,18 @@ class FastPwm9 {
     this.activeCompare = 0;
     this.pendingCompare = 0;
     this.hasPendingCompare = false;
-    this.high = false;
+    this.voltage = 0;
   }
 
-  setOutput(high, cycle) {
-    if (this.high === high) return;
-    this.high = high;
-    this.filter.setInputVoltage(high ? 5 : 0, cycle);
+  setVoltage(voltage, cycle) {
+    if (this.voltage === voltage) return;
+    this.voltage = voltage;
+    this.filter.setInputVoltage(voltage, cycle);
+  }
+
+  // OC1A is high for compare + 1 of the 512 cycles, or always at TOP.
+  periodVoltage() {
+    return this.activeCompare >= 511 ? 5 : 5 * (this.activeCompare + 1) / 512;
   }
 
   start(cycle, compare) {
@@ -597,7 +609,7 @@ class FastPwm9 {
     this.activeCompare = Math.min(compare, 511);
     this.pendingCompare = this.activeCompare;
     this.hasPendingCompare = false;
-    if (this.enabled) this.setOutput(true, cycle);
+    if (this.enabled) this.setVoltage(this.periodVoltage(), cycle);
   }
 
   stop(cycle) {
@@ -614,42 +626,109 @@ class FastPwm9 {
   setEnabled(enabled, cycle, portHigh) {
     this.advanceTo(cycle);
     this.enabled = enabled;
-    if (enabled) this.setOutput(this.activeCompare === 511 || this.phase <= this.activeCompare, cycle);
-    else this.setOutput(portHigh, cycle);
-  }
-
-  cyclesUntil(eventPhase) {
-    const distance = (eventPhase - this.phase + 512) % 512;
-    return distance || 512;
+    this.setVoltage(enabled ? this.periodVoltage() : (portHigh ? 5 : 0), cycle);
   }
 
   advanceTo(targetCycle) {
     if (!this.running || targetCycle <= this.lastCycle) return;
     while (this.lastCycle < targetCycle) {
-      const clearPhase = Math.min(this.activeCompare + 1, 511);
-      let distance = this.cyclesUntil(0);
-      if (this.enabled && this.activeCompare < 511) distance = Math.min(distance, this.cyclesUntil(clearPhase));
+      const distance = 512 - this.phase;
       if (this.lastCycle + distance > targetCycle) {
-        const elapsed = targetCycle - this.lastCycle;
-        this.filter.integrateTo(targetCycle);
-        this.phase = (this.phase + elapsed) % 512;
+        this.phase += targetCycle - this.lastCycle;
         this.lastCycle = targetCycle;
+        this.filter.integrateTo(targetCycle);
         return;
       }
-
       this.lastCycle += distance;
-      this.phase = (this.phase + distance) % 512;
-      this.filter.integrateTo(this.lastCycle);
-      if (this.phase === 0) {
-        if (this.hasPendingCompare) {
-          this.activeCompare = this.pendingCompare;
-          this.hasPendingCompare = false;
-        }
-        if (this.enabled) this.setOutput(true, this.lastCycle);
-      } else if (this.enabled && this.activeCompare < 511 && this.phase === this.activeCompare + 1) {
-        this.setOutput(false, this.lastCycle);
+      this.phase = 0;
+      if (this.hasPendingCompare) {
+        this.activeCompare = this.pendingCompare;
+        this.hasPendingCompare = false;
       }
+      if (this.enabled) this.setVoltage(this.periodVoltage(), this.lastCycle);
     }
+  }
+}
+
+// Bitsynth-specific Timer2 model: CTC mode (TOP = OCR2A) with the compare A
+// and B interrupts, matching AVR8js's flag timing. AVR8js's generic timer runs
+// an event on every prescaled tick (2 MHz here); this one schedules only the
+// next compare match, which keeps the emulator fast enough for live audio.
+class CtcTimer2 {
+  constructor(cpu) {
+    const { TIFR, TIMSK, TCNT, OCRA, OCRB, TCCRA, TCCRB } = timer2Config;
+    const interrupt = (address, mask) =>
+      ({ address, flagRegister: TIFR, flagMask: mask, enableRegister: TIMSK, enableMask: mask });
+    this.cpu = cpu;
+    this.compA = interrupt(timer2Config.compAInterrupt, 2);
+    this.compB = interrupt(timer2Config.compBInterrupt, 4);
+    this.divider = 0;
+    this.top = 0;
+    this.ocrB = 0;
+    this.base = 0; // Cycle at which the counter was last zero.
+    this.match = () => this.onMatch();
+    const configure = (register) => (value) => {
+      const count = this.count();
+      // Like the free-running prescaler, reconfiguring keeps the tick phase.
+      const phase = this.divider ? (cpu.cycles - this.base) % this.divider : 0;
+      cpu.data[register] = value;
+      this.divider = timer2Config.dividers[cpu.data[TCCRB] & 7] || 0;
+      if ((cpu.data[TCCRA] & 3) !== 2 || (cpu.data[TCCRB] & 8)) this.divider = 0; // CTC only.
+      this.top = cpu.data[OCRA];
+      this.ocrB = cpu.data[OCRB];
+      this.restart(register === TCNT ? value : Math.min(count, this.top), phase % (this.divider || 1));
+      return true;
+    };
+    for (const register of [TCCRA, TCCRB, OCRA, OCRB, TCNT]) cpu.writeHooks[register] = configure(register);
+    cpu.readHooks[TCNT] = () => this.count();
+    cpu.writeHooks[TIFR] = (value) => {
+      cpu.data[TIFR] = value;
+      cpu.clearInterruptByFlag(this.compA, value);
+      cpu.clearInterruptByFlag(this.compB, value);
+      return true;
+    };
+    cpu.writeHooks[TIMSK] = (value) => {
+      cpu.updateInterruptEnable(this.compA, value);
+      cpu.updateInterruptEnable(this.compB, value);
+    };
+  }
+
+  count() {
+    if (!this.divider) return this.cpu.data[timer2Config.TCNT];
+    const ticks = Math.floor((this.cpu.cycles - this.base) / this.divider);
+    return ticks % (this.top + 1);
+  }
+
+  restart(count, phase) {
+    this.cpu.clearClockEvent(this.match);
+    this.cpu.data[timer2Config.TCNT] = count;
+    if (!this.divider) return;
+    this.base = this.cpu.cycles - phase - count * this.divider;
+    this.schedule(count);
+  }
+
+  // Schedules the first match after counter value `count`.
+  schedule(count) {
+    const period = this.top + 1;
+    let next = period;
+    for (const target of [this.top, this.ocrB]) {
+      if (target > this.top) continue;
+      const distance = (target - count + period) % period || period;
+      next = Math.min(next, distance);
+    }
+    const ticks = Math.floor((this.cpu.cycles - this.base) / this.divider);
+    this.cpu.addClockEvent(this.match, this.base + (ticks + next) * this.divider - this.cpu.cycles);
+  }
+
+  // Runs at the exact match cycle or, after a long instruction, a few cycles
+  // later (always less than one prescaled tick).
+  onMatch() {
+    const ticks = Math.floor((this.cpu.cycles - this.base) / this.divider);
+    const count = ticks % (this.top + 1);
+    if (count === this.top) this.cpu.setInterruptFlag(this.compA);
+    if (count === this.ocrB) this.cpu.setInterruptFlag(this.compB);
+    this.base += (ticks - count) * this.divider; // Keep the base recent.
+    this.schedule(count);
   }
 }
 
@@ -700,7 +779,7 @@ class BitsynthMachine {
     new Uint8Array(this.program.buffer).set(bytes.subarray(0, FLASH_BYTES));
     this.cpu = new CPU(this.program);
     this.timer0 = new AVRTimer(this.cpu, timer0Config);
-    this.timer2 = new AVRTimer(this.cpu, timer2Config);
+    this.timer2 = new CtcTimer2(this.cpu);
     this.portB = new AVRIOPort(this.cpu, portBConfig);
     this.portC = new AVRIOPort(this.cpu, portCConfig);
     this.portD = new AVRIOPort(this.cpu, portDConfig);
@@ -718,6 +797,7 @@ class BitsynthMachine {
     // Audio load: cycles whose innermost active interrupt is TIMER2_COMPA
     // (sample output) or TIMER2_COMPB (block rendering, which nests COMPA).
     this.isrStack = [];
+    this.meterWindows = 0;
     this.audioIsrWindowCycles = 0;
     this.audioIsrWindowStart = 0;
     this.audioIsrCallbackCycles = 0;
@@ -805,6 +885,7 @@ class BitsynthMachine {
   // Runs the CPU until targetCycle. Like the hardware, one more instruction
   // runs after SEI, RETI, or an SREG write enables interrupts before one is
   // served; GCC's stack-pointer updates (out SPH; out SREG; out SPL) rely on it.
+  // AVR8js charges two cycles to enter an interrupt; the ATmega328P takes four.
   run(targetCycle) {
     const cpu = this.cpu;
     const data = cpu.data;
@@ -817,35 +898,43 @@ class BitsynthMachine {
         data[SREG] |= 0x80;
       } else {
         cpu.tick();
+        if (enabled && cpu.pc < VECTOR_TABLE_WORDS) cpu.cycles += INTERRUPT_ENTRY_EXTRA_CYCLES;
       }
     }
   }
 
-  // The same loop with audio-interrupt accounting for the cycle meter.
+  // The same loop with audio-interrupt accounting for the cycle meter. It
+  // stops when the callback's measured blocks are complete.
   runMetered(targetCycle) {
     const cpu = this.cpu;
     const data = cpu.data;
     const program = this.program;
     const stack = this.isrStack;
-    while (cpu.cycles < targetCycle) {
-      const pc = cpu.pc;
+    const audio = (vector) => vector === TIMER2_COMPA_VECTOR || vector === TIMER2_COMPB_VECTOR;
+    while (cpu.cycles < targetCycle && this.meterWindows) {
       const before = cpu.cycles;
-      const returns = program[pc] === RETI_OPCODE;
+      const returns = program[cpu.pc] === RETI_OPCODE;
       const enabled = data[SREG] & 0x80;
       avrInstruction(cpu);
+      let entered = false;
       if (!enabled && (data[SREG] & 0x80)) {
         data[SREG] &= 0x7f;
         cpu.tick();
         data[SREG] |= 0x80;
       } else {
         cpu.tick();
+        entered = enabled && cpu.pc < VECTOR_TABLE_WORDS;
+        if (entered) cpu.cycles += INTERRUPT_ENTRY_EXTRA_CYCLES;
       }
-      const active = stack[stack.length - 1];
-      if (active === TIMER2_COMPA_VECTOR || active === TIMER2_COMPB_VECTOR) {
-        this.audioIsrWindowCycles += cpu.cycles - before;
-      }
+      // The instruction belongs to the interrupted code, the entry to the
+      // interrupt it starts.
+      const entry = entered ? INTERRUPT_ENTRY_CYCLES : 0;
+      if (audio(stack[stack.length - 1])) this.audioIsrWindowCycles += cpu.cycles - before - entry;
       if (returns && stack.length) stack.pop();
-      if (cpu.pc < VECTOR_TABLE_WORDS && cpu.pc !== pc + 1) stack.push(cpu.pc);
+      if (entered) {
+        stack.push(cpu.pc);
+        if (audio(cpu.pc)) this.audioIsrWindowCycles += entry;
+      }
       if (cpu.cycles - this.audioIsrWindowStart >= AUDIO_BLOCK_CYCLES) {
         const perSample = this.audioIsrWindowCycles * AUDIO_ISR_BUDGET_CYCLES /
           (cpu.cycles - this.audioIsrWindowStart);
@@ -857,6 +946,7 @@ class BitsynthMachine {
         this.audioIsrWindowWarm = true;
         this.audioIsrWindowCycles = 0;
         this.audioIsrWindowStart = cpu.cycles;
+        this.meterWindows--;
       }
     }
   }
@@ -869,15 +959,13 @@ class BitsynthMachine {
     }
     this.audioIsrBlockMax = 0;
     this.audioIsrCallbackCycles = 0;
-    const callbackStart = this.cpu.cycles;
-    // The meter samples two render blocks per callback; the first only
-    // resynchronizes interrupt tracking. Metering every instruction made
-    // playback too slow and caused periodic dropouts.
-    const meterUntil = ui.cycleMeter && !ui.cycleMeter.hidden ?
-      callbackStart + 2 * AUDIO_BLOCK_CYCLES : 0;
+    // The meter samples a few render blocks per callback after one block
+    // that only resynchronizes interrupt tracking. Metering every instruction
+    // made playback too slow and caused periodic dropouts.
+    this.meterWindows = ui.cycleMeter && !ui.cycleMeter.hidden ? 1 + CYCLE_METER_BLOCKS : 0;
     this.isrStack.length = 0;
     this.audioIsrWindowCycles = 0;
-    this.audioIsrWindowStart = callbackStart;
+    this.audioIsrWindowStart = this.cpu.cycles;
     this.audioIsrWindowWarm = false;
     this.audioIsrMeasuredCycles = 0;
     const cyclesPerSubsample = CLOCK_HZ / (outputSampleRate * AUDIO_OVERSAMPLE);
@@ -886,7 +974,7 @@ class BitsynthMachine {
       for (let subSample = 0; subSample < AUDIO_OVERSAMPLE; subSample++) {
         this.sampleCycle += cyclesPerSubsample;
         // Accounting runs only while the meter is shown, keeping playback fast.
-        if (this.cpu.cycles < meterUntil) this.runMetered(Math.min(this.sampleCycle, meterUntil));
+        if (this.meterWindows) this.runMetered(this.sampleCycle);
         this.run(this.sampleCycle);
         this.pwm.advanceTo(this.cpu.cycles);
         const voltage = this.filter.sample(this.cpu.cycles);
@@ -1224,8 +1312,17 @@ ui.resetButton.addEventListener('click', () => resetMachine().catch(reportRuntim
 
 await readDiagram();
 buildControls();
+// The hidden service screw toggles the cycle meter; each reopening starts a
+// fresh measurement.
 ui.cycleMeterScrew?.addEventListener('click', () => {
-  ui.cycleMeter.hidden = false;
+  const show = ui.cycleMeter.hidden;
+  ui.cycleMeter.hidden = !show;
+  ui.cycleMeterScrew.setAttribute('aria-label', `${show ? 'Hide' : 'Show'} audio ISR cycle meter`);
+  ui.cycleMeterScrew.setAttribute('aria-pressed', String(show));
+  if (show && machine) {
+    machine.audioIsrCycles = 0;
+    machine.audioIsrMaxCycles = 0;
+  }
   cycleMeterUpdatedAt = 0;
 });
 drawScope();

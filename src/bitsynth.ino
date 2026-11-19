@@ -278,11 +278,16 @@ uint8_t currentStep = 0;
 uint8_t playingStep = 255;
 unsigned long lastStepMs = 0;
 uint16_t nextStepIntervalMs = 119;
-// One voice or the drum reaches full PWM scale, so every voice that can sound
-// at once shares SYNTH_LEVEL_BUDGET. PLAY's background voice keeps a fixed
+// One voice or the drum reaches full PWM scale. Voices that can sound at once
+// share kVoiceLevelBudget, twice full scale; the audio engine's bus limiter
+// lowers them together only while their envelopes would exceed full scale, so
+// staggered and decaying notes play louder. PLAY's background voice keeps a fixed
 // share of about three tenths, so it stands out over the live voices and
-// live style changes never need to rescale a ringing sequence.
+// live style changes never need to rescale a ringing sequence. Its short drum
+// hits play louder; the limiter makes room for them under the live voices.
+const uint16_t kVoiceLevelBudget = SYNTH_LEVEL_BUDGET * 2;
 const uint8_t kBackgroundVoiceLevel = 79;
+const uint8_t kBackgroundDrumLevel = 127;
 uint8_t sequenceVoiceLevel = kBackgroundVoiceLevel;
 uint8_t liveVoiceLevel = kBackgroundVoiceLevel;
 uint16_t normalCurrentPitch[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
@@ -1170,7 +1175,9 @@ void readPlayStepPot(uint8_t step, unsigned long now) {
   const uint16_t raw = acceptAnalogMovement(filtered, stepMotion[step], kStepMovementThreshold);
   if (step == 0) {
     const uint8_t next = mapIndexHysteresis(raw, playControls.octave, kPlayOctaveCount);
-    if (next != playControls.octave) { playControls.octave = next; revoiceHeldButtons(); displayDirty = true; }
+    // Held notes keep sounding; the new octave applies from the next press,
+    // or the next clock for arpeggios, so turning the pot never retriggers.
+    if (next != playControls.octave) { playControls.octave = next; displayDirty = true; }
   } else if (step == 1) {
     // The tempo is shared with SEQ, so it waits for movement after entering PLAY.
     if (playBpmPotLocked) {
@@ -1436,7 +1443,7 @@ void triggerSequencerNote(uint8_t note, bool backgroundOnly) {
   const uint8_t glide = activeMacroValue(MACRO_GLIDE, preset.glide);
   const uint16_t pulseWidth = pulseWidthForPercent(
     lfoModulatedMacroValue(MACRO_PULSE_WIDTH, preset.squarePulseWidthPercent));
-  sequenceVoiceLevel = outputLevel(backgroundOnly ? kBackgroundVoiceLevel : SYNTH_LEVEL_BUDGET,
+  sequenceVoiceLevel = outputLevel(backgroundOnly ? kBackgroundVoiceLevel : kVoiceLevelBudget,
     voiceCount, preset.level);
 
   // Unused voices stop first, so louder new levels never overlap them.
@@ -1461,7 +1468,7 @@ void triggerDrum(uint8_t drum, bool backgroundOnly) {
   const uint8_t decay = lfoModulatedMacroValue(MACRO_DRUM_DECAY, preset.decay);
   const uint8_t tone = lfoModulatedMacroValue(MACRO_DRUM_TUNE, seqControls.drumTone);
   edgar.triggerDrum(min(drum, (uint8_t)(kDrumCount - 1)), tone, decay,
-    outputLevel(backgroundOnly ? kBackgroundVoiceLevel : SYNTH_LEVEL_BUDGET, 1, preset.level));
+    outputLevel(backgroundOnly ? kBackgroundDrumLevel : kVoiceLevelBudget, 1, preset.level));
 }
 
 // A step's note as GEN currently plays it.
@@ -1563,7 +1570,7 @@ void applyLiveConfiguration() {
       SYNTH_VOICE_COUNT - playSequencerEnabled);
   }
   liveVoiceLevel = outputLevel(playSequencerEnabled ?
-    SYNTH_LEVEL_BUDGET - kBackgroundVoiceLevel : SYNTH_LEVEL_BUDGET, liveVoices, preset.level);
+    kVoiceLevelBudget - kBackgroundVoiceLevel : kVoiceLevelBudget, liveVoices, preset.level);
   applyCurrentProgramMorph();
   for (uint8_t voice = firstLiveVoice(); voice < SYNTH_VOICE_COUNT; ++voice) {
     edgar.setWave(voice, preset.voices[0].wave);

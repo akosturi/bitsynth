@@ -68,11 +68,11 @@ Simulator controls:
 - Tap `M` to change a SEQ/PLAY parameter page; double-tap it to change mode. Hold `M` with `1` or `8` for the MODE + step-button combinations.
 - Every knob and button is also usable with the pointer.
 
-The simulator models the real 9-bit, 31.25 kHz PWM signal and the documented passive output filter, not just the synth's digital sample stream. Firmware execution, LCD output, multiplexed controls, audio generation, and filtering all run in the browser.
+The simulator models the real 9-bit, 31.25 kHz PWM output and the documented passive output filter, not just the synth's digital sample stream. Firmware execution, LCD output, multiplexed controls, audio generation, and filtering all run in the browser.
 
 ### Audio ISR cycle meter
 
-Click the lower-right screw on the simulated front panel to reveal the audio ISR cycle meter. It shows the smoothed audio interrupt load in cycles per 20 kHz sample period and the highest average over one eight-sample render block, against the 800-cycle budget. Both audio interrupts count, and a sample-output interrupt nested in block rendering is counted once. The screw does not change the firmware state or any control value.
+Click the lower-right screw on the simulated front panel to show or hide the audio ISR cycle meter; each reopening starts a new measurement. It shows the smoothed audio interrupt load in cycles per 20 kHz sample period and the highest average over one eight-sample render block, against the 800-cycle budget. Both audio interrupts count, including their four-cycle interrupt entry, and a sample-output interrupt nested in block rendering is counted once. The meter samples a few render blocks in each audio callback, so a rare peak can take a while to appear in MAX. The screw does not change the firmware state or any control value.
 
 ## Hardware
 
@@ -230,16 +230,22 @@ both SEQ and PLAY; `0` switches glide off.
 
 Output level is set automatically whenever a note or drum hit starts. One
 voice or the `DRM` sample can fill the whole 9-bit PWM range, and the voices
-that can sound at the same time share full scale equally, so the mix cannot
-clip. In SEQ, one-voice presets and `DRM` therefore play at full scale,
-two-voice presets at half per voice, three-voice presets at one third, and
-four-voice presets at one quarter. In PLAY, a running background sequence
-keeps about three tenths and the live voices share the rest: single-voice
-`POLY` uses one quarter per note (a little less with the background
-sequence running), a unison stack (in `POLY` or an arpeggio) and `CHRD`
-divide their share by their voice count, and single-voice arpeggios use the
-whole share (full scale, or about seven tenths with the background sequence
-running). Each melodic preset and the `DRM`
+that can sound at the same time share twice full scale equally, capped at
+full scale per voice. In SEQ, one- and two-voice presets and `DRM` therefore
+play at full scale per voice, three-voice presets at two thirds, and
+four-voice presets at half. In PLAY, a running background sequence keeps
+about three tenths (its `DRM` hits half) and the live voices share the rest:
+single-voice `POLY` uses half per note (a little more with the background
+sequence running), a unison stack (in `POLY`
+or an arpeggio) and `CHRD` divide their share by their voice count, and
+single-voice arpeggios play at full scale. A fixed bus limiter keeps the mix
+from clipping: whenever the current envelope levels of all voices, plus the
+peak of a sounding drum hit, would exceed full scale, it lowers every voice
+together at once and recovers in about 0.14 s. The drum itself is never
+lowered. Below full scale the limiter does nothing, so staggered, decaying,
+and released notes play louder while quieter passages keep their dynamics;
+it never reduces the level by more than the overcommit of about 6 dB unless
+a drum hit needs the room. Each melodic preset and the `DRM`
 program also store a level (`0-255`) that only attenuates this automatic
 level; every supplied program uses `255`, the full automatic level.
 
@@ -302,7 +308,7 @@ PLAY reserves voice 0 for the monophonic background sequence and uses voices
 | Control | Function |
 |---|---|
 | Parameter pots 1-4 | The four parameters on the selected control page |
-| Step pot 1 | Octave range, O1-O5 (C1-C5) |
+| Step pot 1 | Octave range, O1-O5 (C1-C5); held notes are not retriggered, so the new octave applies from the next press, or the next clock for arpeggios |
 | Step pot 2 | Background-sequence and arpeggio tempo, 60-190 BPM; shared with SEQ, so it takes effect only after moving once PLAY is entered |
 | Step pot 3 | Arpeggio division: `1/2`, `1/4`, `1/4t`, `1/8`, `1/8t`, `1/16`, `1/16t`, `1/32` |
 | Step pot 4 | Unused |
@@ -435,7 +441,7 @@ On Windows, set `RAW_TO_H_OUTPUT_BITS` to `9` near the top of `util/raw_to_h.bat
 - **Direct I/O:** multiplexer address lines are set in one port write and the ADC is read through its registers. The LCD is driven write-only in 4-bit mode with only the HD44780 commands the firmware uses, waiting the controller's worst-case execution time instead of polling the busy flag.
 - **Stable controls:** multiplexed analog inputs use settling reads, median sampling, smoothing, movement confirmation, and hysteresis. Buttons are debounced in software.
 - **Efficient LCD updates:** a two-line shadow buffer writes only changed characters, avoiding visible flicker and unnecessary time in the control loop. The eight CGRAM characters are loaded on demand: a glyph already in CGRAM keeps its slot, so a playhead move reloads at most two (about 0.55 ms each).
-- **Simulator fidelity:** Timer1 mode 6 is modeled explicitly. Like the hardware, the simulator executes one more instruction after interrupts are enabled before serving one, which GCC's stack-pointer updates rely on. PWM edges feed an exact state-space model of the RC ladder and AC-coupling stage, followed by oversampling and a four-pole anti-alias filter before Web Audio output.
+- **Simulator fidelity:** Timer1 mode 6 and Timer2's CTC mode are modeled explicitly; the Timer2 model schedules only compare matches, which keeps the emulator fast enough for glitch-free playback. Like the hardware, the simulator executes one more instruction after interrupts are enabled before serving one, which GCC's stack-pointer updates rely on, and an interrupt takes four cycles to enter. Each PWM period's mean voltage feeds an exact state-space model of the RC ladder and AC-coupling stage, followed by oversampling and a four-pole anti-alias filter before Web Audio output. Sampling the individual PWM edges would alias the ultrasonic 31.25 kHz carrier into an audible tone (16.75 kHz at a 48 kHz monitor rate) that the instrument does not produce.
 
 ## Limitations
 

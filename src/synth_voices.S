@@ -42,6 +42,8 @@ VOICE_VIBRATO_DEPTH = 21
 VOICE_LEVEL = 22
 VOICE_SIZE = 23
 VOICE_COUNT = 4
+; Bus limiter gain recovery per control block (SYNTH_LIMITER_RELEASE).
+LIMITER_RELEASE = 48
 
 ; synthMorphKinds bits (a clear pair of bits means a flash wavetable)
 KIND_A_SQUARE = 0
@@ -996,7 +998,9 @@ synthFilterBlock:
 ; up its value, and scales it by the voice level to
 ; amp = envelope * (level + 1) / 256, so level 255 keeps the envelope exact;
 ; then it sets the oscillator step from the pitch plus
-; the exact floor(vibratoPeak * vibratoLfo / 256) vibrato offset.
+; the exact floor(vibratoPeak * vibratoLfo / 256) vibrato offset. Afterwards
+; the bus limiter (see synth.h) scales every amp by one shared gain so the
+; amps and the drum's envelope peak cannot exceed full scale together.
 
   .section .text.synthUpdateVoices,"ax",@progbits
   .global synthUpdateVoices
@@ -1008,6 +1012,8 @@ synthUpdateVoices:
   ldi r28, lo8(synthVoices)
   ldi r29, hi8(synthVoices)
   ldi r25, VOICE_COUNT
+  clr r26
+  clr r27
 .Lcontrol_voice:
   ldd r20, Y + VOICE_ENV_PHASE
   ldd r21, Y + VOICE_ENV_PHASE + 1
@@ -1035,6 +1041,8 @@ synthUpdateVoices:
   clr r1
 1:
   std Y + VOICE_AMP, r22
+  add r26, r22
+  adc r27, r1
   ldd r20, Y + VOICE_PITCH
   ldd r21, Y + VOICE_PITCH + 1
   ldd r18, Y + VOICE_VIBRATO_DEPTH
@@ -1058,6 +1066,85 @@ synthUpdateVoices:
   adiw r28, VOICE_SIZE
   dec r25
   brne .Lcontrol_voice
+  ; Bus limiter. r18 = d = drum envelope peak (0 when inactive).
+  clr r18
+  lds r19, drumActive
+  tst r19
+  breq 1f
+  lds r18, drumEnvelope + 1
+1:
+  ; G = min(G + LIMITER_RELEASE, 0xFFFF); k = r25.
+  lds r24, synthLimiterGain
+  lds r25, synthLimiterGain + 1
+  adiw r24, LIMITER_RELEASE
+  brcc 2f
+  ldi r24, 0xFF
+  ldi r25, 0xFF
+2:
+  ; r26 = Sc = (S + 3) >> 2, where S = r27:r26 <= 1020, so r27 becomes zero.
+  adiw r26, 3
+  lsr r27
+  ror r26
+  lsr r27
+  ror r26
+  ; r21:r20 = L - 1 = 16383 - 64 * d.
+  ldi r19, 64
+  mul r18, r19
+  ldi r20, 0xFF
+  ldi r21, 0x3F
+  sub r20, r0
+  sbc r21, r1
+  ; Keep k while Sc * (k + 1) <= L - 1.
+  mul r26, r25
+  add r0, r26
+  adc r1, r27
+  cp r20, r0
+  cpc r21, r1
+  brsh .Lgain_ok
+  ; Otherwise k = q - 1 (0 when q = 0) for q = floor((L - 1) / Sc), the
+  ; largest k that fits; G restarts at k * 256. Sc * (k + 1) > L - 1 makes
+  ; q < 256, so a restoring division with an 8-bit quotient in r20 suffices.
+  ldi r22, 8
+3:
+  lsl r20
+  rol r21
+  brcs 4f
+  cp r21, r26
+  brlo 5f
+4:
+  sub r21, r26
+  inc r20
+5:
+  dec r22
+  brne 3b
+  mov r25, r20
+  subi r25, 1
+  brcc 6f
+  clr r25
+6:
+  clr r24
+.Lgain_ok:
+  clr r1
+  sts synthLimiterGain, r24
+  sts synthLimiterGain + 1, r25
+  ; amp = amp * (k + 1) >> 8; k = 255 is unity, so it is skipped.
+  cpi r25, 0xFF
+  breq 8f
+  ldi r28, lo8(synthVoices)
+  ldi r29, hi8(synthVoices)
+  ldi r18, VOICE_COUNT
+7:
+  ldd r22, Y + VOICE_AMP
+  mul r22, r25
+  add r0, r22
+  clr r22
+  adc r22, r1
+  std Y + VOICE_AMP, r22
+  adiw r28, VOICE_SIZE
+  dec r18
+  brne 7b
+  clr r1
+8:
   pop r29
   pop r28
   ret

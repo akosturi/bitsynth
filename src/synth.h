@@ -131,9 +131,10 @@ struct SynthVoice {
 };
 
 // Each voice adds floor(sample * amp / 2), so one voice reaches full scale.
-// The bus has no headroom above full PWM scale: the levels of all voices that
-// can sound at once (the drum counts as voice 0) must sum to at most
-// SYNTH_LEVEL_BUDGET. The chorus, VCA, and morph never increase the peak;
+// The bus has no headroom above full PWM scale: the amps of all voices plus
+// the drum's envelope peak must sum to at most SYNTH_LEVEL_BUDGET. Levels may
+// exceed it; the bus limiter in synthUpdateVoices then lowers every amp by a
+// shared gain. The chorus, VCA, and morph never increase the peak;
 // the resonant filter clamps its output, including clipped resonant peaks,
 // to the same voice-bus range.
 const uint16_t SYNTH_LEVEL_BUDGET = 255;
@@ -237,6 +238,8 @@ uint32_t drumSamplePhase = 0;
 uint32_t drumSampleStep = 0x10000UL;
 uint16_t drumEnvelope = 0;
 uint16_t drumEnvelopeStep = 1;
+// Bus limiter gain; its high byte k scales amps by (k + 1) / 256.
+uint16_t synthLimiterGain = 0xFFFF;
 // One 16-bit Q7 mono delay line, written only by the renderer. It stores the
 // wet half of the signal, so interpolating adjacent samples stays in int16_t.
 int16_t chorusBuffer[SYNTH_CHORUS_BUFFER_SAMPLES] = {0};
@@ -422,6 +425,17 @@ static __attribute__((noinline, optimize("O2"))) void renderDroneBlock(int16_t *
 //       envelope[envelopePhase >> 8] * (level + 1) >> 8; }
 //   else amp = 0
 //   step = pitch + floor(vibratoPeak * vibratoLfo / 256) when vibratoDepth != 0
+// and then, as a bus limiter, with S = the sum of those amps, Sc = (S + 3)
+// >> 2, d = drumActive ? drumEnvelope >> 8 : 0, L = 16384 - 64 * d, and
+// G = synthLimiterGain:
+//   G = min(G + SYNTH_LIMITER_RELEASE, 0xFFFF); k = G >> 8
+//   if (Sc * (k + 1) >= L) { k = the largest k with Sc * (k + 1) < L, else 0;
+//     G = k << 8 }
+//   every amp = amp * (k + 1) >> 8
+// so the amps and the drum peak d never sum above 255. The gain drops at
+// once, at the same control rate as the envelopes, and recovers in about
+// 0.14 s from the 2x level overcommit (SYNTH_LIMITER_RELEASE = 48). Below
+// full scale it is unity, so quieter passages keep their dynamics.
 static inline __attribute__((always_inline)) void updateVoiceControls()
 {
   vibratoLfoPCW += SYNTH_VIBRATO_LFO_STEP;
@@ -978,7 +992,13 @@ class synth
       SynthVoice &state = synthVoices[voice];
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         synthVoiceEnvelopes[voice].releasing = true;
-        state.level = state.amp;
+        // amp includes the limiter gain, which still applies during the fade.
+        uint8_t level = 0;
+        if (!(state.envelopePhase & 0x8000)) {
+          const uint8_t value = pgm_read_byte(state.envelope + (state.envelopePhase >> 8));
+          level = ((uint16_t)(uint8_t)value * state.level + value) >> 8;
+        }
+        state.level = level;
         state.envelope = (uint16_t)Env0;
         state.envelopeStep = SYNTH_RELEASE_STEP;
         state.envelopePhase = 0;
