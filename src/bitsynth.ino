@@ -290,17 +290,17 @@ const uint8_t kBackgroundVoiceLevel = 79;
 const uint8_t kBackgroundDrumLevel = 127;
 uint8_t sequenceVoiceLevel = kBackgroundVoiceLevel;
 uint8_t liveVoiceLevel = kBackgroundVoiceLevel;
-uint16_t normalCurrentPitch[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
-uint16_t normalTargetPitch[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
-uint8_t normalGlide[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
+uint16_t normalCurrentPitch[SYNTH_VOICE_COUNT] = {0};
+uint16_t normalTargetPitch[SYNTH_VOICE_COUNT] = {0};
+uint8_t normalGlide[SYNTH_VOICE_COUNT] = {0};
 unsigned long lastGlideMs = 0;
 
 uint8_t heldButtonMask = 0;
 uint16_t buttonPressOrder[kStepCount] = {0};
 uint16_t pressOrderCounter = 0;
 int8_t liveVoiceForButton[kStepCount] = {-1, -1, -1, -1, -1, -1, -1, -1};
-int8_t liveButtonForVoice[SYNTH_VOICE_COUNT] = {-1, -1, -1, -1};
-uint16_t liveVoiceAge[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
+int8_t liveButtonForVoice[SYNTH_VOICE_COUNT] = {-1, -1, -1, -1, -1};
+uint16_t liveVoiceAge[SYNTH_VOICE_COUNT] = {0};
 uint8_t arpPosition = 0;
 int8_t arpDirection = 1;
 uint8_t arpTick = 0;
@@ -417,12 +417,12 @@ uint8_t macroForCurrentProgram(uint8_t slot) {
   return pgm_read_byte(slots + slot);
 }
 
-// Voice 0 belongs to the background sequencer when it is running. Otherwise
-// POLY can use the complete four-voice normal-oscillator pool.
-uint8_t firstLiveVoice() { return playSequencerEnabled ? 1 : 0; }
+// Voices 3-4 belong to the background sequencer when it is running, leaving
+// voices 0-2 live. Otherwise POLY can use the complete four-voice pool 0-3.
+uint8_t liveVoiceEnd() { return playSequencerEnabled ? SYNTH_BACKGROUND_VOICE : SYNTH_NORMAL_VOICE_COUNT; }
 
-// The first voice that the current macro edits and macro LFOs may change.
-uint8_t firstMacroVoice() { return macroMode == MODE_PLAY ? firstLiveVoice() : 0; }
+// The end of the voices that the current macro edits and macro LFOs may change.
+uint8_t macroVoiceEnd() { return macroMode == MODE_PLAY ? liveVoiceEnd() : SYNTH_VOICE_COUNT; }
 
 // The parameter strip is packed left-to-right.  This keeps unavailable
 // controls (such as drum tuning outside DRM) off the LCD and out of the page
@@ -685,7 +685,7 @@ void applyMacroEnvelopeToVoices() {
   MelodicPreset preset; readMelodicPreset(programId, preset);
   uint8_t envelope, length;
   presetEnvelope(preset, envelope, length);
-  for (uint8_t voice = firstMacroVoice(); voice < SYNTH_VOICE_COUNT; ++voice) {
+  for (uint8_t voice = 0; voice < macroVoiceEnd(); ++voice) {
     edgar.setEnvelope(voice, envelope); edgar.setLength(voice, length);
   }
 }
@@ -735,14 +735,14 @@ void applyMacroValue(uint8_t slot, uint8_t displaySlot, uint16_t raw, unsigned l
   macroState->values[slot] = next;
   if (parameter == MACRO_PULSE_WIDTH) {
     const uint16_t width = pulseWidthForPercent(next);
-    for (uint8_t voice = firstMacroVoice(); voice < SYNTH_VOICE_COUNT; ++voice) edgar.setPulseWidth(voice, width);
+    for (uint8_t voice = 0; voice < macroVoiceEnd(); ++voice) edgar.setPulseWidth(voice, width);
   } else if (parameter == MACRO_DRUM_TUNE) {
     seqControls.drumTone = (uint8_t)next;
   } else if (parameter == MACRO_ENVELOPE || parameter == MACRO_ENVELOPE_LENGTH) {
     applyMacroEnvelopeToVoices();
   } else if (parameter == MACRO_GLIDE) {
     playGlide = next;
-    for (uint8_t voice = firstMacroVoice(); voice < SYNTH_VOICE_COUNT; ++voice) {
+    for (uint8_t voice = 0; voice < macroVoiceEnd(); ++voice) {
       normalGlide[voice] = next;
       if (next == 0 && normalCurrentPitch[voice] != 0) {
         normalCurrentPitch[voice] = normalTargetPitch[voice];
@@ -831,10 +831,10 @@ void updateMacroLfos(unsigned long now) {
     macroState->lfoPhase[lfo] += (uint32_t)lfoRateForIndex(macroState->lfoRateIndex[lfo]) * 42950UL * elapsed;
     if (target == MACRO_PULSE_WIDTH) {
       const uint16_t width = pulseWidthForPercent(lfoModulatedMacroValue(target, 50));
-      for (uint8_t voice = firstMacroVoice(); voice < SYNTH_VOICE_COUNT; ++voice) edgar.setPulseWidth(voice, width);
+      for (uint8_t voice = 0; voice < macroVoiceEnd(); ++voice) edgar.setPulseWidth(voice, width);
     } else if (target == MACRO_VIBRATO) {
       const uint8_t modulation = lfoModulatedMacroValue(target, 64);
-      for (uint8_t voice = firstMacroVoice(); voice < SYNTH_VOICE_COUNT; ++voice) edgar.setMod(voice, modulation);
+      for (uint8_t voice = 0; voice < macroVoiceEnd(); ++voice) edgar.setMod(voice, modulation);
     } else if (target == MACRO_VCA_DEPTH || target == MACRO_VCA_RATE) {
       applyCurrentProgramVca();
     } else if (target == MACRO_FILTER || target == MACRO_RESONANCE) {
@@ -1335,7 +1335,7 @@ void changeMode(InstrumentMode nextMode, unsigned long now) {
   stopNormalVoices();
   instrumentMode = nextMode;
   if (nextMode != MODE_DRONE) selectMacroMode(nextMode);
-  edgar.setVoiceZeroBackground(nextMode == MODE_PLAY && playSequencerEnabled);
+  edgar.setBackgroundVoices(nextMode == MODE_PLAY && playSequencerEnabled);
   parameterPage = 0;
   editedStep = 255;
   editedPlayShift = 0;
@@ -1415,7 +1415,7 @@ void triggerNormalVoice(uint8_t voice, uint16_t pitch, uint8_t glide) {
   if (glide == 0 || normalCurrentPitch[voice] == 0) {
     normalCurrentPitch[voice] = pitch; edgar.setPitchWord(voice, pitch);
   }
-  edgar.trigger(voice, instrumentMode == MODE_PLAY && voice >= firstLiveVoice() ?
+  edgar.trigger(voice, instrumentMode == MODE_PLAY && voice < liveVoiceEnd() ?
     liveVoiceLevel : sequenceVoiceLevel);
 }
 
@@ -1433,23 +1433,27 @@ void updateGlide(unsigned long now) {
   }
 }
 
-// Builds a sequencer voice stack from the selected preset.
+// Builds a sequencer voice stack from the selected preset. PLAY's background
+// plays up to its first two voices on voices 3-4, each at the fixed
+// background level.
 void triggerSequencerNote(uint8_t note, bool backgroundOnly) {
   edgar.stopDrum();
   MelodicPreset preset; readMelodicPreset(seqControls.preset, preset);
-  const uint8_t voiceCount = backgroundOnly ? 1 : preset.voiceCount;
+  const uint8_t firstVoice = backgroundOnly ? SYNTH_BACKGROUND_VOICE : 0;
+  const uint8_t voiceCount = backgroundOnly ?
+    min(preset.voiceCount, SYNTH_BACKGROUND_VOICE_COUNT) : preset.voiceCount;
   uint8_t envelope, envelopeLength;
   presetEnvelope(preset, envelope, envelopeLength);
   const uint8_t glide = activeMacroValue(MACRO_GLIDE, preset.glide);
   const uint16_t pulseWidth = pulseWidthForPercent(
     lfoModulatedMacroValue(MACRO_PULSE_WIDTH, preset.squarePulseWidthPercent));
-  sequenceVoiceLevel = outputLevel(backgroundOnly ? kBackgroundVoiceLevel : kVoiceLevelBudget,
-    voiceCount, preset.level);
+  sequenceVoiceLevel = backgroundOnly ? outputLevel(kBackgroundVoiceLevel, 1, preset.level) :
+    outputLevel(kVoiceLevelBudget, voiceCount, preset.level);
 
   // Unused voices stop first, so louder new levels never overlap them.
-  if (!backgroundOnly) for (uint8_t voice = voiceCount; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
-  for (uint8_t voice = 0; voice < voiceCount; ++voice) {
-    const VoiceRecipe &recipe = preset.voices[voice];
+  for (uint8_t voice = firstVoice + voiceCount; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
+  for (uint8_t voice = firstVoice; voice < firstVoice + voiceCount; ++voice) {
+    const VoiceRecipe &recipe = preset.voices[voice - firstVoice];
     edgar.setWave(voice, recipe.wave); edgar.setEnvelope(voice, envelope);
     edgar.setPulseWidth(voice, pulseWidth);
     edgar.setLength(voice, envelopeLength);
@@ -1459,11 +1463,7 @@ void triggerSequencerNote(uint8_t note, bool backgroundOnly) {
 }
 
 void triggerDrum(uint8_t drum, bool backgroundOnly) {
-  if (backgroundOnly) stopNormalVoice(0);
-  else stopNormalVoices();
-  normalCurrentPitch[0] = 0;
-  normalTargetPitch[0] = 0;
-  normalGlide[0] = 0;
+  for (uint8_t voice = backgroundOnly ? SYNTH_BACKGROUND_VOICE : 0; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
   DrumPreset preset; readDrumPreset(preset);
   const uint8_t decay = lfoModulatedMacroValue(MACRO_DRUM_DECAY, preset.decay);
   const uint8_t tone = lfoModulatedMacroValue(MACRO_DRUM_TUNE, seqControls.drumTone);
@@ -1525,7 +1525,7 @@ void runSequencer(unsigned long now) {
         selectMacroMode(MODE_SEQ);
         triggerSequencerStep(currentStep, true);
         selectMacroMode(MODE_PLAY);
-      } else { stopNormalVoice(0, true); edgar.releaseDrum(); }
+      } else releaseBackgroundVoices();
     }
   } else if (bitRead(seqGateMask, currentStep)) {
     triggerSequencerStep(currentStep, false);
@@ -1566,13 +1566,13 @@ void applyLiveConfiguration() {
   uint8_t liveVoices = 1;
   if (playControls.style == STYLE_CHORD) liveVoices = 3;
   else if (playControls.style == STYLE_POLY || preset.voiceCount > 1) {
-    liveVoices = min(preset.voiceCount > 1 ? preset.voiceCount : SYNTH_VOICE_COUNT,
-      SYNTH_VOICE_COUNT - playSequencerEnabled);
+    liveVoices = min(preset.voiceCount > 1 ? preset.voiceCount : SYNTH_NORMAL_VOICE_COUNT,
+      liveVoiceEnd());
   }
   liveVoiceLevel = outputLevel(playSequencerEnabled ?
     kVoiceLevelBudget - kBackgroundVoiceLevel : kVoiceLevelBudget, liveVoices, preset.level);
   applyCurrentProgramMorph();
-  for (uint8_t voice = firstLiveVoice(); voice < SYNTH_VOICE_COUNT; ++voice) {
+  for (uint8_t voice = 0; voice < liveVoiceEnd(); ++voice) {
     edgar.setWave(voice, preset.voices[0].wave);
     edgar.setEnvelope(voice, envelope);
     edgar.setPulseWidth(voice, pulseWidth);
@@ -1609,41 +1609,40 @@ void resetLiveAssignments() {
 
 void clearHeldNotes() {
   heldButtonMask = 0;
-  for (uint8_t voice = firstLiveVoice(); voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
+  for (uint8_t voice = 0; voice < liveVoiceEnd(); ++voice) stopNormalVoice(voice);
   resetLiveAssignments();
 }
 
 // Plays one note as a multi-voice program's detuned unison stack across the
-// live pool: four oscillators normally, or three while voice 0 sequences.
+// live pool: four oscillators normally, or three while the background sequences.
 void triggerLiveStack(const MelodicPreset &preset, int16_t note, bool release) {
-  const uint8_t firstVoice = firstLiveVoice();
-  const uint8_t stackVoiceCount = min(preset.voiceCount, (uint8_t)(SYNTH_VOICE_COUNT - firstVoice));
-  for (uint8_t stackVoice = 0; stackVoice < stackVoiceCount; ++stackVoice) {
-    const uint8_t voice = firstVoice + stackVoice;
-    const VoiceRecipe recipe = preset.voices[stackVoice];
+  const uint8_t liveEnd = liveVoiceEnd();
+  const uint8_t stackVoiceCount = min(preset.voiceCount, liveEnd);
+  for (uint8_t voice = 0; voice < stackVoiceCount; ++voice) {
+    const VoiceRecipe recipe = preset.voices[voice];
     edgar.setWave(voice, recipe.wave);
     edgar.setMod(voice, lfoModulatedMacroValue(MACRO_VIBRATO, recipe.modulation));
     triggerNormalVoice(voice, pitchForNoteWithDetuneCents(note, recipe.detuneCents), playGlide);
   }
-  for (uint8_t voice = firstVoice + stackVoiceCount; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice, release);
+  for (uint8_t voice = stackVoiceCount; voice < liveEnd; ++voice) stopNormalVoice(voice, release);
 }
 
 // Assigns a free live voice or steals the oldest active one.
 void triggerPolyButton(uint8_t button) {
-  const uint8_t firstVoice = firstLiveVoice();
+  const uint8_t liveEnd = liveVoiceEnd();
   MelodicPreset preset; readMelodicPreset(playProgramId(), preset);
   // A multi-voice program is a unison stack in POLY.  It consumes the whole
-  // live pool: four oscillators normally, or three while voice 0 sequences.
+  // live pool: four oscillators normally, or three while the background sequences.
   if (preset.voiceCount > 1) { triggerLiveStack(preset, liveNoteForButton(button), false); return; }
-  // Free voices are taken from the top, so voice 0 is used last and starting
-  // the background sequence rarely has to end a live note.
+  // Free voices are taken from the bottom, so voice 3 is used last and
+  // starting the background sequence rarely has to end a live note.
   int8_t voice = -1;
-  for (int8_t candidate = SYNTH_VOICE_COUNT - 1; candidate >= (int8_t)firstVoice; --candidate) {
+  for (uint8_t candidate = 0; candidate < liveEnd; ++candidate) {
     if (liveButtonForVoice[candidate] < 0) { voice = candidate; break; }
   }
   if (voice < 0) {
-    voice = firstVoice;
-    for (uint8_t candidate = firstVoice + 1; candidate < SYNTH_VOICE_COUNT; ++candidate) {
+    voice = 0;
+    for (uint8_t candidate = 1; candidate < liveEnd; ++candidate) {
       if (liveVoiceAge[candidate] < liveVoiceAge[voice]) voice = candidate;
     }
     const int8_t stolenButton = liveButtonForVoice[voice];
@@ -1656,13 +1655,13 @@ void triggerPolyButton(uint8_t button) {
 void triggerHeldChord() {
   const int8_t button = latestHeldButton();
   if (button < 0) {
-    for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice, true);
+    for (uint8_t voice = 0; voice < 3; ++voice) stopNormalVoice(voice, true);
     return;
   }
   const int16_t root = 24 + playControls.octave * 12 + playControls.root;
   for (uint8_t chordVoice = 0; chordVoice < 3; ++chordVoice) {
     const int8_t offset = scaleDegreeOffset(playControls.scale, button + chordVoice * 2);
-    triggerNormalVoice(chordVoice + 1, pitchForNote(root + offset), playGlide);
+    triggerNormalVoice(chordVoice, pitchForNote(root + offset), playGlide);
   }
 }
 
@@ -1676,8 +1675,8 @@ uint8_t collectHeldButtons(uint8_t buttons[kStepCount]) {
 void triggerArpeggioNote(int16_t note) {
   MelodicPreset preset; readMelodicPreset(playProgramId(), preset);
   if (preset.voiceCount > 1) { triggerLiveStack(preset, note, true); return; }
-  for (uint8_t voice = 2; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice, true);
-  triggerNormalVoice(1, pitchForNote(note), playGlide);
+  for (uint8_t voice = 1; voice < liveVoiceEnd(); ++voice) stopNormalVoice(voice, true);
+  triggerNormalVoice(0, pitchForNote(note), playGlide);
 }
 
 // Advances the current arpeggio pattern across held buttons, or the latest held chord.
@@ -1685,7 +1684,7 @@ void advanceArpeggio() {
   uint8_t buttons[kStepCount];
   const uint8_t count = collectHeldButtons(buttons);
   if (count == 0) {
-    for (uint8_t voice = firstLiveVoice(); voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice, true);
+    for (uint8_t voice = 0; voice < liveVoiceEnd(); ++voice) stopNormalVoice(voice, true);
     arpPosition = 0; arpDirection = 1; return;
   }
 
@@ -1727,7 +1726,7 @@ void handleLiveRelease(uint8_t button) {
       return;
     }
     const int8_t voice = liveVoiceForButton[button];
-    if (voice >= firstLiveVoice()) {
+    if (voice >= 0) {
       stopNormalVoice(voice, true); liveButtonForVoice[voice] = -1; liveVoiceForButton[button] = -1;
     }
   } else if (playControls.style == STYLE_CHORD) triggerHeldChord();
@@ -1735,26 +1734,32 @@ void handleLiveRelease(uint8_t button) {
   // updated held-button set is applied.
 }
 
-// Hands voice 0 between PLAY's background sequence and the live pool without
-// restarting ringing live notes. POLY fills voice 0 last, so only a fourth
-// held note or a unison stack's first voice fades when the sequence starts;
-// stopping it fades the background note. The other live voices are only
+// Fades PLAY's background notes or drum (voices 3-4).
+void releaseBackgroundVoices() {
+  for (uint8_t voice = SYNTH_BACKGROUND_VOICE; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice, true);
+  edgar.releaseDrum();
+}
+
+// Hands voice 3 between PLAY's background sequence and the live pool without
+// restarting ringing live notes. POLY fills voice 3 last, so only a fourth
+// held note or a unison stack's fourth voice fades when the sequence starts;
+// stopping it fades the background notes. The other live voices are only
 // capped to the new level share (a no-op when the share grows). Like a key
 // press, the toggle refreshes the live configuration.
 void togglePlaySequencer() {
   playSequencerEnabled = !playSequencerEnabled;
-  const int8_t button = liveButtonForVoice[0];
-  if (button >= 0) { liveVoiceForButton[button] = -1; liveButtonForVoice[0] = -1; }
-  stopNormalVoice(0, true); edgar.releaseDrum();
-  edgar.setVoiceZeroBackground(playSequencerEnabled);
+  const int8_t button = liveButtonForVoice[SYNTH_BACKGROUND_VOICE];
+  if (button >= 0) { liveVoiceForButton[button] = -1; liveButtonForVoice[SYNTH_BACKGROUND_VOICE] = -1; }
+  releaseBackgroundVoices();
+  edgar.setBackgroundVoices(playSequencerEnabled);
   applyLiveConfiguration();
-  for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) edgar.limitLevel(voice, liveVoiceLevel);
+  for (uint8_t voice = 0; voice < SYNTH_BACKGROUND_VOICE; ++voice) edgar.limitLevel(voice, liveVoiceLevel);
 }
 
 // Rebuilds live voice assignments after a play setting changes.
 void revoiceHeldButtons() {
   if (instrumentMode != MODE_PLAY) return;
-  for (uint8_t voice = firstLiveVoice(); voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice, true);
+  for (uint8_t voice = 0; voice < liveVoiceEnd(); ++voice) stopNormalVoice(voice, true);
   resetLiveAssignments(); applyLiveConfiguration();
   if (playControls.style == STYLE_POLY) {
     uint8_t ordered[kStepCount];

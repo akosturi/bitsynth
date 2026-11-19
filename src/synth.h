@@ -52,7 +52,13 @@ static_assert(sizeof(hihatSample) == (hihatSampleLength * 9U + 7U) / 8U + 1U, "i
 #define SET(x,y) (x |= (1 << y))
 #define CLR(x,y) (x &= (~(1 << y)))
 
-const uint8_t SYNTH_VOICE_COUNT = 4;
+// Voices 0-3 form the normal pool. While PLAY's background sequence runs,
+// voices 3-4 are its dry background voices and voices 0-2 stay live; voice 4
+// is used only by the background sequence.
+const uint8_t SYNTH_VOICE_COUNT = 5;
+const uint8_t SYNTH_NORMAL_VOICE_COUNT = 4;
+const uint8_t SYNTH_BACKGROUND_VOICE = 3;
+const uint8_t SYNTH_BACKGROUND_VOICE_COUNT = SYNTH_VOICE_COUNT - SYNTH_BACKGROUND_VOICE;
 const uint8_t SYNTH_DRONE_COUNT = 8;
 const uint8_t SYNTH_MIDI_NOTE_MAX = 127;
 const uint8_t SYNTH_LENGTH_MAX = 127;
@@ -144,7 +150,7 @@ const uint16_t SYNTH_LEVEL_BUDGET = 255;
    0x8000, 10, 0, 500, 0, 0, 63}
 SynthVoice synthVoices[SYNTH_VOICE_COUNT] = {
   SYNTH_VOICE_INIT(0xA5C3), SYNTH_VOICE_INIT(0xD72B),
-  SYNTH_VOICE_INIT(0x9E37), SYNTH_VOICE_INIT(0xF1A5)
+  SYNTH_VOICE_INIT(0x9E37), SYNTH_VOICE_INIT(0xF1A5), SYNTH_VOICE_INIT(0xB4C9)
 };
 #undef SYNTH_VOICE_INIT
 
@@ -158,8 +164,8 @@ uint16_t synthMorphSourceB = 0;
 uint8_t synthMorphAmount = 0;
 uint8_t synthMorphKinds = 0;
 
-// Advances all four envelopes and vibrato pitch steps by one block.
-void synthUpdateVoices(int8_t vibratoLfo);
+// Advances the first `count` envelopes and vibrato pitch steps by one block.
+void synthUpdateVoices(int8_t vibratoLfo, uint8_t count);
 
 // Stores the active drum sample's four-sample block in accumulator.
 void synthRenderDrum(int16_t *accumulator);
@@ -168,8 +174,9 @@ extern const uint8_t synthPackedSampleScales[8] PROGMEM __attribute__((used)) =
   {128, 64, 32, 16, 8, 4, 2, 1};
 
 // Adds a four-sample block of `count` consecutive voices to accumulator,
-// or stores it with SYNTH_RENDER_CLEAR.
-// SYNTH_RENDER_SPLIT stores the first, unmorphed voice to dry instead.
+// or stores it with SYNTH_RENDER_CLEAR. With SYNTH_RENDER_SPLIT only the first
+// SYNTH_BACKGROUND_VOICE voices go to accumulator; the others are stored,
+// unmorphed, to dry.
 const uint8_t SYNTH_RENDER_MORPH = 0x01;
 const uint8_t SYNTH_RENDER_CLEAR = 0x02;
 const uint8_t SYNTH_RENDER_SPLIT = 0x04;
@@ -188,6 +195,7 @@ void synthFilterBlock(int16_t *bus, uint8_t coefficient, uint8_t damping,
   uint8_t gain);
 }
 static_assert(sizeof(SynthVoice) == 23, "synth_voices.S expects a 23-byte SynthVoice");
+static_assert(SYNTH_BACKGROUND_VOICE == 3, "synth_voices.S splits the dry background at voice 3");
 
 // A release borrows a voice's envelope and envelopeStep, so the configured
 // values are kept here and restored by trigger() and stopVoice(). While
@@ -205,9 +213,10 @@ const uint16_t SYNTH_RELEASE_STEP = 255;
 uint32_t vibratoLfoPCW = 0x40000000UL;
 int16_t pwmQuantizationError = 0;
 uint8_t pwmDitherLfsr = 0xA5;
-// Voice 0 is the PLAY background sequence while it runs. It then stays dry:
-// no waveform morph, filter, VCA, or chorus. Otherwise it is a normal bus voice.
-bool voiceZeroBackground = false;
+// Voices 3-4 are the PLAY background sequence while it runs. They then stay
+// dry: no waveform morph, filter, VCA, or chorus. Otherwise voice 3 is a
+// normal bus voice and voice 4 only finishes a background release.
+bool backgroundVoices = false;
 // Performance engines. Preset morphing crossfades two flash-resident waveform
 // sources and never duplicates oscillator state.
 bool playMorphActive = false;
@@ -418,15 +427,15 @@ static __attribute__((noinline, optimize("O2"))) void renderDroneBlock(int16_t *
   for (uint8_t i = 0; i < SYNTH_BLOCK_SAMPLES; ++i) busQ7[i] = renderDroneFrame();
 }
 
-// Updates all per-voice control state once per block (5 kHz per voice).
-// synthUpdateVoices computes, for every voice:
+// Updates the rendered voices' control state once per block (5 kHz per voice).
+// synthUpdateVoices computes, for each of the first `count` voices:
 //   if (!(envelopePhase & 0x8000)) { envelopePhase += envelopeStep;
 //     amp = (envelopePhase & 0x8000) ? 0 :
 //       envelope[envelopePhase >> 8] * (level + 1) >> 8; }
 //   else amp = 0
 //   step = pitch + floor(vibratoPeak * vibratoLfo / 256) when vibratoDepth != 0
-// and then, as a bus limiter, with S = the sum of those amps, Sc = (S + 3)
-// >> 2, d = drumActive ? drumEnvelope >> 8 : 0, L = 16384 - 64 * d, and
+// and then, as a bus limiter, with S = the sum of those amps, Sc = (S + 7)
+// >> 3, d = drumActive ? drumEnvelope >> 8 : 0, L = 8192 - 32 * d, and
 // G = synthLimiterGain:
 //   G = min(G + SYNTH_LIMITER_RELEASE, 0xFFFF); k = G >> 8
 //   if (Sc * (k + 1) >= L) { k = the largest k with Sc * (k + 1) < L, else 0;
@@ -435,12 +444,13 @@ static __attribute__((noinline, optimize("O2"))) void renderDroneBlock(int16_t *
 // so the amps and the drum peak d never sum above 255. The gain drops at
 // once, at the same control rate as the envelopes, and recovers in about
 // 0.14 s from the 2x level overcommit (SYNTH_LIMITER_RELEASE = 48). Below
-// full scale it is unity, so quieter passages keep their dynamics.
-static inline __attribute__((always_inline)) void updateVoiceControls()
+// full scale it is unity, so quieter passages keep their dynamics. A voice
+// outside `count` has a finished envelope and an amp of zero.
+static inline __attribute__((always_inline)) void updateVoiceControls(uint8_t count)
 {
   vibratoLfoPCW += SYNTH_VIBRATO_LFO_STEP;
   // Center the triangle at zero and halve it to keep the math 8-bit.
-  synthUpdateVoices((int8_t)(lfoTriangle(vibratoLfoPCW >> 24) >> 1) - 32);
+  synthUpdateVoices((int8_t)(lfoTriangle(vibratoLfoPCW >> 24) >> 1) - 32, count);
 }
 
 // Renders eight normal-mode samples into the bus and dry accumulators and
@@ -483,19 +493,28 @@ static inline __attribute__((always_inline)) uint8_t renderNormalBlock(
     synthMorphAmount = amount;
     synthMorphKinds = kinds;
   }
-  // Voice 0 is either the dry PLAY background (sequence note or drum) or a
-  // regular bus voice; the drum replaces it while it plays.
-  const bool background = voiceZeroBackground;
+  // Voices 3-4 are either the dry PLAY background (sequence notes or drum)
+  // or, for voice 3, a regular bus voice. The background drum replaces both;
+  // otherwise the drum replaces voice 0. Voice 4 is rendered and updated only
+  // while its envelope runs: a two-voice background note or its release.
+  const bool background = backgroundVoices;
+  const uint8_t count = synthVoices[SYNTH_VOICE_COUNT - 1].envelopePhase & 0x8000 ?
+    SYNTH_NORMAL_VOICE_COUNT : SYNTH_VOICE_COUNT;
   for (uint8_t sub = 0; sub < SYNTH_BLOCK_SAMPLES; sub += SYNTH_VOICE_BLOCK_SAMPLES) {
-    updateVoiceControls();
+    updateVoiceControls(count);
     int16_t *bus = busQ7 + sub;
     int16_t *dry = dryQ7 + sub;
     if (drumActive) {
-      synthRenderDrum(background ? dry : bus);
-      synthRenderVoices(&synthVoices[1], SYNTH_VOICE_COUNT - 1, bus,
-        background ? morph | SYNTH_RENDER_CLEAR : morph, dry);
+      if (background) {
+        synthRenderDrum(dry);
+        synthRenderVoices(&synthVoices[0], SYNTH_BACKGROUND_VOICE, bus,
+          morph | SYNTH_RENDER_CLEAR, dry);
+      } else {
+        synthRenderDrum(bus);
+        synthRenderVoices(&synthVoices[1], count - 1, bus, morph, dry);
+      }
     } else {
-      synthRenderVoices(&synthVoices[0], SYNTH_VOICE_COUNT, bus,
+      synthRenderVoices(&synthVoices[0], count, bus,
         morph | SYNTH_RENDER_CLEAR | (background ? SYNTH_RENDER_SPLIT : 0), dry);
     }
   }
@@ -945,8 +964,8 @@ class synth
         state.level = level;
         state.envelopePhase = 0;
         state.step = state.pitch;
-        // The dry PLAY background voice does not retrigger the bus filter.
-        if (voice != 0 || !voiceZeroBackground) {
+        // The dry PLAY background voices do not retrigger the bus filter.
+        if (voice < SYNTH_BACKGROUND_VOICE || !backgroundVoices) {
           const uint16_t step = state.envelopeStep;
           filterEnvStep = step ? step << 3 : SYNTH_FILTER_ENV_HOLD_STEP;
           filterEnvPhase = 0;
@@ -1076,7 +1095,7 @@ class synth
     }
 
     // A macro-controlled, 50/50 dry/wet effect with no feedback path on the
-    // voice bus; a running PLAY background sequence on voice 0 stays dry.
+    // voice bus; a running PLAY background sequence on voices 3-4 stays dry.
     void configureChorus(uint8_t mode)
     {
       const uint32_t lfoStep = mode == SYNTH_CHORUS_1 ? SYNTH_CHORUS_1_LFO_STEP :
@@ -1107,12 +1126,12 @@ class synth
       }
     }
 
-    // While PLAY's background sequence runs, voice 0 bypasses morph, filter,
-    // VCA, and chorus; otherwise it is mixed like voices 1-3.
-    void setVoiceZeroBackground(bool background)
+    // While PLAY's background sequence runs, voices 3-4 bypass morph, filter,
+    // VCA, and chorus; otherwise voice 3 is mixed like voices 0-2.
+    void setBackgroundVoices(bool background)
     {
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-        voiceZeroBackground = background;
+        backgroundVoices = background;
       }
     }
 

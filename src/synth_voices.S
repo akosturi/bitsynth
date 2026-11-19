@@ -9,8 +9,9 @@
 ;
 ; Adds a four-sample block of each of `count` consecutive voices to
 ; accumulator[0..3] (Q7). With RENDER_CLEAR the accumulators start at zero
-; instead of being loaded. With RENDER_SPLIT the first voice is rendered
-; unmorphed and stored to dry[0..3], and the remaining voices start from zero.
+; instead of being loaded. With RENDER_SPLIT only the first BACKGROUND_VOICE
+; voices go to accumulator; the remaining count - BACKGROUND_VOICE voices are
+; then rendered unmorphed, from zero, and stored to dry[0..3].
 ; Per sample a voice advances its 16-bit phase by its step, reads a signed
 ; 9-bit sample, and adds floor(sample * amp / 2). With RENDER_MORPH every
 ; voice crossfades the two block-constant sources described by
@@ -41,7 +42,8 @@ VOICE_VIBRATO_PEAK = 19
 VOICE_VIBRATO_DEPTH = 21
 VOICE_LEVEL = 22
 VOICE_SIZE = 23
-VOICE_COUNT = 4
+; First dry PLAY background voice with RENDER_SPLIT (SYNTH_BACKGROUND_VOICE).
+BACKGROUND_VOICE = 3
 ; Bus limiter gain recovery per control block (SYNTH_LIMITER_RELEASE).
 LIMITER_RELEASE = 48
 
@@ -55,14 +57,11 @@ KIND_B_NOISE = 3
 RENDER_MORPH = 0
 RENDER_CLEAR = 1
 RENDER_SPLIT = 2
-; r18 bits while the split voice is pending
-SPLIT_PENDING = 7
-SPLIT_MORPH = 6
 
 ; Register use
 ;   r2:r3 .. r8:r9  accumulators         r10:r11 phase      r12:r13 step
 ;   r14:r15 source / slot A              r16 amp            r17 kinds | count
-;   r18 remaining voices (+split bits)   r19 morph amount   r20:r21 sample A
+;   r18 remaining voices (dry voices in the high nibble)   r19 morph amount   r20:r21 sample A
 ;   r22:r23 sample B / difference        r24:r25 slot B     X accumulator ptr
 ;   Y voice pointer                      Z table pointer    T morph flag
 
@@ -110,6 +109,15 @@ SPLIT_MORPH = 6
   adc r31, r1
   lpm \dlo, Z+
   lpm \dhi, Z
+.endm
+
+; Unrolled sample of the flash wavetable r14:r15.
+.macro T_SAMPLE alo, ahi
+  add r10, r12
+  adc r11, r13
+  TABLE_READ r14, r15, r20, r21
+  SCALE_ADD_TO r20, r21, \alo, \ahi
+  clr r1
 .endm
 
 ; Unrolled morph samples: table A (r14:r15) with table B (r24:r25) ...
@@ -219,10 +227,9 @@ synthRenderVoices:
   bst r19, RENDER_MORPH
   sbrs r19, RENDER_SPLIT
   rjmp 3f
-  ori r18, 1 << SPLIT_PENDING
-  sbrc r19, RENDER_MORPH
-  ori r18, 1 << SPLIT_MORPH
-  clt
+  subi r18, BACKGROUND_VOICE
+  swap r18
+  ori r18, BACKGROUND_VOICE
 3:
   sbrs r19, RENDER_CLEAR
   rjmp 1f
@@ -272,21 +279,10 @@ synthRenderVoices:
 
   ; Flash wavetable.
 4:
-  ldi r17, 0x30
-.Ltable:
-  add r10, r12
-  adc r11, r13
-  movw r30, r14
-  add r30, r11
-  adc r31, r1
-  add r30, r11
-  adc r31, r1
-  lpm r20, Z+
-  lpm r21, Z
-  SCALE_ADD r20, r21
-  ROTATE
-  subi r17, 0x10
-  brcc .Ltable
+  T_SAMPLE r2, r3
+  T_SAMPLE r4, r5
+  T_SAMPLE r6, r7
+  T_SAMPLE r8, r9
   rjmp .Lstore
 
   ; Generated square: both scaled levels are constant for the block.
@@ -434,37 +430,11 @@ synthRenderVoices:
   std Y + VOICE_PHASE, r10
   std Y + VOICE_PHASE + 1, r11
   adiw r28, VOICE_SIZE
-  sbrc r18, SPLIT_PENDING
-  rjmp .Lsplit
-.Lnext_voice:
   dec r18
+  mov r20, r18
+  andi r20, 0x0F
   breq 3f
   rjmp .Lvoice
-
-  ; Store the first voice to dry[] (the saved r16:r17 argument, four and
-  ; three bytes above the stack pointer) and restart the accumulators.
-.Lsplit:
-  bst r18, SPLIT_MORPH
-  andi r18, 0x3F
-  in r30, IO_SPL
-  in r31, IO_SPH
-  ldd r20, Z + 4
-  ldd r21, Z + 3
-  movw r30, r20
-  st Z+, r2
-  st Z+, r3
-  st Z+, r4
-  st Z+, r5
-  st Z+, r6
-  st Z+, r7
-  st Z+, r8
-  st Z, r9
-  clr r2
-  clr r3
-  movw r4, r2
-  movw r6, r2
-  movw r8, r2
-  rjmp .Lnext_voice
 3:
   st X+, r2
   st X+, r3
@@ -474,6 +444,24 @@ synthRenderVoices:
   st X+, r7
   st X+, r8
   st X, r9
+  swap r18
+  tst r18
+  breq 4f
+  ; Continue with the r18 dry background voices: unmorphed, from zero,
+  ; stored to dry[] (the saved r16:r17 argument, four and three bytes above
+  ; the stack pointer).
+  in r30, IO_SPL
+  in r31, IO_SPH
+  ldd r26, Z + 4
+  ldd r27, Z + 3
+  clr r2
+  clr r3
+  movw r4, r2
+  movw r6, r2
+  movw r8, r2
+  clt
+  rjmp .Lvoice
+4:
   pop r29
   pop r28
   pop r17
@@ -994,7 +982,7 @@ synthFilterBlock:
 
 ; void synthUpdateVoices(int8_t vibratoLfo);
 ;
-; Once per block, for each of the four voices: advances the envelope, looks
+; Once per block, for each of the first `count` voices: advances the envelope, looks
 ; up its value, and scales it by the voice level to
 ; amp = envelope * (level + 1) / 256, so level 255 keeps the envelope exact;
 ; then it sets the oscillator step from the pitch plus
@@ -1009,9 +997,10 @@ synthUpdateVoices:
   push r28
   push r29
   mov r23, r24
+  mov r24, r22
+  mov r25, r22
   ldi r28, lo8(synthVoices)
   ldi r29, hi8(synthVoices)
-  ldi r25, VOICE_COUNT
   clr r26
   clr r27
 .Lcontrol_voice:
@@ -1066,7 +1055,8 @@ synthUpdateVoices:
   adiw r28, VOICE_SIZE
   dec r25
   brne .Lcontrol_voice
-  ; Bus limiter. r18 = d = drum envelope peak (0 when inactive).
+  ; Bus limiter. r23 = count, r18 = d = drum envelope peak (0 when inactive).
+  mov r23, r24
   clr r18
   lds r19, drumActive
   tst r19
@@ -1081,17 +1071,19 @@ synthUpdateVoices:
   ldi r24, 0xFF
   ldi r25, 0xFF
 2:
-  ; r26 = Sc = (S + 3) >> 2, where S = r27:r26 <= 1020, so r27 becomes zero.
-  adiw r26, 3
+  ; r26 = Sc = (S + 7) >> 3, where S = r27:r26 <= 1275, so r27 becomes zero.
+  adiw r26, 7
   lsr r27
   ror r26
   lsr r27
   ror r26
-  ; r21:r20 = L - 1 = 16383 - 64 * d.
-  ldi r19, 64
+  lsr r27
+  ror r26
+  ; r21:r20 = L - 1 = 8191 - 32 * d.
+  ldi r19, 32
   mul r18, r19
   ldi r20, 0xFF
-  ldi r21, 0x3F
+  ldi r21, 0x1F
   sub r20, r0
   sbc r21, r1
   ; Keep k while Sc * (k + 1) <= L - 1.
@@ -1132,7 +1124,7 @@ synthUpdateVoices:
   breq 8f
   ldi r28, lo8(synthVoices)
   ldi r29, hi8(synthVoices)
-  ldi r18, VOICE_COUNT
+  mov r18, r23
 7:
   ldd r22, Y + VOICE_AMP
   mul r22, r25

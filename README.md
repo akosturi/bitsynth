@@ -218,7 +218,7 @@ third macro on `E01`. `MOR` controls waveform-morph speed: `0` is off, while
 waveforms in its voice recipes (`A-B-A`); a single-voice preset does not morph.
 Morphing crossfades waveform sources only, so each voice keeps its own pitch,
 envelope, modulation, and pulse-width settings. While PLAY's background
-sequence runs, its voice 0 is neither morphed nor affected by the VCA.
+sequence runs, its voices are neither morphed nor affected by the VCA.
 
 Each preset also stores one square-wave pulse width. It is applied to every
 square oscillator in that preset and otherwise has no effect; the stored value
@@ -234,7 +234,8 @@ that can sound at the same time share twice full scale equally, capped at
 full scale per voice. In SEQ, one- and two-voice presets and `DRM` therefore
 play at full scale per voice, three-voice presets at two thirds, and
 four-voice presets at half. In PLAY, a running background sequence keeps
-about three tenths (its `DRM` hits half) and the live voices share the rest:
+about three tenths for each of its up to two voices (its `DRM` hits half)
+and the live voices share the rest:
 single-voice `POLY` uses half per note (a little more with the background
 sequence running), a unison stack (in `POLY`
 or an arpeggio) and `CHRD` divide their share by their voice count, and
@@ -250,8 +251,8 @@ program also store a level (`0-255`) that only attenuates this automatic
 level; every supplied program uses `255`, the full automatic level.
 
 `CHR` selects a mono Juno-60-style chorus. In SEQ it follows the normal mix;
-in PLAY it processes the live voices, leaving voice 0 dry while it plays the
-background sequence. `0` is off, `1` is chorus 1, and `2` is chorus 2. Both modes use a 16-bit,
+in PLAY it processes the live voices, leaving the background sequence's
+voices dry. `0` is off, `1` is chorus 1, and `2` is chorus 2. Both modes use a 16-bit,
 20 kHz delay line swept by a triangle LFO from 1.66 to 5.35 ms, with no
 feedback and a 50% wet mix. Chorus 1 runs at 0.513 Hz and chorus 2 at 0.863
 Hz. DRONE bypasses the effect.
@@ -260,7 +261,7 @@ Each melodic preset also stores a low-pass filter cutoff (`0-127`) and
 resonance (`0-127`); `FLT` and `RES` adjust them as direct macros. It is a
 resonant two-pole, 12 dB/octave state-variable filter, placed before the VCA
 and the chorus on the same signal path: in SEQ it filters the normal mix, in
-PLAY the live voices, while the background sequence's voice 0 stays dry.
+PLAY the live voices, while the background sequence's voices stay dry.
 `0-126` sweep exponentially from about 100 Hz to 3.3 kHz, and `127` leaves the
 filter open. Toward the top of the range a low-resonance setting becomes
 almost transparent, so the step to `127` is small. `RES` sweeps the resonance
@@ -302,8 +303,10 @@ The samples are unsigned (offset-binary) 9-bit mono PCM at 20 kHz, losslessly bi
 
 ### PLAY - scale-quantized live performance
 
-PLAY reserves voice 0 for the monophonic background sequence and uses voices
-1-3 for live notes.
+PLAY uses voices 0-3 for live notes. A running background sequence takes
+voice 3 and a fifth voice, voice 4, that only it uses: a multi-voice SEQ
+program plays the first two voice recipes of its stack there, and a
+single-voice program uses voice 3 alone. Live notes then use voices 0-2.
 
 | Control | Function |
 |---|---|
@@ -334,9 +337,9 @@ produce the same centered pitch movement rather than an envelope-driven pitch
 sweep.
 
 - `POLY` allows four simultaneous live notes while the background sequence is
-  off. With it on, voice 0 remains reserved for the sequence, so POLY allows
+  off. With it on, voice 3 remains reserved for the sequence, so POLY allows
   three notes; the next note steals the oldest live voice in either case.
-  Free voices are taken from voice 3 down, so voice 0 carries a live note only
+  Free voices are taken from voice 0 up, so voice 3 carries a live note only
   when all four are in use.
 - `CHRD` plays a scale-derived 1-3-5 chord from the most recently held button,
   using the preset's first voice recipe.
@@ -351,8 +354,8 @@ immediately.
 The background sequence keeps its position when entering PLAY. Hold **MODE**
 and press step button 1 to toggle it. A `DRUM` sequence uses its dedicated PCM
 path and does not consume a normal voice. Toggling does not restart ringing
-live notes: stopping the sequence fades its note out, and starting it fades
-only a live note on voice 0 (a fourth POLY note, or a unison stack's first
+live notes: stopping the sequence fades its notes out, and starting it fades
+only a live note on voice 3 (a fourth POLY note, or a unison stack's fourth
 voice) and lowers the other live voices to their smaller level share.
 
 #### Program macros and LFOs
@@ -430,9 +433,9 @@ On Windows, set `RAW_TO_H_OUTPUT_BITS` to `9` near the top of `util/raw_to_h.bat
 
 ## Architecture and critical implementation details
 
-- **Real-time audio:** Timer2 compare A interrupts at 20 kHz and only writes the next sample from a 16-sample ring to Timer1, which generates 9-bit Fast PWM on `D9` at 31.25 kHz. After each eight-sample half has played, compare A enables Timer2 compare B, which re-enables interrupts and renders that half while the other plays, so output timing stays exact. Per-block work is shared by eight samples, adding 0.4-0.8 ms of output latency. Voices are rendered in two four-sample sub-blocks, each preceded by the envelope and vibrato update, keeping the 5 kHz per-voice control rate.
+- **Real-time audio:** Timer2 compare A interrupts at 20 kHz and only writes the next sample from a 16-sample ring to Timer1, which generates 9-bit Fast PWM on `D9` at 31.25 kHz. After each eight-sample half has played, compare A enables Timer2 compare B, which re-enables interrupts and renders that half while the other plays, so output timing stays exact. Per-block work is shared by eight samples, adding 0.4-0.8 ms of output latency. Voices are rendered in two four-sample sub-blocks, each preceded by the envelope and vibrato update, keeping the 5 kHz per-voice control rate. The fifth voice is rendered and updated only while its envelope runs.
 - **Assembly renderer:** `src/synth_voices.S` holds the hot paths: voice blocks (wavetable, square, noise, and the two-source morph), drum playback, the low-pass filter, the chorus, the VCA, and the dithered quantizer. Each step is bit-exact with the C formulas documented in `src/synth.h`.
-- **Synthesis:** 256-sample wavetables, phase accumulators, four envelope-driven normal voices, and a separate eight-oscillator drone path. Core tables and drum data live in flash.
+- **Synthesis:** 256-sample wavetables, phase accumulators, five envelope-driven normal voices (the fifth only for PLAY's background sequence), and a separate eight-oscillator drone path. Core tables and drum data live in flash.
 - **Resource-aware mixing:** the drone engine recalculates one oscillator pair per output sample. Each pair is therefore updated at 5 kHz while the PWM output remains at 20 kHz. This is an intentional quality/CPU trade-off for the 80-600 Hz range.
 - **Chorus:** the macro-controlled post-mix effect uses a 108-sample, 16-bit delay line in SRAM and audio-rate fractional interpolation. DRONE bypasses it.
 - **Low-pass filter:** a fixed-point Chamberlin state-variable filter with two 16-bit states and 8-bit cutoff and damping coefficients runs over each eight-sample block, before the VCA and the chorus, at about 82 cycles per sample. Its states run at a quarter of the mix scale with saturating arithmetic, so no input can wrap them; its input gain is the damping moved three eighths of the way back toward unity, so resonance keeps more level and overdrives its peak, and its output is clamped to the mix range. At 20 kHz the structure stays stable and well tuned up to about fs/6, which sets the 3.3 kHz upper cutoff. When it is open, it costs nothing and its state follows the mix, so it engages without a step; it opens and closes through its brightest, unity-damping setting. Each coefficient moves one step per block toward its target. The shared filter envelope reads the smooth decay envelope `1` once per block at eight times the voice envelope step, on the same phase rules as the voice envelopes, and adds its share of the remaining distance to the brightest coefficient after that slew, with two 8-bit multiplies.
@@ -446,7 +449,7 @@ On Windows, set `RAW_TO_H_OUTPUT_BITS` to `9` near the top of `util/raw_to_h.bat
 ## Limitations
 
 - Settings and patterns are not saved to EEPROM; reset restores the compiled defaults.
-- The normal synth engine has four voices. PLAY permanently assigns one to the background sequence.
+- The normal synth engine has four voices for SEQ and live notes, plus a fifth for PLAY's background sequence. A running sequence also takes one of the four, so live notes have three voices, and it plays at most the first two voices of a multi-voice program.
 - DRONE uses the pair-wise update strategy described above and has no normal per-note envelopes.
 - Flash is intentionally used very tightly; check the PlatformIO size report after adding code or samples.
 
