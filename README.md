@@ -234,11 +234,12 @@ that can sound at the same time share full scale equally, so the mix cannot
 clip. In SEQ, one-voice presets and `DRM` therefore play at full scale,
 two-voice presets at half per voice, three-voice presets at one third, and
 four-voice presets at one quarter. In PLAY, a running background sequence
-keeps one quarter and the live voices share the rest: single-voice `POLY`
-uses one quarter per note, a unison stack (in `POLY` or an arpeggio) and
-`CHRD` divide their share by their voice count, and single-voice arpeggios
-use the whole share (full scale, or three quarters with the background
-sequence running). Each melodic preset and the `DRM`
+keeps about three tenths and the live voices share the rest: single-voice
+`POLY` uses one quarter per note (a little less with the background
+sequence running), a unison stack (in `POLY` or an arpeggio) and `CHRD`
+divide their share by their voice count, and single-voice arpeggios use the
+whole share (full scale, or about seven tenths with the background sequence
+running). Each melodic preset and the `DRM`
 program also store a level (`0-255`) that only attenuates this automatic
 level; every supplied program uses `255`, the full automatic level.
 

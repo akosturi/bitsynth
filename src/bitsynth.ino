@@ -280,8 +280,9 @@ unsigned long lastStepMs = 0;
 uint16_t nextStepIntervalMs = 119;
 // One voice or the drum reaches full PWM scale, so every voice that can sound
 // at once shares SYNTH_LEVEL_BUDGET. PLAY's background voice keeps a fixed
-// quarter, so live style changes never need to rescale a ringing sequence.
-const uint8_t kBackgroundVoiceLevel = 63;
+// share of about three tenths, so it stands out over the live voices and
+// live style changes never need to rescale a ringing sequence.
+const uint8_t kBackgroundVoiceLevel = 79;
 uint8_t sequenceVoiceLevel = kBackgroundVoiceLevel;
 uint8_t liveVoiceLevel = kBackgroundVoiceLevel;
 uint16_t normalCurrentPitch[SYNTH_VOICE_COUNT] = {0, 0, 0, 0};
