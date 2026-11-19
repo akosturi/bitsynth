@@ -4,7 +4,7 @@
 
 - BitSynth is one Arduino firmware image shared by the physical instrument and the browser simulator. The production target is the PlatformIO `hardware` environment: Arduino Pro or Pro Mini, ATmega328P, 5 V, 16 MHz, Arduino framework, with `SYNTH_FIXED_OUTPUT_MODE=CHA` and no external libraries (the LCD, mux, buttons, and ADC use direct register I/O in `src/bitsynth.ino`).
 - Treat `README.md` as the user-facing behavior and hardware specification, `platformio.ini` as the build source of truth, `src/bitsynth.ino` as the UI/sequencer/control loop, `src/synth.h` as the real-time synthesis/timer engine, `src/synth_voices.S` as its AVR assembly block renderer (voices, drum, low-pass filter, chorus, VCA, and quantizer), and `src/tables.h` as flash-resident wavetables, envelopes, pitch data, and packed drum samples.
-- Hardware limits reported by PlatformIO are 30,720 bytes usable flash and 2,048 bytes SRAM. The verified baseline build uses 29,640 bytes flash (96.5%; 1,080 bytes free) and 1,058 bytes static RAM (51.7%; 990 bytes nominally free). Re-measure after changes; static free RAM is not a stack/heap safety guarantee.
+- Hardware limits reported by PlatformIO are 30,720 bytes usable flash and 2,048 bytes SRAM. The verified baseline build uses 30,474 bytes flash (99.2%; 246 bytes free) and 1,104 bytes static RAM (53.9%; 944 bytes nominally free). Re-measure after changes; static free RAM is not a stack/heap safety guarantee.
 - Timer2 owns audio timing: its 20 kHz compare A interrupt writes one buffered sample, and compare B renders each eight-sample block with interrupts enabled. The budget is 800 CPU cycles per sample at 16 MHz, averaged over each block; a block must be ready within seven output periods. Timer1 owns 9-bit Fast PWM on D9/channel A at 31.25 kHz. Do not repurpose these timers, D9, or their registers without redesigning and validating the audio path and simulator model.
 - The three CD74HC4067 multiplexers share address pins D8/D11/D10 and feed parameter pots on A0, step buttons on A1, and step pots on A2. A3 is MODE/PANIC; D2-D7 drive the 16x2 LCD. Keep firmware, `simulator/diagram.json`, the simulator model/UI, schematic, and README consistent when hardware mappings change.
 
@@ -16,7 +16,8 @@
 - Preserve the README's existing language, style, structure, and level of detail. Update it whenever behavior, features, controls, hardware, simulator operation, dependencies, or build/upload instructions change; do not duplicate the README wholesale elsewhere.
 - Preserve control robustness unless intentionally changing it: multiplexed analog reads depend on settling/discard reads, median filtering, smoothing, movement confirmation, hysteresis, and soft takeover; buttons depend on debounce; LCD output uses a changed-character shadow buffer.
 - Drum data must remain flash-resident signed 9-bit PCM at 20 kHz in the packed representation expected by `synthRenderDrum`; retain or update the compile-time sample/table assertions when formats change.
-- Keep `src/synth_voices.S` bit-exact with the C formulas documented in `src/synth.h`, and keep its `VOICE_*` offsets in sync with `struct SynthVoice`.
+- Keep `src/synth_voices.S` bit-exact with the formulas documented above each of its routines, and keep its `VOICE_*` offsets in sync with `struct SynthVoice`.
+- Comments: short one-line comments above functions only, no inline comments, and none for obvious code. Only `src/synth_voices.S` may use longer multi-line comments.
 
 ## Build and validation
 

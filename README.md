@@ -1,82 +1,186 @@
 # BitSynth
 
-BitSynth is a compact, three-mode wavetable synthesizer and eight-step sequencer for a 16 MHz ATmega328P. It is a reimagining of a project I first built about ten years ago: the goal is to keep the deliberately limited hardware, but extract as much musical range and usability from it as possible.
+BitSynth is a small wavetable synthesizer and eight-step sequencer built around a single 16 MHz ATmega328P. It is a reimagining of a project I first built about ten years ago: the hardware stays deliberately limited, but the firmware tries to squeeze as much music out of it as possible.
 
-The same firmware runs on the physical instrument and in the browser simulator. It provides an eight-step sequencer with optional generative variation, scale-quantized live playing, an eight-oscillator drone engine, PCM drums, a 16x2 LCD interface, and 9-bit PWM audio output.
+What you get:
 
-## Current targets
+- **SEQ** – an eight-step sequencer with swing and optional generative variation (`GEN`)
+- **PLAY** – live playing in a scale, with chords and arpeggios over a running background sequence
+- **DRONE** – eight free-running oscillators with their own tremolo
+- Twelve melodic programs plus a PCM drum kit, a resonant filter, chorus, and a 16x2 LCD
 
-- **Hardware:** Arduino Pro Mini, 5 V / 16 MHz, ATmega328P
-- **Firmware build:** PlatformIO environment `hardware`
-- **Browser simulator:** the physical front-panel view in `simulator/hardware.html`
-- **Last verified `hardware` build footprint:** 29,640 bytes flash (96.5%) and 1,058 bytes RAM (51.7%)
+The same firmware runs on the real instrument and in the browser simulator, so you can try everything without building anything.
 
-An Uno or Nano with the same ATmega328P clock and voltage can also run the firmware if wired to the same pins.
+## Quick start
 
-## Setup and build
+### Build and upload
 
-### Recommended development environment
-
-Install:
-
-1. [Visual Studio Code](https://code.visualstudio.com/)
-2. The **PlatformIO IDE** VS Code extension
-
-Alternatively, install PlatformIO Core and use the `pio` command directly. The firmware needs only the Arduino core that PlatformIO installs for the target declared in `platformio.ini`; the LCD, multiplexers, buttons, and ADC are driven directly through the ATmega328P registers, with no external libraries. No Node.js packages are required.
-
-Build the firmware:
+Install [Visual Studio Code](https://code.visualstudio.com/) with the **PlatformIO IDE** extension (or just PlatformIO Core). No external libraries or Node.js packages are needed.
 
 ```sh
-pio run -e hardware
+pio run -e hardware              # build
+pio run -e hardware -t upload    # build and upload
 ```
 
-The relevant outputs are:
+The target is an Arduino Pro Mini (ATmega328P, 5 V, 16 MHz); an Uno or Nano wired to the same pins works too. A Pro Mini needs a 5 V USB-to-serial adapter; if PlatformIO does not find it, set `upload_port` in `platformio.ini`. The last build used 30,474 bytes of flash (99.2%) and 1,104 bytes of RAM (53.9%).
 
-- `.pio/build/hardware/firmware.hex` for upload and automatic simulator loading
-- `.pio/build/hardware/firmware.elf` for debugging or manual simulator loading
+### Try it in the browser
 
-Upload to a connected board:
-
-```sh
-pio run -e hardware -t upload
-```
-
-A Pro Mini normally needs a suitable 5 V USB-to-serial adapter. If PlatformIO cannot select it automatically, set `upload_port` in `platformio.ini` or pass it on the command line.
-
-## Browser simulator
-
-The simulator executes the compiled ATmega328P firmware locally in the browser using AVR8js. It is buildless; open `simulator/hardware.html` directly in a browser.
-
-Alternatively, serve the repository over HTTP from its root:
+After building, open `simulator/hardware.html` in a browser. It loads `.pio/build/hardware/firmware.hex` automatically and runs the real firmware with AVR8js. If local files are blocked, serve the repository root instead:
 
 ```sh
 python -m http.server 8000
 ```
 
-Then open:
+and open `http://localhost:8000/simulator/hardware.html`. You can also click the LCD to load an ELF, HEX, or BIN file. The first load needs an internet connection (AVR8js comes from jsDelivr), and you may need to click or press a key once to start the audio.
 
-```text
-http://localhost:8000/simulator/hardware.html
-```
+| Simulator | Action |
+|---|---|
+| Knobs | Drag vertically, or use the mouse wheel |
+| `1`-`8` | Step buttons (hold to keep pressed) |
+| `M` | MODE: tap, double-tap, or hold with `1`, `2`, or `8` |
 
-The page automatically loads `.pio/build/hardware/firmware.hex`. If that file is unavailable or the browser blocks local file access, click the LCD and select an ELF, Intel HEX, or raw BIN firmware file. Click or press a key once if the browser has suspended audio playback. The simulator imports the pinned AVR8js module from jsDelivr, so the first load requires an internet connection.
+The simulator plays the actual 9-bit PWM output through a model of the analog output filter, so it sounds like the instrument.
 
-Simulator controls:
+## Playing BitSynth
 
-- Drag a knob vertically, or place the pointer over it and use the mouse wheel.
-- Hold keys `1`-`8` for the eight step buttons.
-- Tap `M` to change a SEQ/PLAY parameter page; double-tap it to change mode. Hold `M` with `1` or `8` for the MODE + step-button combinations.
-- Every knob and button is also usable with the pointer.
+### The MODE button
 
-The simulator models the real 9-bit, 31.25 kHz PWM output and the documented passive output filter, not just the synth's digital sample stream. Firmware execution, LCD output, multiplexed controls, audio generation, and filtering all run in the browser.
+BitSynth starts in SEQ. **MODE** does three things:
 
-### Audio ISR cycle meter
+- **Tap** – next parameter page (SEQ and PLAY)
+- **Double-tap** (within 350 ms) – next mode: SEQ → PLAY → DRONE → SEQ
+- **Hold + something** – a shortcut:
 
-Click the lower-right screw on the simulated front panel to show or hide the audio ISR cycle meter; each reopening starts a new measurement. It shows the smoothed audio interrupt load in cycles per 20 kHz sample period and the highest average over one eight-sample render block, against the 800-cycle budget. Both audio interrupts count, including their four-cycle interrupt entry, and a sample-output interrupt nested in block rendering is counted once. The meter samples a few render blocks in each audio callback, so a rare peak can take a while to appear in MAX. The screw does not change the firmware state or any control value.
+| Shortcut | Where | What it does |
+|---|---|---|
+| MODE + step button 1 | PLAY | Background sequence on/off |
+| MODE + step button 2 | SEQ, PLAY | Swing on/off |
+| MODE + step button 8 | SEQ, PLAY | `GEN` on/off |
+| MODE + parameter pot | DRONE | Tremolo rate of that oscillator pair |
+
+Holding MODE alone does nothing, and a shortcut also works if the step button lands a moment (up to 25 ms) before MODE.
+
+**Soft takeover:** after a page or layer change, a pot does nothing until you move it, so values never jump.
+
+**Parameter pages:** the four parameter pots work on pages of four. Each mode fills its pages left to right with what the current program offers (see [Parameters](#parameters)); empty slots are skipped. The LCD's top row shows the four names; when you turn a pot, its value appears for about 1.5 s.
+
+### SEQ – step sequencer
+
+| Control | Function |
+|---|---|
+| Parameter pots | Program, tempo (60-190 BPM), then the program's parameters |
+| Step pots 1-8 | Note of each step, C2 to B3 (drum sound in `DRM`) |
+| Step buttons 1-8 | Step on/off |
+
+The sequence runs in sixteenth notes. A step that is off fades the previous note out in about 20 ms instead of cutting it.
+
+The LCD's bottom row is a little melody graph: each step is a bar whose height follows its note (C2 at the bottom, B3 full height; in `DRM` kick, snare, and hat are low, middle, and full). An active step is a solid bar, an inactive one a dotted dash, and the current step is a checkerboard. Turning a step pot briefly shows the step and its note at the lower right. A `*` means `GEN` is on.
+
+**Swing** (off at power-up, not shown on the LCD) delays steps 2, 4, 6, and 8 to 65% of each step pair, a light shuffle; the tempo stays the same. It applies to every program, to PLAY's background sequence, and to arpeggios (`1/2`, `1/4`, and `1/8` stay straight).
+
+**GEN** slowly varies a melodic sequence while it plays. At the start of each eight-step cycle it may change one step: it borrows the note of another active step, jumps an octave, or returns home. Step 1 and the rhythm never change and only notes already in the sequence are used, so the key stays. Turning a step pot resets that step; switching `GEN` off restores the original. `DRM` is not affected.
+
+### PLAY – live playing
+
+The step buttons play the notes of a scale, while the SEQ sequence can keep running in the background.
+
+| Control | Function |
+|---|---|
+| Parameter pots | Program, root note, scale (`MAJ`, `MIN`, `PEN`, `BLU`), style, then the program's parameters |
+| Step pot 1 | Octave, O1-O5 (applies from the next note) |
+| Step pot 2 | Tempo, shared with SEQ (takes effect once you move it) |
+| Step pot 3 | Arpeggio speed: `1/2`, `1/4`, `1/4t`, `1/8`, `1/8t`, `1/16`, `1/16t`, `1/32` |
+| Step buttons 1-8 | Consecutive scale notes |
+
+Styles:
+
+- `POLY` – up to four notes at once (three while the background sequence runs); a new note takes over the oldest.
+- `CHRD` – a 1-3-5 chord from the most recently held button.
+- `UP`, `DOWN`, `UPDN` – arpeggiate the held buttons.
+- `CUP`, `CDWN`, `CUDN` – arpeggiate the chord of the most recently held button.
+
+Arpeggios lock to the sequencer clock: button changes take effect on the next arpeggio note, and every division stays in phase with step 1. A multi-voice program plays each note (in `POLY` and in arpeggios) as one thick unison stack; single-voice programs stay polyphonic. Released notes fade out in about 20 ms.
+
+**Background sequence:** the SEQ pattern keeps playing with the SEQ program and its settings (`DRM` too) on its own voices, at a fixed level, without the filter, chorus, or tremolo. It keeps its position when you enter PLAY, and switching it on or off does not restart notes you are holding.
+
+The bottom row shows `▶` (running, blinking with the beat; `*` with `GEN`) or `■` (stopped), then octave, tempo, and arpeggio speed. The top row shows program, root, scale, and style, for example `A01 C#  MIN UPDN`. `DRM` is available only in SEQ.
+
+### DRONE – eight oscillators
+
+| Control | Function |
+|---|---|
+| Parameter pots 1-4 | Waveform (sine, triangle, square, saw) of oscillator pairs 1-2, 3-4, 5-6, 7-8 |
+| MODE + parameter pots 1-4 | Tremolo rate of each pair: off, or 94 steps from 0.05 to 20 Hz (LCD 0-94) |
+| Step pots 1-8 | Frequency, 80-600 Hz, unquantized |
+| Step buttons 1-8 | Oscillator on/off |
+
+Oscillators fade in and out without clicks. DRONE skips the filter and chorus. Leaving DRONE restarts the sequence from step 1.
+
+## Sounds
+
+Program names start with a category letter: `A` bass, `B` lead, `C` pad, `D` keys, `E` sequence and effect. The descriptions say what each program aims for within this little engine, not a copy of the original.
+
+| Program | Sound | Voices |
+|---|---|---|
+| `A01` | Funk bass in the style of "Thriller": two beating saws over a square sub-octave | 3 |
+| `A02` | Reese bass: two detuned saws over a sine sub-octave, slow filter motion | 3 |
+| `A03` | 808 bass: a long, sliding sine | 1 |
+| `B01` | Pulse lead in the style of "Axel F" | 2 |
+| `B02` | Supersaw trance lead with chorus and glide | 4 |
+| `C01` | Juno-style PWM pad with chorus | 1 |
+| `C02` | String machine in the style of Jarre's "Oxygène" | 1 |
+| `D01` | Saw poly brass in the style of "Jump", for chords | 1 |
+| `D02` | Vibraphone or electric piano with motor tremolo | 1 |
+| `D03` | Rock organ: four sine drawbars, key click, Leslie-like tremolo | 4 |
+| `E01` | Dark arpeggio in the style of "Stranger Things": saw and pulse morphing, filter slowly moving | 2 |
+| `E02` | Surf noise in the style of "Oxygène": drifting filtered white noise | 1 |
+| `DRM` | Drum kit: `KICK`, `SNAR`, `CHH` per step (SEQ only) | - |
+
+Tips:
+
+- Single-voice programs (`A03`, `C01`, `C02`, `D01`, `D02`) are polyphonic in PLAY, ideal for `POLY` and `CHRD`.
+- `C01` and `C02` swell in over about 0.8 s; in SEQ every step restarts the swell, so lower `LEN` there.
+- For the `E01` theme, hold step buttons 1, 3, 5, 7, and 8 in PLAY with `C`, `MAJ`, and `UPDN`.
+- `E02` ignores pitch; with `ENV` 0 and a short `LEN` it ticks like a hi-hat.
+- `DRM` plays one sound per step, and a new hit replaces the previous one.
+
+## Parameters
+
+Each program offers up to eight of these parameters plus two LFOs, so it has up to four pages. SEQ and PLAY remember their own values; changing the program loads its defaults.
+
+| Name | What it does | Range |
+|---|---|---|
+| `FLT` | Low-pass filter cutoff | 0-126 = about 100 Hz-3.3 kHz, 127 = open |
+| `RES` | Filter resonance | Q about 1-6 |
+| `FEG` | Filter envelope: opens the filter at each note, then closes it | 0 off - 127 |
+| `LEN` | Note length | about 0.2-6.5 s, 127 = HOLD |
+| `ENV` | Envelope shape (see below) | 0-5 |
+| `GLD` | Glide between notes | 0 off - 127 |
+| `VIB` | 5 Hz vibrato depth | 64 none - 127 |
+| `PWM` | Square-wave pulse width | 5-95% |
+| `CHR` | Juno-style chorus | 0 off, 1, 2 |
+| `MOR` | Speed of morphing between the program's first two waveforms | 0 off, 0.16-20 Hz |
+| `VCD` | Tremolo depth | 0-256 |
+| `VCR` | Tremolo rate | 0 off, 0.01-20 Hz |
+| `TUN` | Drum playback speed (`DRM`) | 0.75-1.25x |
+| `DEC` | Drum decay (`DRM`) | 25-100% of the sample |
+| `RAT` / `DEP` | LFO rate and depth | 1-94 (0.05-20 Hz) / 0-127 |
+
+Envelopes: `0` fast decay, `1` smooth decay, `2` pad (soft attack, long sustain), `3` constant, `4` full level then a linear fade, `5` strike (quick drop to 40%, then slow decay). HOLD sustains until you release the note.
+
+Good to know:
+
+- **LFOs** draw a triangle around the parameter's value. They can modulate `PWM`, `VIB`, `TUN`, `DEC`, `VCD`, `VCR`, `FLT`, and `RES`; depth 127 sweeps the whole range. A slot shown as `---` is unused.
+- **Filter:** a resonant 12 dB/octave filter. Resonance does not self-oscillate; high `RES` lowers the level a little and adds some grit where the peak clips. Changes glide smoothly, so sweeps do not click.
+- **Filter envelope:** there is one shared filter, so in PLAY each new note restarts the envelope for every sounding note. It closes within a quarter of `LEN` (about 0.5 s with HOLD).
+- **Chorus:** a mono, Juno-60-style chorus (1 slower at 0.51 Hz, 2 faster at 0.86 Hz).
+- **Morph** works only on multi-voice programs and fades between waveforms; pitch and envelope stay the same.
+- **Volume** is automatic: notes and drum hits share the output, and a built-in limiter keeps chords and overlapping notes from clipping.
 
 ## Hardware
 
-Three CD74HC4067 multiplexers share the same address lines and provide the parameter pots, step buttons, and step pots.
+Three CD74HC4067 multiplexers share their address lines and read the pots and buttons.
 
 | Function | Pin |
 |---|---|
@@ -86,13 +190,13 @@ Three CD74HC4067 multiplexers share the same address lines and provide the param
 | Eight step pots | MUX to `A2` |
 | MODE button | `A3` |
 | 16x2 LCD (`RS`, `E`, `D4`-`D7`) | `D2`-`D7` |
-| 9-bit PWM audio | `D9` / Timer1 channel A |
+| 9-bit PWM audio | `D9` |
 
-The KiCad project and a wiring reference are in `schematic/`.
+The KiCad project and a wiring picture are in `schematic/`.
 
-### Analog audio output
+### Audio output
 
-`D9` is a PWM signal and must be filtered before it is connected to an audio input. The current circuit is a three-stage passive low-pass filter followed by AC coupling and a volume control:
+`D9` outputs PWM, so it needs this low-pass filter before it reaches an audio input:
 
 ```text
 D9 PWM -- R1 2.2 kΩ --o-- R2 2.2 kΩ --o-- R3 2.2 kΩ --o-- (+) C4 4.7 µF --o-- VOL 50 kΩ log -- Rout 1 kΩ -- AUDIO OUT
@@ -102,367 +206,37 @@ D9 PWM -- R1 2.2 kΩ --o-- R2 2.2 kΩ --o-- R3 2.2 kΩ --o-- (+) C4 4.7 µF --o-
                      GND              GND              GND                       GND
 ```
 
-The positive lead of electrolytic capacitor `C4` faces `R3`. Connect the top of the volume pot to the `C4/R4` node, the bottom to ground, and the wiper through `Rout` to the output. This is a high-impedance line output; do not drive a speaker or low-impedance headphones without an amplifier.
+The `+` lead of `C4` faces `R3`. The volume pot's top goes to the `C4/R4` node, its bottom to ground, and its wiper through `Rout` to the output. This is a line output: use an amplifier for speakers or headphones.
 
-## User interface
+## Under the hood
 
-### Global controls
+- **Audio:** a 20 kHz timer interrupt outputs one sample at a time, while a second one renders the next eight samples in the background (AVR assembly in `src/synth_voices.S`). The output is 9-bit PWM at 31.25 kHz with dither.
+- **Voices:** five wavetable voices (four normal, one more for the background sequence), generated square and noise, and a separate eight-oscillator drone engine. Wavetables, envelopes, and drum samples (9-bit, 20 kHz, packed) live in flash.
+- **Controls:** analog readings are median-filtered, smoothed, and use hysteresis; buttons are debounced; the LCD only rewrites changed characters. Everything is driven through registers, with no libraries.
 
-On power-up, BitSynth opens directly in SEQ.
+## Developer tools
 
-One short **MODE** tap advances to the next four-parameter control page in SEQ
-and PLAY after the 350 ms double-tap window. Two short taps within that window
-cycle through modes:
-
-```text
-SEQ -> PLAY -> DRONE -> SEQ
-```
-
-Holding **MODE** by itself does nothing. It remains a modifier for the documented
-MODE combinations, including PLAY's MODE + step button 1 background-sequence toggle
-and the SEQ/PLAY MODE + step button 2 swing and MODE + step button 8 `GEN` toggles.
-
-There is no PANIC gesture. Each new SEQ/PLAY page uses soft takeover, so pots
-must move away from their position at the page change before they take effect.
-In DRONE, hold **MODE** while turning a parameter pot to set that oscillator
-pair's VCA-LFO rate. In PLAY, hold **MODE** and press step button 1 to toggle
-the background sequence. In SEQ and PLAY, hold **MODE** and press step button 2
-to toggle swing, or step button 8 to toggle `GEN`. None of these MODE combinations counts as a tap gesture.
-A combination also registers when its step button lands up to one debounce
-period (25 ms) before **MODE**, so a near-simultaneous press neither plays a
-note nor toggles a gate.
-
-### SEQ - eight-step sequencer
-
-The sequence runs in sixteenth notes. A disabled step fades the previous
-step's notes or drum hit out in about 20 ms instead of cutting them, so rests
-do not click.
-
-| Control | Function |
-|---|---|
-| Parameter pots 1-4 | The four parameters on the selected control page |
-| Step pots 1-8 | Chromatic pitch from C2 to B3; drum selection in `DRUM` |
-| Step buttons 1-8 | Toggle the corresponding step on or off |
-
-SEQ packs its available parameters left-to-right into pages of four: program,
-tempo (60-190 BPM at 1 BPM resolution), then the selected program's direct macros and LFO
-rate/depth pairs. `DRM` additionally exposes playback tuning after tempo; it
-does not appear for melodic programs. Empty macro and LFO slots are skipped,
-so no completely empty parameter page is shown. The `DRM` direct macro is
-`DEC` (decay).
-
-The LCD's upper row shows the selected control page's parameter names, except program and tempo, which always show the selected program and BPM value, and briefly (about 1.5 s) shows values when they change. The lower row shows the sequence as a melody contour: each step is a bar whose height follows its note as currently played, from C2 at the bottom to B3 filling the whole character, in eight heights of three semitones, including `GEN`'s changes (its octave-up notes stay at the top). In `DRM`, `KICK`, `SNAR`, and `CHH` are low, middle, and full height. An enabled step is a full-width solid bar and a disabled step only a dotted dash at that height; the current step, enabled or not, is shown as a plain checkerboard. Turning a step pot briefly shows its step number and note name, or drum name in `DRM`, at the lower right. A small centred `*` after the contour shows that `GEN` is on.
-
-#### Swing
-
-Hold **MODE** and press step button 2 in SEQ or PLAY to switch swing on or
-off; it is off at power-up. The LCD does not mark it. Swing delays the even-numbered steps (2, 4, 6, and
-8) to 65% of each pair of steps, a light shuffle between straight sixteenths
-(50%) and a triplet feel (67%). Each pair keeps its straight length, so the
-tempo is unchanged. It applies to every program, including `DRM`, and to
-PLAY's background sequence and arpeggios, which follow the same clock: `1/2`,
-`1/4`, and `1/8` keep their straight timing, while the other divisions follow
-the swung steps. The change takes effect from the next step.
-
-#### GEN - generative variation
-
-`GEN` slowly varies the melody of a melodic sequence while it runs, including
-as PLAY's background sequence. It has no parameters; MODE + step button 8
-switches it on or off. At the start of every eight-step cycle, it may change
-at most one step: that step takes the note of another enabled step, moves an
-octave up or back, or returns to its own note. Step 1 never changes, gates and
-rhythm are untouched, and only notes already in enabled steps are used, so the
-sequence keeps its pitch classes and key. Turning a step pot returns that step
-to its own note. Switching `GEN` on or off restores the programmed sequence.
-`DRM` is unaffected.
-
-#### Programs
-
-SEQ contains twelve melodic programs followed by `DRM`; PLAY contains the same
-melodic programs but omits `DRM`. A melodic program's letter names its
-category (`A` bass, `B` lead, `C` pad, `D` keys, `E` sequence and effect) and the digits
-number it within that category. The references describe the character each
-program aims at within this engine's limits (one shared filter envelope),
-not a copy of the original instrument.
-
-| Program | Sound | Voices | Macros | LFOs (default) |
-|---|---|---|---|---|
-| `A01` | Funk bass in the style of "Thriller": two slowly beating saws over a square sub-octave, punchy decay | 3 | `FLT` `RES` `LEN` `ENV` `GLD` `FEG` | - |
-| `A02` | Reese bass: two saws 28 cents apart over a sine sub-octave | 3 | `FLT` `RES` `LEN` `ENV` `GLD` | `FLT` (0.3 Hz, 12) |
-| `A03` | 808 bass: a long sine that slides between notes | 1 | `GLD` `LEN` `ENV` | - |
-| `B01` | Pulse lead in the style of "Axel F": 30% pulse and detuned saw, one octave up | 2 | `PWM` `FLT` `RES` `LEN` `ENV` `GLD` `VIB` `FEG` | - |
-| `B02` | Supersaw trance lead (MicroKorg/JP-8000 style): three spread saws one octave up over one at pitch, chorus 1, glide | 4 | `FLT` `RES` `GLD` `CHR` `VIB` `LEN` `ENV` `VCD` | `FLT` (0.10 Hz, off) |
-| `C01` | Juno-style PWM pad with chorus 1 and a soft attack | 1 | `PWM` `FLT` `RES` `CHR` `LEN` `ENV` | `PWM` (0.5 Hz, 49), `FLT` (0.10 Hz, off) |
-| `C02` | String machine in the style of Jarre's "Oxygène": saw ensemble with chorus 2 and light vibrato | 1 | `FLT` `RES` `CHR` `VIB` `LEN` `ENV` | `FLT` (0.12 Hz, 16) |
-| `D01` | Saw poly brass in the style of "Jump", for chords | 1 | `FLT` `RES` `CHR` `LEN` `ENV` `GLD` `VIB` `FEG` | - |
-| `D02` | Vibraphone or suitcase electric piano: struck triangle with 5.5 Hz motor tremolo | 1 | `VCD` `VCR` `LEN` `ENV` `FLT` `RES` `CHR` | - |
-| `D03` | Rock organ: 8', 4', 5 1/3', and 16' sine drawbars with key click, 6 Hz Leslie-like tremolo, vibrato, and chorus 2 | 4 | `VCR` `VCD` `VIB` `CHR` `FLT` `RES` `LEN` `ENV` | - |
-| `E01` | Dark arpeggio in the style of "Stranger Things": a saw and a detuned 40% pulse morphing into each other while the filter slowly opens and closes | 2 | `FLT` `RES` `MOR` `PWM` `CHR` `LEN` `ENV` `GLD` | `FLT` (0.10 Hz, 40), `PWM` (0.7 Hz, 28) |
-| `E02` | Surf in the style of Jarre's "Oxygène": held white noise whose filter and slower 0.1 Hz VCA swell drift against each other | 1 | `FLT` `RES` `VCD` `VCR` `LEN` `ENV` `CHR` | `FLT` (0.12 Hz, 45) |
-
-LFO defaults are listed as rate and depth; "off" is depth 0, so only its rate
-is preset. Single-voice programs keep note polyphony in PLAY, so `A03`, `C01`,
-`C02`, `D01`, and `D02` suit `POLY` and `CHRD`; the multi-voice programs
-play one unison stack per note. `C01` and `C02` swell in over about 0.8 s and
-are meant for PLAY: in SEQ every enabled step restarts their attack, so lower
-`LEN` there. For the `E01` theme-style arpeggio, hold step buttons 1, 3, 5, 7,
-and 8 in PLAY with root `C`, `MAJ`, and `UPDN`. `E02` ignores pitch; with
-`ENV` 0 and a short `LEN` it plays hi-hat-like noise ticks in SEQ. The PCM
-`DRM` program has its own compact data instead of unused oscillator fields.
-
-Melodic programs also store a VCA depth and rate. The VCA processes the
-normal mix in SEQ and the live voices in PLAY; `D02`, `D03`, and `E02` enable
-it by default, while `B02` stores an 8 Hz rate for its `VCD` macro. `MOR` is the
-third macro on `E01`. `MOR` controls waveform-morph speed: `0` is off, while
-`1-127` span 0.16-20.32 Hz. A multi-voice preset crossfades only the first two
-waveforms in its voice recipes (`A-B-A`); a single-voice preset does not morph.
-Morphing crossfades waveform sources only, so each voice keeps its own pitch,
-envelope, modulation, and pulse-width settings. While PLAY's background
-sequence runs, its voices are neither morphed nor affected by the VCA.
-
-Each preset also stores one square-wave pulse width. It is applied to every
-square oscillator in that preset and otherwise has no effect; the stored value
-is limited to a musically useful 5-95% duty cycle. `B01` uses 30% and `E01`
-40%; the other presets use 50%.
-
-Each melodic preset stores one default glide value (`0-127`) that applies in
-both SEQ and PLAY; `0` switches glide off.
-
-Output level is set automatically whenever a note or drum hit starts. One
-voice or the `DRM` sample can fill the whole 9-bit PWM range, and the voices
-that can sound at the same time share twice full scale equally, capped at
-full scale per voice. In SEQ, one- and two-voice presets and `DRM` therefore
-play at full scale per voice, three-voice presets at two thirds, and
-four-voice presets at half. In PLAY, a running background sequence keeps
-about three tenths for each of its up to two voices (its `DRM` hits half)
-and the live voices share the rest:
-single-voice `POLY` uses half per note (a little more with the background
-sequence running), a unison stack (in `POLY`
-or an arpeggio) and `CHRD` divide their share by their voice count, and
-single-voice arpeggios play at full scale. A fixed bus limiter keeps the mix
-from clipping: whenever the current envelope levels of all voices, plus the
-peak of a sounding drum hit, would exceed full scale, it lowers every voice
-together at once and recovers in about 0.14 s. The drum itself is never
-lowered. Below full scale the limiter does nothing, so staggered, decaying,
-and released notes play louder while quieter passages keep their dynamics;
-it never reduces the level by more than the overcommit of about 6 dB unless
-a drum hit needs the room. Each melodic preset and the `DRM`
-program also store a level (`0-255`) that only attenuates this automatic
-level; every supplied program uses `255`, the full automatic level.
-
-`CHR` selects a mono Juno-60-style chorus. In SEQ it follows the normal mix;
-in PLAY it processes the live voices, leaving the background sequence's
-voices dry. `0` is off, `1` is chorus 1, and `2` is chorus 2. Both modes use a 16-bit,
-20 kHz delay line swept by a triangle LFO from 1.66 to 5.35 ms, with no
-feedback and a 50% wet mix. Chorus 1 runs at 0.513 Hz and chorus 2 at 0.863
-Hz. DRONE bypasses the effect.
-
-Each melodic preset also stores a low-pass filter cutoff (`0-127`) and
-resonance (`0-127`); `FLT` and `RES` adjust them as direct macros. It is a
-resonant two-pole, 12 dB/octave state-variable filter, placed before the VCA
-and the chorus on the same signal path: in SEQ it filters the normal mix, in
-PLAY the live voices, while the background sequence's voices stay dry.
-`0-126` sweep exponentially from about 100 Hz to 3.3 kHz, and `127` leaves the
-filter open. Toward the top of the range a low-resonance setting becomes
-almost transparent, so the step to `127` is small. `RES` sweeps the resonance
-exponentially from a gentle Q of about 1 (`0`) to about 6 (`127`); it does not
-self-oscillate and has no effect while the filter is open. The mix has no
-headroom, so resonance splits the difference between level and distortion:
-it lowers the passband by about 2 dB at `RES` `27`, 4 dB at `64`, and 6.5 dB
-at `127`, while the resonant peak rises by up to about 1.5, 4, and 9 dB. Wherever
-that peak, or a fast transient, would pass full scale, the filter output is
-clipped, so strong harmonics near a resonant cutoff add audible distortion,
-most at high `RES`. `A03` and `D03` store cutoff `127`; the other presets
-store a cutoff between `52` and `101` and a resonance between `0` and `48`.
-Cutoff and resonance changes glide over at most about 0.1 s and 0.05 s, so
-moving the controls or switching presets does not click; very fast, deep LFO
-sweeps are smoothed by the same limit. `DRM` and DRONE bypass the filter.
-
-Each melodic preset also stores a filter envelope amount (`0-127`, `0` off),
-which `FEG` adjusts as a direct macro. Every note start restarts the filter
-envelope: it jumps to full level and then decays smoothly to zero in a
-quarter of the note's `LEN` time, whatever its `ENV` shape, so the filter
-closes while the note is still loud, as with a short filter decay on a larger
-synthesizer. It raises the cutoff toward the filter's brightest setting by
-the envelope level times the amount. `127` sweeps the envelope's
-peak to about 3.3 kHz from any cutoff, and lower values give a finer,
-quadratic response, so `64` covers about a quarter of the distance. The
-envelope bypasses the cutoff glide, so its attack is immediate, and when it
-has decayed the filter rests at the `FLT` cutoff. There is one filter, so the
-filter envelope is shared: in PLAY each new live note or arpeggio step
-restarts it for all sounding live notes, while the background sequence never
-restarts it. With `LEN` HOLD the envelope decays in about 0.5 s. It has no effect while the filter is open, and it is not an LFO target.
-`A01` stores `88`, `B01` `80`, and `D01` and `E01` `64`; the other presets
-store `0`. `E01` has no free macro slot, so its amount is fixed.
-
-#### DRUM preset
-
-Each step stores one of `KICK`, `SNAR`, or `CHH`; this is still a single eight-step track, not three separate drum tracks. A new hit immediately replaces the previous one.
-
-The samples are unsigned (offset-binary) 9-bit mono PCM at 20 kHz, losslessly bit-packed in flash. They are streamed directly from program memory without a RAM copy. Parameter 3 (`T`) changes playback speed from 0.75x to 1.25x. The direct-macro page's `DEC` parameter applies a decay envelope lasting 25-100% of the pitch-adjusted sample duration.
-
-### PLAY - scale-quantized live performance
-
-PLAY uses voices 0-3 for live notes. A running background sequence takes
-voice 3 and a fifth voice, voice 4, that only it uses: a multi-voice SEQ
-program plays the first two voice recipes of its stack there, and a
-single-voice program uses voice 3 alone. Live notes then use voices 0-2.
-
-| Control | Function |
-|---|---|
-| Parameter pots 1-4 | The four parameters on the selected control page |
-| Step pot 1 | Octave range, O1-O5 (C1-C5); held notes are not retriggered, so the new octave applies from the next press, or the next clock for arpeggios |
-| Step pot 2 | Background-sequence and arpeggio tempo, 60-190 BPM; shared with SEQ, so it takes effect only after moving once PLAY is entered |
-| Step pot 3 | Arpeggio division: `1/2`, `1/4`, `1/4t`, `1/8`, `1/8t`, `1/16`, `1/16t`, `1/32` |
-| Step pot 4 | Unused |
-| Step pots 5-8 | Unused |
-| Step buttons 1-8 | Consecutive notes of the selected scale; MODE + button 1 toggles the background sequence, MODE + button 2 swing, MODE + button 8 `GEN` |
-
-PLAY packs program, root note, scale, style, then its available direct macros
-and LFO rate/depth pairs into four-control pages; empty slots are skipped.
-`DRM` is intentionally SEQ-only.
-
-Each PLAY program is melodic. Each voice recipe stores a signed
-`detuneCents` pitch offset (`-2400` to `+2400`), so it can use any whole-cent
-value as well as semitone, octave, and two-octave intervals. In `POLY`, a
-multi-voice preset is played as a single detuned unison stack with each
-recipe's waveform, detune, and modulation, using up to four oscillators (or
-three with the background sequence running). The arpeggio styles play each
-arpeggio note as that same stack. Single-voice presets retain note polyphony
-in `POLY`. `CHRD` uses only the first voice recipe.
-
-Preset modulation is a fixed 5 Hz triangle vibrato. Its stored `MOD` value is
-neutral at 64; distance from 64 selects depth, so values above and below 64
-produce the same centered pitch movement rather than an envelope-driven pitch
-sweep.
-
-- `POLY` allows four simultaneous live notes while the background sequence is
-  off. With it on, voice 3 remains reserved for the sequence, so POLY allows
-  three notes; the next note steals the oldest live voice in either case.
-  Free voices are taken from voice 0 up, so voice 3 carries a live note only
-  when all four are in use.
-- `CHRD` plays a scale-derived 1-3-5 chord from the most recently held button,
-  using the preset's first voice recipe.
-- `UP`, `DOWN`, and `UPDN` arpeggiate held buttons at step pot 3's division of the sequencer clock, including triplets; every division restarts in phase with sequencer step 1. With swing on, `1/2`, `1/4`, and `1/8` keep their straight timing, while the other divisions follow the swung steps. Button presses and releases are applied at the next clock, so they cannot retrigger an off-grid note.
-- `CUP`, `CDWN`, and `CUDN` arpeggiate the 1-3-5 chord of the most recently held button upward, downward, or up then down, respectively, on that same clock; button changes are likewise clock-quantized.
-
-A live note-off does not cut the voice: it fades from its current level to
-silence in about 20 ms, so releasing a held or still-decaying note does not
-click. Background-sequence rests fade the same way. Mode changes stop voices
-immediately.
-
-The background sequence keeps its position when entering PLAY. Hold **MODE**
-and press step button 1 to toggle it. A `DRUM` sequence uses its dedicated PCM
-path and does not consume a normal voice. Toggling does not restart ringing
-live notes: stopping the sequence fades its notes out, and starting it fades
-only a live note on voice 3 (a fourth POLY note, or a unison stack's fourth
-voice) and lowers the other live voices to their smaller level share.
-
-#### Program macros and LFOs
-
-Programs declare up to eight direct macros and two optional LFO targets, so a
-fully assigned program spans up to four parameter pages. Melodic programs also
-store each LFO's default rate and depth, which are loaded with the program;
-`DRM` LFOs start at depth 0. SEQ
-and PLAY keep separate macro and LFO values for their selected programs, and
-PLAY's background sequence uses the SEQ program's values. The
-LCD's upper row shows the current page's four three-character parameter names;
-program, tempo, and PLAY's root note, scale, and style, show their current
-values instead (for example `KEY C#  MIN UPDN`). While a parameter is being adjusted, its
-field shows the value for about 1.5 s, then returns to its name. In SEQ, the lower row remains the step-gate view; in
-PLAY it shows background-sequence status (`▶` running, or `*` running with
-`GEN`, either blinking with the beat for the first half of each quarter note;
-`■` off) in its first character, then octave, tempo, and arpeggio division. The bars, checkerboard, `▶`, and `■` are custom CGRAM characters. A macro slot without an
-assigned parameter shows `---`. The first LFO supplies rate/depth pair 1; the
-second supplies pair 2. Their LCD rate values are steps 1-94, corresponding to
-the same 0.05-20 Hz range as DRONE.
-Macro LFOs are resolved outside the audio interrupt;
-the ISR receives only the resulting engine values. An LFO may target any
-numeric macro declared by its program (`PWM`, `VIB`, `TUN`, `DEC`, `VCD`,
-`VCR`, `FLT`, or `RES`); depth sets a centred triangle sweep, with 127 spanning that parameter's
-complete valid range before clamping. Drum tune and decay are resolved when a
-new hit starts. The melodic programs also expose `ENV` and `LEN` direct macros
-for selecting one of the six envelopes and its playback speed: `0` a fast
-exponential decay, `1` a smooth decay, `2` a pad shape with a soft attack over
-the first quarter and a long sustain, `3` constant level, `4` full level that
-then fades linearly, and `5` a strike that drops to about 40% and then decays
-slowly. Envelopes `0`, `1`, `3`, `4`, and `5` start at full level. `CHR` is a
-direct-only macro and is not an LFO target. `MOR` is also direct-only: it
-sets a preset's waveform-morph speed and is inactive for one-voice presets.
-`LEN` uses a
-logarithmic range from roughly 0.2 s (0) to 6.5 s (126); `LEN` 127 is HOLD and
-uses the constant full-level envelope until note-off. HOLD sits next to the
-longest length, so turning away from it shortens held notes gradually. Without a `LEN` macro a
-program plays its stored envelope length unchanged. Neither envelope macro is
-an LFO target.
-
-`NSE` is a generated white-noise source, not a wavetable. It uses an independent
-16-bit LFSR for each normal voice, advances at the 20 kHz audio rate, and uses
-the selected preset's envelope. Its pitch setting has no
-effect. `E02` uses it in the shared SEQ/PLAY preset bank; it is intentionally
-unavailable in DRONE.
-
-All parameter pages use the existing filtered, hysteretic pot handling and
-soft takeover.
-
-### DRONE - eight continuous oscillators
-
-DRONE stops the sequencer and switches to a dedicated eight-oscillator mixer.
-
-| Control | Function |
-|---|---|
-| Parameter 1 | Waveform for oscillators 1-2 |
-| Parameter 2 | Waveform for oscillators 3-4 |
-| Parameter 3 | Waveform for oscillators 5-6 |
-| Parameter 4 | Waveform for oscillators 7-8 |
-| Step pots 1-8 | Continuous, unquantized frequency from 80-600 Hz |
-| Step buttons 1-8 | Toggle the corresponding oscillator |
-
-Available waveforms are sine, triangle, square, and saw. `NSE` is intentionally
-unavailable in DRONE. Gates use short amplitude ramps to reduce switching clicks.
-
-While holding **MODE**, parameter pots 1-4 set independent VCA triangle-LFO rates for oscillator pairs 1-2, 3-4, 5-6, and 7-8. Each offers off plus 94 rates: 0.05-0.20 Hz in 0.01 Hz steps, 0.2-5.0 Hz in 0.1 Hz steps, and 5-20 Hz in 0.5 Hz steps. The LCD shows 0 for off and 1-94 for the rates. The four pair VCAs use the same fine 9-bit linear amplitude scaling as PLAY. Soft takeover applies whenever **MODE** is pressed or released, so a pot moved on one layer does not change the waveform or LFO rate on the other until it moves again.
-
-Leaving DRONE returns to SEQ and restarts the sequence from step 1.
-
-## Wavetable utilities
-
-The wavetables in `src/tables.h` can be replaced with custom waveforms. Audacity is recommended for preparing them: use a mono track with exactly 256 samples and export it as headerless little-endian signed 16-bit PCM RAW.
-
-On Windows, set `RAW_TO_H_OUTPUT_BITS` to `9` near the top of `util/raw_to_h.bat`, then drag the `.raw` file onto the script. It creates a flash-ready `.h` file beside the source. Drag that generated header onto `util/sample_player.bat` to audition it. When copying the array into `src/tables.h`, retain the required table name, `PROGMEM` storage, 256-sample length, and signed 9-bit range.
-
-## Architecture and critical implementation details
-
-- **Real-time audio:** Timer2 compare A interrupts at 20 kHz and only writes the next sample from a 16-sample ring to Timer1, which generates 9-bit Fast PWM on `D9` at 31.25 kHz. After each eight-sample half has played, compare A enables Timer2 compare B, which re-enables interrupts and renders that half while the other plays, so output timing stays exact. Per-block work is shared by eight samples, adding 0.4-0.8 ms of output latency. Voices are rendered in two four-sample sub-blocks, each preceded by the envelope and vibrato update, keeping the 5 kHz per-voice control rate. The fifth voice is rendered and updated only while its envelope runs.
-- **Assembly renderer:** `src/synth_voices.S` holds the hot paths: voice blocks (wavetable, square, noise, and the two-source morph), drum playback, the low-pass filter, the chorus, the VCA, and the dithered quantizer. Each step is bit-exact with the C formulas documented in `src/synth.h`.
-- **Synthesis:** 256-sample wavetables, phase accumulators, five envelope-driven normal voices (the fifth only for PLAY's background sequence), and a separate eight-oscillator drone path. Core tables and drum data live in flash.
-- **Resource-aware mixing:** the drone engine recalculates one oscillator pair per output sample. Each pair is therefore updated at 5 kHz while the PWM output remains at 20 kHz. This is an intentional quality/CPU trade-off for the 80-600 Hz range.
-- **Chorus:** the macro-controlled post-mix effect uses a 108-sample, 16-bit delay line in SRAM and audio-rate fractional interpolation. DRONE bypasses it.
-- **Low-pass filter:** a fixed-point Chamberlin state-variable filter with two 16-bit states and 8-bit cutoff and damping coefficients runs over each eight-sample block, before the VCA and the chorus, at about 82 cycles per sample. Its states run at a quarter of the mix scale with saturating arithmetic, so no input can wrap them; its input gain is the damping moved three eighths of the way back toward unity, so resonance keeps more level and overdrives its peak, and its output is clamped to the mix range. At 20 kHz the structure stays stable and well tuned up to about fs/6, which sets the 3.3 kHz upper cutoff. When it is open, it costs nothing and its state follows the mix, so it engages without a step; it opens and closes through its brightest, unity-damping setting. Each coefficient moves one step per block toward its target. The shared filter envelope reads the smooth decay envelope `1` once per block at eight times the voice envelope step, on the same phase rules as the voice envelopes, and adds its share of the remaining distance to the brightest coefficient after that slew, with two 8-bit multiplies.
-- **PWM quality:** the internal mix uses additional fixed-point precision before conversion to 9-bit PWM, with quantization-error feedback and dither where appropriate.
-- **Output level:** each voice's envelope is scaled by its level at the 5 kHz control rate, so it costs no per-sample work. The levels of all voices that can sound together never exceed the mix's full scale, which keeps the summed bus inside the PWM range without a limiter or clipping stage.
-- **Direct I/O:** multiplexer address lines are set in one port write and the ADC is read through its registers. The LCD is driven write-only in 4-bit mode with only the HD44780 commands the firmware uses, waiting the controller's worst-case execution time instead of polling the busy flag.
-- **Stable controls:** multiplexed analog inputs use settling reads, median sampling, smoothing, movement confirmation, and hysteresis. Buttons are debounced in software.
-- **Efficient LCD updates:** a two-line shadow buffer writes only changed characters, avoiding visible flicker and unnecessary time in the control loop. The eight CGRAM characters are loaded on demand: a glyph already in CGRAM keeps its slot, so a playhead move reloads at most two (about 0.55 ms each).
-- **Simulator fidelity:** Timer1 mode 6 and Timer2's CTC mode are modeled explicitly; the Timer2 model schedules only compare matches, which keeps the emulator fast enough for glitch-free playback. Like the hardware, the simulator executes one more instruction after interrupts are enabled before serving one, which GCC's stack-pointer updates rely on, and an interrupt takes four cycles to enter. Each PWM period's mean voltage feeds an exact state-space model of the RC ladder and AC-coupling stage, followed by oversampling and a four-pole anti-alias filter before Web Audio output. Sampling the individual PWM edges would alias the ultrasonic 31.25 kHz carrier into an audible tone (16.75 kHz at a 48 kHz monitor rate) that the instrument does not produce.
+- **Cycle meter:** click the lower-right screw in the simulator to show the audio-interrupt load against its 800-cycle-per-sample budget, plus the worst eight-sample block (MAX). Each reopening starts a new measurement, and rare peaks can take a while to appear.
+- **Headless tests:** `util/fullsim.js` runs a scripted session through the whole firmware, and `util/isrbench.js` benchmarks the audio interrupt. Both need Deno; usage is at the top of each file.
+- **Custom wavetables:** prepare a 256-sample mono waveform in Audacity and export it as headerless signed 16-bit RAW. Set `RAW_TO_H_OUTPUT_BITS` to `9` in `util/raw_to_h.bat` and drag the `.raw` file onto it; drag the generated `.h` onto `util/sample_player.bat` to listen. Copy the array into `src/tables.h`, keeping its name, `PROGMEM`, 256 samples, and the signed 9-bit range.
 
 ## Limitations
 
-- Settings and patterns are not saved to EEPROM; reset restores the compiled defaults.
-- The normal synth engine has four voices for SEQ and live notes, plus a fifth for PLAY's background sequence. A running sequence also takes one of the four, so live notes have three voices, and it plays at most the first two voices of a multi-voice program.
-- DRONE uses the pair-wise update strategy described above and has no normal per-note envelopes.
-- Flash is intentionally used very tightly; check the PlatformIO size report after adding code or samples.
+- Settings and patterns are not saved; a reset restores the defaults.
+- PLAY has three live voices while the background sequence runs, and the background plays at most two voices of a program.
+- DRONE has no per-note envelopes.
+- Flash is almost full; check the size report after every change.
 
 ## Repository layout
 
 ```text
 src/             Firmware, synth engine, wavetables, envelopes, and drum samples
-simulator/       Browser front panel, AVR runtime, hardware mapping, and image assets
-schematic/       KiCad schematic/PCB project and wiring reference
-util/            Windows helpers for converting and previewing PCM sample headers
-platformio.ini   Build target and flags
+simulator/       Browser front panel and simulator
+schematic/       KiCad project and wiring picture
+util/            Wavetable helpers and headless test tools
+platformio.ini   Build settings
 ```
 
 ## License
 
-This project is licensed under the MIT License. See `LICENSE`.
+MIT. See `LICENSE`.

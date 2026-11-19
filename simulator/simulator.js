@@ -14,21 +14,21 @@ import {
 
 const CLOCK_HZ = 16_000_000;
 const FLASH_BYTES = 32 * 1024;
-const PROGRAM_WORDS = 0x8000; // Matches AVR8js's ATmega328P demo allocation.
+const PROGRAM_WORDS = 0x8000;
 const AUDIO_OVERSAMPLE = 2;
 const AUDIO_BUFFER_SIZE = 2048;
-const AUDIO_ISR_BUDGET_CYCLES = 800; // 16 MHz / 20 kHz sample rate.
+const AUDIO_ISR_BUDGET_CYCLES = 800;
 const CYCLE_METER_SMOOTHING = 0.15;
 const CYCLE_METER_UPDATE_MS = 500;
-const CYCLE_METER_BLOCKS = 4; // Measured eight-sample blocks per audio callback.
-const INTERRUPT_ENTRY_CYCLES = 4; // ATmega328P interrupt response.
-const INTERRUPT_ENTRY_EXTRA_CYCLES = 2; // What AVR8js's avrInterrupt() omits.
+const CYCLE_METER_BLOCKS = 4;
+const INTERRUPT_ENTRY_CYCLES = 4;
+const INTERRUPT_ENTRY_EXTRA_CYCLES = 2;
 const TIMER2_COMPA_VECTOR = timer2Config.compAInterrupt;
 const TIMER2_COMPB_VECTOR = timer2Config.compBInterrupt;
-const VECTOR_TABLE_WORDS = 52; // ATmega328P: 26 two-word vectors.
+const VECTOR_TABLE_WORDS = 52;
 const RETI_OPCODE = 0x9518;
 const SREG = 0x5f;
-const AUDIO_BLOCK_CYCLES = 8 * AUDIO_ISR_BUDGET_CYCLES; // One eight-sample render block.
+const AUDIO_BLOCK_CYCLES = 8 * AUDIO_ISR_BUDGET_CYCLES;
 const TCCR1A = 0x80;
 const TCCR1B = 0x81;
 const OCR1AL = 0x88;
@@ -91,8 +91,6 @@ let running = false;
 let audioFailureReported = false;
 let cycleMeterUpdatedAt = 0;
 
-// Five column bitmap glyphs for printable ASCII. Each byte is one vertical
-// column, with the least-significant bit at the top of the 5x8 character cell.
 const LCD_FONT_5X8 = new Uint8Array(`
   00 00 00 00 00  00 00 5f 00 00  00 07 00 07 00  14 7f 14 7f 14
   24 2a 7f 2a 12  23 13 08 64 62  36 49 55 22 50  00 05 03 00 00
@@ -124,6 +122,7 @@ let lcdText = ui.lcdLines.map((line) => (line?.textContent ?? '').padEnd(16).sli
 let lcdDrawFrame = 0;
 let lcdCgram = new Uint8Array(64);
 
+// Draws the LCD as a 5x8 dot matrix, CGRAM glyphs included.
 function drawLcdDotMatrix() {
   const canvas = ui.lcdCanvas;
   if (!canvas) return;
@@ -192,7 +191,6 @@ function setLcdLines(line1, line2, cgram = lcdCgram) {
   lcdCgram = cgram;
   lcdText = [line1, line2].map((line) => String(line).padEnd(16).slice(0, 16));
   ui.lcdLines.forEach((element, index) => {
-    // The text fallback cannot show CGRAM glyphs, so it marks them with a block.
     const text = lcdText[index].replace(/[\x00-\x0f]/g, '█');
     if (element.textContent !== text) element.textContent = text;
   });
@@ -219,6 +217,7 @@ function connectionOtherEnd(connections, endpoint) {
   return null;
 }
 
+// Resolves a diagram.json endpoint to its Arduino pin.
 function unoPin(connections, endpoint) {
   const other = connectionOtherEnd(connections, endpoint);
   if (!other?.startsWith('uno:')) return null;
@@ -226,6 +225,7 @@ function unoPin(connections, endpoint) {
   return /^\d+$/.test(pin) ? Number(pin) : pin;
 }
 
+// Reads the pin mapping from diagram.json.
 async function readDiagram() {
   try {
     const response = await fetch('./diagram.json', { cache: 'no-store' });
@@ -380,6 +380,7 @@ function buildControls() {
   bindMomentary(ui.modeButton, setModePressed);
 }
 
+// Write-only HD44780 model driven by the 4-bit LCD port.
 class HD44780 {
   constructor(render) {
     this.render = render;
@@ -449,7 +450,6 @@ class HD44780 {
     this.paint();
   }
 
-  // Codes 0-15 keep their value and draw from CGRAM; 8-15 mirror 0-7.
   paint() {
     const line = (offset) => Array.from(this.ddram.slice(offset, offset + 16), (code) =>
       code < 16 || (code >= 32 && code <= 126) ? String.fromCharCode(code) : ' ').join('');
@@ -469,6 +469,7 @@ function multiplyMatrices(left, right) {
   return output;
 }
 
+// Matrix exponential by scaling and squaring.
 function matrixExponential(matrix) {
   const size = matrix.length;
   const identity = Array.from({ length: size }, (_, row) =>
@@ -494,6 +495,7 @@ function matrixExponential(matrix) {
   return result;
 }
 
+// Exact state-space model of the RC output ladder and AC coupling.
 class OutputFilter {
   constructor() {
     const r1 = 2200;
@@ -515,12 +517,10 @@ class OutputFilter {
       [0, 0, g4 / c4, -g4 / c4],
     ];
     this.b = [g1 / c1, 0, 0, 0];
-    this.state = new Float64Array(4); // v1, v2, v3, voltage across C4
+    this.state = new Float64Array(4);
     this.input = 0;
     this.lastCycle = 0;
     this.cache = new Map();
-    // Build every possible step before audio starts, so coefficient creation
-    // can never cause a real-time deadline miss in the first notes.
     for (let cycles = 1; cycles <= 512; cycles++) this.coefficients(cycles);
   }
 
@@ -568,16 +568,11 @@ class OutputFilter {
 
   sample(cycle) {
     this.integrateTo(cycle);
-    return this.state[2] - this.state[3]; // Node after C4. Rout is unloaded by a high-Z input.
+    return this.state[2] - this.state[3];
   }
 }
 
-// Bitsynth-specific Timer1 mode 6 model: 9-bit, single-slope Fast PWM,
-// OCR1A double-buffered at BOTTOM, non-inverting output on OC1A/D9. Each
-// PWM period drives the output filter with its mean voltage, which is what
-// is audible. The 31.25 kHz carrier itself is ultrasonic on the instrument,
-// but sampled edges would alias it into the monitor's 48 kHz output (about
-// -37 dB at 16.75 kHz).
+// Timer1 9-bit Fast PWM on D9; each period's mean voltage drives the filter, so the carrier does not alias.
 class FastPwm9 {
   constructor(filter) {
     this.filter = filter;
@@ -597,7 +592,6 @@ class FastPwm9 {
     this.filter.setInputVoltage(voltage, cycle);
   }
 
-  // OC1A is high for compare + 1 of the 512 cycles, or always at TOP.
   periodVoltage() {
     return this.activeCompare >= 511 ? 5 : 5 * (this.activeCompare + 1) / 512;
   }
@@ -650,10 +644,7 @@ class FastPwm9 {
   }
 }
 
-// Bitsynth-specific Timer2 model: CTC mode (TOP = OCR2A) with the compare A
-// and B interrupts, matching AVR8js's flag timing. AVR8js's generic timer runs
-// an event on every prescaled tick (2 MHz here); this one schedules only the
-// next compare match, which keeps the emulator fast enough for live audio.
+// Timer2 CTC with compare A/B interrupts; schedules only the next match, for speed.
 class CtcTimer2 {
   constructor(cpu) {
     const { TIFR, TIMSK, TCNT, OCRA, OCRB, TCCRA, TCCRB } = timer2Config;
@@ -665,15 +656,14 @@ class CtcTimer2 {
     this.divider = 0;
     this.top = 0;
     this.ocrB = 0;
-    this.base = 0; // Cycle at which the counter was last zero.
+    this.base = 0;
     this.match = () => this.onMatch();
     const configure = (register) => (value) => {
       const count = this.count();
-      // Like the free-running prescaler, reconfiguring keeps the tick phase.
       const phase = this.divider ? (cpu.cycles - this.base) % this.divider : 0;
       cpu.data[register] = value;
       this.divider = timer2Config.dividers[cpu.data[TCCRB] & 7] || 0;
-      if ((cpu.data[TCCRA] & 3) !== 2 || (cpu.data[TCCRB] & 8)) this.divider = 0; // CTC only.
+      if ((cpu.data[TCCRA] & 3) !== 2 || (cpu.data[TCCRB] & 8)) this.divider = 0;
       this.top = cpu.data[OCRA];
       this.ocrB = cpu.data[OCRB];
       this.restart(register === TCNT ? value : Math.min(count, this.top), phase % (this.divider || 1));
@@ -707,7 +697,6 @@ class CtcTimer2 {
     this.schedule(count);
   }
 
-  // Schedules the first match after counter value `count`.
   schedule(count) {
     const period = this.top + 1;
     let next = period;
@@ -720,14 +709,12 @@ class CtcTimer2 {
     this.cpu.addClockEvent(this.match, this.base + (ticks + next) * this.divider - this.cpu.cycles);
   }
 
-  // Runs at the exact match cycle or, after a long instruction, a few cycles
-  // later (always less than one prescaled tick).
   onMatch() {
     const ticks = Math.floor((this.cpu.cycles - this.base) / this.divider);
     const count = ticks % (this.top + 1);
     if (count === this.top) this.cpu.setInterruptFlag(this.compA);
     if (count === this.ocrB) this.cpu.setInterruptFlag(this.compB);
-    this.base += (ticks - count) * this.divider; // Keep the base recent.
+    this.base += (ticks - count) * this.divider;
     this.schedule(count);
   }
 }
@@ -755,12 +742,11 @@ class BiquadLowPass {
   }
 }
 
+// Four-pole Butterworth anti-alias filter for the monitor output.
 class MonitorAntiAliasFilter {
   constructor(outputSampleRate) {
     const oversampledRate = outputSampleRate * AUDIO_OVERSAMPLE;
     const cutoff = Math.min(18_000, outputSampleRate * 0.4);
-    // Two Butterworth sections form a flat 4-pole low-pass. This models the
-    // anti-alias stage of the browser/audio interface, not part of the synth.
     this.sections = [
       new BiquadLowPass(oversampledRate, cutoff, 0.5411961),
       new BiquadLowPass(oversampledRate, cutoff, 1.306563),
@@ -794,8 +780,6 @@ class BitsynthMachine {
     this.sampleCycle = 0;
     this.antiAlias = null;
     this.antiAliasSampleRate = 0;
-    // Audio load: cycles whose innermost active interrupt is TIMER2_COMPA
-    // (sample output) or TIMER2_COMPB (block rendering, which nests COMPA).
     this.isrStack = [];
     this.meterWindows = 0;
     this.audioIsrWindowCycles = 0;
@@ -867,7 +851,6 @@ class BitsynthMachine {
   }
 
   adcVoltage(control) {
-    // The real front panel pots are wired opposite to the visual controls.
     const raw = 1023 - control.value;
     return (raw / 1023) * 5;
   }
@@ -882,10 +865,7 @@ class BitsynthMachine {
     this.portC.setPin(3, !modePressed);
   }
 
-  // Runs the CPU until targetCycle. Like the hardware, one more instruction
-  // runs after SEI, RETI, or an SREG write enables interrupts before one is
-  // served; GCC's stack-pointer updates (out SPH; out SREG; out SPL) rely on it.
-  // AVR8js charges two cycles to enter an interrupt; the ATmega328P takes four.
+  // Runs to targetCycle; like the hardware, one more instruction runs after interrupts are enabled.
   run(targetCycle) {
     const cpu = this.cpu;
     const data = cpu.data;
@@ -903,8 +883,7 @@ class BitsynthMachine {
     }
   }
 
-  // The same loop with audio-interrupt accounting for the cycle meter. It
-  // stops when the callback's measured blocks are complete.
+  // Like run(), with audio-ISR cycle accounting for the meter.
   runMetered(targetCycle) {
     const cpu = this.cpu;
     const data = cpu.data;
@@ -926,8 +905,6 @@ class BitsynthMachine {
         entered = enabled && cpu.pc < VECTOR_TABLE_WORDS;
         if (entered) cpu.cycles += INTERRUPT_ENTRY_EXTRA_CYCLES;
       }
-      // The instruction belongs to the interrupted code, the entry to the
-      // interrupt it starts.
       const entry = entered ? INTERRUPT_ENTRY_CYCLES : 0;
       if (audio(stack[stack.length - 1])) this.audioIsrWindowCycles += cpu.cycles - before - entry;
       if (returns && stack.length) stack.pop();
@@ -951,6 +928,7 @@ class BitsynthMachine {
     }
   }
 
+  // Runs the firmware for one audio callback and samples the filtered output.
   renderAudio(outputLeft, outputRight, volume) {
     const outputSampleRate = audioContext.sampleRate;
     if (!this.antiAlias || this.antiAliasSampleRate !== outputSampleRate) {
@@ -959,9 +937,6 @@ class BitsynthMachine {
     }
     this.audioIsrBlockMax = 0;
     this.audioIsrCallbackCycles = 0;
-    // The meter samples a few render blocks per callback after one block
-    // that only resynchronizes interrupt tracking. Metering every instruction
-    // made playback too slow and caused periodic dropouts.
     this.meterWindows = ui.cycleMeter && !ui.cycleMeter.hidden ? 1 + CYCLE_METER_BLOCKS : 0;
     this.isrStack.length = 0;
     this.audioIsrWindowCycles = 0;
@@ -973,7 +948,6 @@ class BitsynthMachine {
       let sample = 0;
       for (let subSample = 0; subSample < AUDIO_OVERSAMPLE; subSample++) {
         this.sampleCycle += cyclesPerSubsample;
-        // Accounting runs only while the meter is shown, keeping playback fast.
         if (this.meterWindows) this.runMetered(this.sampleCycle);
         this.run(this.sampleCycle);
         this.pwm.advanceTo(this.cpu.cycles);
@@ -1151,7 +1125,7 @@ async function unlockAudio() {
     await audioContext.resume();
     ui.engineStatus.textContent = 'engine: running';
     ui.engineStatus.className = 'badge live';
-  } catch { /* The next user gesture can try again. */ }
+  } catch {}
 }
 
 function showHardwareLoadPrompt() {
@@ -1177,7 +1151,7 @@ function stopAudio() {
   running = false;
   ui.runButton.classList.remove('active');
   if (audioNode) {
-    try { audioNode.disconnect(); } catch { /* already disconnected */ }
+    try { audioNode.disconnect(); } catch {}
   }
   if (firmwareImage) {
     ui.runButton.textContent = 'Start audio';
@@ -1312,8 +1286,6 @@ ui.resetButton.addEventListener('click', () => resetMachine().catch(reportRuntim
 
 await readDiagram();
 buildControls();
-// The hidden service screw toggles the cycle meter; each reopening starts a
-// fresh measurement.
 ui.cycleMeterScrew?.addEventListener('click', () => {
   const show = ui.cycleMeter.hidden;
   ui.cycleMeter.hidden = !show;

@@ -44,7 +44,6 @@ static_assert(hihatSampleRate == FS, "hi-hat sample rate must match the 20 kHz a
 static_assert(kickSampleBits == 9, "kick sample must use unsigned 9-bit PCM");
 static_assert(snareSampleBits == 9, "snare sample must use unsigned 9-bit PCM");
 static_assert(hihatSampleBits == 9, "hi-hat sample must use unsigned 9-bit PCM");
-// One trailing byte makes the final unaligned 16-bit flash read safe.
 static_assert(sizeof(kickSample) == (kickSampleLength * 9U + 7U) / 8U + 1U, "invalid packed kick sample size");
 static_assert(sizeof(snareSample) == (snareSampleLength * 9U + 7U) / 8U + 1U, "invalid packed snare sample size");
 static_assert(sizeof(hihatSample) == (hihatSampleLength * 9U + 7U) / 8U + 1U, "invalid packed hi-hat sample size");
@@ -52,9 +51,6 @@ static_assert(sizeof(hihatSample) == (hihatSampleLength * 9U + 7U) / 8U + 1U, "i
 #define SET(x,y) (x |= (1 << y))
 #define CLR(x,y) (x &= (~(1 << y)))
 
-// Voices 0-3 form the normal pool. While PLAY's background sequence runs,
-// voices 3-4 are its dry background voices and voices 0-2 stay live; voice 4
-// is used only by the background sequence.
 const uint8_t SYNTH_VOICE_COUNT = 5;
 const uint8_t SYNTH_NORMAL_VOICE_COUNT = 4;
 const uint8_t SYNTH_BACKGROUND_VOICE = 3;
@@ -66,37 +62,21 @@ const uint8_t SYNTH_ENVELOPE_COUNT = 6;
 const uint8_t SYNTH_WAVETABLE_INDEX_BITS = 8;
 const uint8_t SYNTH_WAVETABLE_SHIFT = 16 - SYNTH_WAVETABLE_INDEX_BITS;
 const uint16_t SYNTH_GENERATED_SQUARE = 0;
-// Flash on this target cannot reach this address; reserve it as a generated
-// source marker rather than spending flash on a noise wavetable.
 const uint16_t SYNTH_GENERATED_NOISE = 0xFFFF;
 const uint16_t SYNTH_DEFAULT_PULSE_WIDTH = 0x8000;
-// Updated once per four audio frames (5 kHz), giving a fixed 5 Hz vibrato.
 const uint32_t SYNTH_VIBRATO_LFO_STEP = 4294967UL;
 const uint8_t SYNTH_CHORUS_OFF = 0;
 const uint8_t SYNTH_CHORUS_1 = 1;
 const uint8_t SYNTH_CHORUS_2 = 2;
-// Juno-60-style triangle-modulated delay parameters at the 20 kHz engine rate.
 const uint16_t SYNTH_CHORUS_BUFFER_SAMPLES = 108;
-const uint32_t SYNTH_CHORUS_1_LFO_STEP = 110166UL; // 0.513 Hz
-const uint32_t SYNTH_CHORUS_2_LFO_STEP = 185328UL; // 0.863 Hz
-const uint16_t SYNTH_CHORUS_MIN_DELAY_Q8 = 8500; // 1.66 ms
+const uint32_t SYNTH_CHORUS_1_LFO_STEP = 110166UL;
+const uint32_t SYNTH_CHORUS_2_LFO_STEP = 185328UL;
+const uint16_t SYNTH_CHORUS_MIN_DELAY_Q8 = 8500;
 
 static_assert(sizeof(SinTable) / sizeof(SinTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid sine table size");
 static_assert(sizeof(TriangleTable) / sizeof(TriangleTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid triangle table size");
 static_assert(sizeof(SawTable) / sizeof(SawTable[0]) == (1U << SYNTH_WAVETABLE_INDEX_BITS), "invalid saw table size");
 
-// Audio-engine state. It is deliberately not volatile: every foreground access
-// in class synth is wrapped in ATOMIC_BLOCK, whose cli/SREG-restore are
-// compiler memory barriers, and the renderer never runs concurrently with the
-// foreground. This lets the renderer keep values in registers.
-//
-// Rendering is block based. TIMER2_COMPA (20 kHz) only writes the next PWM
-// sample from a sixteen-sample ring. After each eight-sample half has been
-// played it enables TIMER2_COMPB, whose interrupt re-enables interrupts and
-// renders that half while the other half plays. Voices are rendered in two
-// four-sample sub-blocks, each preceded by the envelope and vibrato update,
-// so the per-voice control rate stays at 5 kHz; the PLAY VCA and morph LFOs
-// and the bus filter slew advance once per block (2.5 kHz).
 const uint8_t SYNTH_BLOCK_SAMPLES = 8;
 const uint8_t SYNTH_VOICE_BLOCK_SAMPLES = 4;
 const uint8_t SYNTH_OUTPUT_RING_SAMPLES = 2 * SYNTH_BLOCK_SAMPLES;
@@ -106,43 +86,24 @@ uint16_t audioOutputRing[SYNTH_OUTPUT_RING_SAMPLES];
 uint8_t audioOutputIndex = 0;
 bool audioRenderBusy = false;
 
-// Per-voice state, grouped so the assembly renderer (synth_voices.S)
-// reaches every field through one pointer. Keep the field order and the
-// 23-byte size in sync with the VOICE_* offsets there.
+// Shared with synth_voices.S: keep SynthVoice in sync with its VOICE_* offsets.
 extern "C" {
 struct SynthVoice {
-  // Per-sample oscillator state.
   uint16_t phase;
   uint16_t step;
-  // A flash wavetable address, SYNTH_GENERATED_SQUARE, or SYNTH_GENERATED_NOISE.
   uint16_t source;
-  // Full phase resolution makes pulse width independent from wavetable size.
   uint16_t pulseWidth;
-  // Independent maximal-length 16-bit Galois LFSR; must never be zero.
   uint16_t noise;
   uint8_t amp;
-  // Control-rate state, updated once per four-sample block. Bit 15 of
-  // envelopePhase marks a finished or stopped envelope.
   uint16_t envelopePhase;
   uint16_t envelopeStep;
-  // Flash envelope table; assigned by setupVoice() before any trigger.
   uint16_t envelope;
   uint16_t pitch;
-  // Vibrato peak offset in 1/256 steps (eight times the 1/32 pitch-step
-  // peak), precomputed from pitch and vibratoDepth by the foreground.
   uint16_t vibratoPeak;
   uint8_t vibratoDepth;
-  // Output level; amp = envelope * (level + 1) / 256, so amp <= level.
   uint8_t level;
 };
 
-// Each voice adds floor(sample * amp / 2), so one voice reaches full scale.
-// The bus has no headroom above full PWM scale: the amps of all voices plus
-// the drum's envelope peak must sum to at most SYNTH_LEVEL_BUDGET. Levels may
-// exceed it; the bus limiter in synthUpdateVoices then lowers every amp by a
-// shared gain. The chorus, VCA, and morph never increase the peak;
-// the resonant filter clamps its output, including clipped resonant peaks,
-// to the same voice-bus range.
 const uint16_t SYNTH_LEVEL_BUDGET = 255;
 
 #define SYNTH_VOICE_INIT(noiseSeed) \
@@ -154,7 +115,6 @@ SynthVoice synthVoices[SYNTH_VOICE_COUNT] = {
 };
 #undef SYNTH_VOICE_INIT
 
-// Block-constant morph description read by synthRenderVoices.
 const uint8_t SYNTH_KIND_A_SQUARE = 0x01;
 const uint8_t SYNTH_KIND_A_NOISE = 0x02;
 const uint8_t SYNTH_KIND_B_SQUARE = 0x04;
@@ -164,61 +124,42 @@ uint16_t synthMorphSourceB = 0;
 uint8_t synthMorphAmount = 0;
 uint8_t synthMorphKinds = 0;
 
-// Advances the first `count` envelopes and vibrato pitch steps by one block.
 void synthUpdateVoices(int8_t vibratoLfo, uint8_t count);
 
-// Stores the active drum sample's four-sample block in accumulator.
 void synthRenderDrum(int16_t *accumulator);
-// 128 >> (index & 7) aligns a packed 9-bit drum sample at bits 7..15.
 extern const uint8_t synthPackedSampleScales[8] PROGMEM __attribute__((used)) =
   {128, 64, 32, 16, 8, 4, 2, 1};
 
-// Adds a four-sample block of `count` consecutive voices to accumulator,
-// or stores it with SYNTH_RENDER_CLEAR. With SYNTH_RENDER_SPLIT only the first
-// SYNTH_BACKGROUND_VOICE voices go to accumulator; the others are stored,
-// unmorphed, to dry.
 const uint8_t SYNTH_RENDER_MORPH = 0x01;
 const uint8_t SYNTH_RENDER_CLEAR = 0x02;
 const uint8_t SYNTH_RENDER_SPLIT = 0x04;
 void synthRenderVoices(SynthVoice *voice, uint8_t count, int16_t *accumulator,
   uint8_t flags, int16_t *dry);
 
-// Applies the selected bus stages and writes eight dithered PWM samples.
 const uint8_t SYNTH_FINISH_VCA = 0x01;
 const uint8_t SYNTH_FINISH_CHORUS = 0x02;
 const uint8_t SYNTH_FINISH_DRY = 0x04;
 void synthFinishBlock(int16_t *bus, const int16_t *dry, uint16_t *output,
   uint8_t flags);
 
-// Low-pass filters an eight-sample bus block in place (formula below).
 void synthFilterBlock(int16_t *bus, uint8_t coefficient, uint8_t damping,
   uint8_t gain);
 }
 static_assert(sizeof(SynthVoice) == 23, "synth_voices.S expects a 23-byte SynthVoice");
 static_assert(SYNTH_BACKGROUND_VOICE == 3, "synth_voices.S splits the dry background at voice 3");
 
-// A release borrows a voice's envelope and envelopeStep, so the configured
-// values are kept here and restored by trigger() and stopVoice(). While
-// releasing is set, setEnvelope() and setLength() only update this copy.
 struct SynthVoiceEnvelope {
   uint16_t envelope;
   uint16_t envelopeStep;
   bool releasing;
 };
 SynthVoiceEnvelope synthVoiceEnvelopes[SYNTH_VOICE_COUNT];
-// Env0 starts at 255, so a step below 256 reads it first and the fade begins
-// exactly at the current amplitude; Env0 reaches zero after about 21 ms.
 const uint16_t SYNTH_RELEASE_STEP = 255;
 
 uint32_t vibratoLfoPCW = 0x40000000UL;
 int16_t pwmQuantizationError = 0;
 uint8_t pwmDitherLfsr = 0xA5;
-// Voices 3-4 are the PLAY background sequence while it runs. They then stay
-// dry: no waveform morph, filter, VCA, or chorus. Otherwise voice 3 is a
-// normal bus voice and voice 4 only finishes a background release.
 bool backgroundVoices = false;
-// Performance engines. Preset morphing crossfades two flash-resident waveform
-// sources and never duplicates oscillator state.
 bool playMorphActive = false;
 uint16_t playMorphPrimarySource = SYNTH_GENERATED_SQUARE;
 uint16_t playMorphSecondarySource = SYNTH_GENERATED_SQUARE;
@@ -247,18 +188,12 @@ uint32_t drumSamplePhase = 0;
 uint32_t drumSampleStep = 0x10000UL;
 uint16_t drumEnvelope = 0;
 uint16_t drumEnvelopeStep = 1;
-// Bus limiter gain; its high byte k scales amps by (k + 1) / 256.
 uint16_t synthLimiterGain = 0xFFFF;
-// One 16-bit Q7 mono delay line, written only by the renderer. It stores the
-// wet half of the signal, so interpolating adjacent samples stays in int16_t.
 int16_t chorusBuffer[SYNTH_CHORUS_BUFFER_SAMPLES] = {0};
 bool chorusActive = false;
 uint8_t chorusWriteIndex = 0;
 uint32_t chorusLfoPCW = 0;
 uint32_t chorusLfoFTW = 0;
-// Preset resonant bus low-pass. The foreground sets the target coefficient
-// (0 = open) and damping; the renderer moves the active ones by one step per
-// block. Damping SYNTH_FILTER_DAMPING_OPEN (Q about 1) has unity DC gain.
 const uint8_t SYNTH_FILTER_DAMPING_OPEN = 128;
 uint8_t busFilterTarget = 0;
 uint8_t busFilterCoefficient = 0;
@@ -266,12 +201,6 @@ uint8_t busFilterDampingTarget = SYNTH_FILTER_DAMPING_OPEN;
 uint8_t busFilterDamping = SYNTH_FILTER_DAMPING_OPEN;
 int16_t busFilterLow = 0;
 int16_t busFilterBand = 0;
-// Shared filter envelope. Each bus-voice trigger restarts it with the smooth
-// Env1 decay at four times that voice's envelope speed (eight times its step,
-// as it advances once per block), so the filter closes within the first
-// quarter of the note while the amplitude still sustains. A held note (step
-// 0) uses SYNTH_FILTER_ENV_HOLD_STEP, about 0.5 s. It adds amount * level of
-// the remaining distance to the brightest coefficient after the slew.
 const uint16_t SYNTH_FILTER_ENV_HOLD_STEP = 26;
 uint16_t filterEnvPhase = 0x8000;
 uint16_t filterEnvStep = 0;
@@ -279,10 +208,7 @@ uint8_t filterEnvAmount = 0;
 
 static_assert(SYNTH_CHORUS_BUFFER_SAMPLES <= 255, "chorus index must fit in one byte");
 
-// Returns floor(sample * gain / 16) for a signed 9-bit sample, branch-free,
-// for the quieter eight-oscillator drone mix. The high byte of a 9-bit sample
-// is 0x00 or 0xFF, so the product is low * gain - (high & gain) * 256: a
-// 17-bit value whose sign is the borrow. synth_voices.S uses the same method.
+// Returns floor(sample * gain / 16) for a signed 9-bit sample, branch-free.
 static inline __attribute__((always_inline)) int16_t scaleSigned9SampleQ4(
   int16_t sample, uint8_t gain)
 {
@@ -313,7 +239,7 @@ static inline __attribute__((always_inline)) uint8_t sourceKind(
     source == SYNTH_GENERATED_NOISE ? noiseKind : 0;
 }
 
-// Applies a 9-bit linear gain with error far below one PWM output step.
+// Applies a 9-bit linear gain.
 static inline __attribute__((always_inline)) int16_t scalePlayMix(
   int16_t inputQ7, uint8_t gain)
 {
@@ -332,7 +258,7 @@ static inline __attribute__((always_inline)) int16_t scalePlayMix(
   return negative ? -(int16_t)scaled : scaled;
 }
 
-// Returns (a * b) >> 8 with one 8x8 hardware multiply.
+// Returns (a * b) >> 8.
 static inline __attribute__((always_inline)) uint8_t multiplyHigh8(uint8_t a, uint8_t b)
 {
   uint8_t high;
@@ -345,38 +271,7 @@ static inline __attribute__((always_inline)) uint8_t lfoTriangle(uint8_t phase)
   return (phase & 0x80) ? (uint8_t)(256U - phase) : phase;
 }
 
-// The chorus and the final quantizer are implemented by synthFinishBlock in
-// synth_voices.S. Per sample, the chorus computes exactly:
-//   lfoPhase += lfoStep; triangle = lfoPhase >> 16, mirrored when bit 31 is set
-//   high = triangle >> 7; low = (uint8_t)(triangle << 1)
-//   delayQ8 = 8500 + high * 0x49 + (high * 0xCC >> 8) + (low * 0x49 >> 8)
-//   (triangle * 18892 / 32768, i.e. 1.66-5.35 ms, within 1/128 sample)
-//   dryHalf = in >> 1, stored at the write index; first/next are the samples
-//   delayQ8 >> 8 and that plus one older
-//   out = dryHalf + first + floor((next - first) * (delayQ8 & 0xFF) / 256)
-// and the quantizer, with an 8-bit Galois LFSR (taps 0xB8):
-//   s = mix + error + ((lfsr & 15) - (lfsr >> 4)) * 4; t = s + 64
-//   pwm = (t >> 7) + 256; error = (t & 127) - 64
-// The bus low-pass before them, synthFilterBlock, is a Chamberlin state-
-// variable filter. With f = busFilterCoefficient (1-255), q =
-// busFilterDamping (1-128), g = (5 * q + 384) >> 3, L = busFilterLow, and
-// B = busFilterBand, it computes per sample in int16_t, where sat()
-// saturates a sum or difference to the int16_t range:
-//   h = x >> 2; L = sat(L + ((B * f) >> 8))
-//   H = sat(sat(((h * g) >> 7) - ((B * q) >> 7)) - L)
-//   B = sat(B + ((H * f) >> 8))
-//   x = clamp(L, -8160, 8128) * 4
-// i.e. f = 2 sin(pi fc / 20 kHz) * 256 for a 12 dB/octave cutoff of about
-// 100 Hz-3.3 kHz, and Q = 128 / q. The input gain g / 128 sits between 1
-// and 1/Q: the passband falls by g / 128 (at most about 6.5 dB) while the
-// resonant peak rises by g / q (at most about 9 dB) and is clipped. The
-// states run at a quarter of the bus scale, where full-scale square, saw,
-// and noise inputs stay below saturation, which only guards against wrapping.
-// The output is
-// clamped to the voice-bus range (-32640 to 32512), inside the quantizer's
-// margin.
-
-// Renders one drone frame: one oscillator pair is recalculated per call.
+// Renders one drone sample; one oscillator pair is recalculated per call.
 static inline __attribute__((always_inline)) int16_t renderDroneFrame()
 {
   const uint8_t rampVoice = (droneRampVoice + 1) & 0x07;
@@ -420,45 +315,23 @@ static inline __attribute__((always_inline)) int16_t renderDroneFrame()
     dronePairMixQ7[2] + dronePairMixQ7[3];
 }
 
-// Renders a block of drone frames. It is kept out of line so its registers
-// are not saved for every normal-mode block.
+// Renders eight drone samples; out of line so normal blocks skip its register saves.
 static __attribute__((noinline, optimize("O2"))) void renderDroneBlock(int16_t *busQ7)
 {
   for (uint8_t i = 0; i < SYNTH_BLOCK_SAMPLES; ++i) busQ7[i] = renderDroneFrame();
 }
 
-// Updates the rendered voices' control state once per block (5 kHz per voice).
-// synthUpdateVoices computes, for each of the first `count` voices:
-//   if (!(envelopePhase & 0x8000)) { envelopePhase += envelopeStep;
-//     amp = (envelopePhase & 0x8000) ? 0 :
-//       envelope[envelopePhase >> 8] * (level + 1) >> 8; }
-//   else amp = 0
-//   step = pitch + floor(vibratoPeak * vibratoLfo / 256) when vibratoDepth != 0
-// and then, as a bus limiter, with S = the sum of those amps, Sc = (S + 7)
-// >> 3, d = drumActive ? drumEnvelope >> 8 : 0, L = 8192 - 32 * d, and
-// G = synthLimiterGain:
-//   G = min(G + SYNTH_LIMITER_RELEASE, 0xFFFF); k = G >> 8
-//   if (Sc * (k + 1) >= L) { k = the largest k with Sc * (k + 1) < L, else 0;
-//     G = k << 8 }
-//   every amp = amp * (k + 1) >> 8
-// so the amps and the drum peak d never sum above 255. The gain drops at
-// once, at the same control rate as the envelopes, and recovers in about
-// 0.14 s from the 2x level overcommit (SYNTH_LIMITER_RELEASE = 48). Below
-// full scale it is unity, so quieter passages keep their dynamics. A voice
-// outside `count` has a finished envelope and an amp of zero.
+// Advances the vibrato LFO, then envelopes, vibrato, and the bus limiter.
 static inline __attribute__((always_inline)) void updateVoiceControls(uint8_t count)
 {
   vibratoLfoPCW += SYNTH_VIBRATO_LFO_STEP;
-  // Center the triangle at zero and halve it to keep the math 8-bit.
   synthUpdateVoices((int8_t)(lfoTriangle(vibratoLfoPCW >> 24) >> 1) - 32, count);
 }
 
-// Renders eight normal-mode samples into the bus and dry accumulators and
-// returns the synthFinishBlock stages they need.
+// Renders eight voice and drum samples, runs the bus filter, and returns the finish stages.
 static inline __attribute__((always_inline)) uint8_t renderNormalBlock(
   int16_t *busQ7, int16_t *dryQ7)
 {
-  // The PLAY VCA and morph LFOs advance once per block (2.5 kHz).
   if (playVcaLfoFTW != 0) {
     const uint32_t phase = playVcaLfoPCW + playVcaLfoFTW;
     playVcaLfoPCW = phase;
@@ -480,8 +353,6 @@ static inline __attribute__((always_inline)) uint8_t renderNormalBlock(
     uint8_t kinds = sourceKind(primary, SYNTH_KIND_A_SQUARE, SYNTH_KIND_A_NOISE) |
       sourceKind(secondary, SYNTH_KIND_B_SQUARE, SYNTH_KIND_B_NOISE);
     if (kinds == SYNTH_KIND_A_SQUARE || kinds == SYNTH_KIND_A_NOISE) {
-      // a + floor((b - a) * m / 128) == b + floor((a - b) * (128 - m) / 128),
-      // so a generated/table pair can use a faster table-first kernel.
       const uint16_t swap = primary;
       primary = secondary;
       secondary = swap;
@@ -493,10 +364,6 @@ static inline __attribute__((always_inline)) uint8_t renderNormalBlock(
     synthMorphAmount = amount;
     synthMorphKinds = kinds;
   }
-  // Voices 3-4 are either the dry PLAY background (sequence notes or drum)
-  // or, for voice 3, a regular bus voice. The background drum replaces both;
-  // otherwise the drum replaces voice 0. Voice 4 is rendered and updated only
-  // while its envelope runs: a two-voice background note or its release.
   const bool background = backgroundVoices;
   const uint8_t count = synthVoices[SYNTH_VOICE_COUNT - 1].envelopePhase & 0x8000 ?
     SYNTH_NORMAL_VOICE_COUNT : SYNTH_VOICE_COUNT;
@@ -519,9 +386,6 @@ static inline __attribute__((always_inline)) uint8_t renderNormalBlock(
     }
   }
 
-  // The filter opens and closes through its brightest setting with unity
-  // damping, where it is nearly transparent: opening, it switches to bypass
-  // only after reaching both. While it is open, the state follows the bus.
   uint8_t coefficient = busFilterCoefficient;
   const uint8_t target = busFilterTarget;
   uint8_t damping = busFilterDamping;
@@ -538,8 +402,6 @@ static inline __attribute__((always_inline)) uint8_t renderNormalBlock(
     } else if (target > coefficient) ++coefficient; else --coefficient;
     busFilterCoefficient = coefficient;
   }
-  // The filter envelope follows the same table/phase rule as the voices and
-  // bypasses the slew, so its attack is immediate.
   uint16_t envelopePhase = filterEnvPhase;
   uint8_t envelopeLevel = 0;
   if (!(envelopePhase & 0x8000)) {
@@ -561,10 +423,6 @@ static inline __attribute__((always_inline)) uint8_t renderNormalBlock(
   return flags;
 }
 
-// Outputs one PWM sample per 20 kHz period and, after each played half,
-// enables TIMER2_COMPB to render it again. Its compare match occurs every
-// period just after this one, so it is already pending. This tiny handler is
-// naked so that it saves only the registers it touches.
 #if !defined(SYNTH_FIXED_OUTPUT_MODE) || SYNTH_FIXED_OUTPUT_MODE == DIFF
   #define SYNTH_PWM_STORE "sts %[ocrah], r25\n\t" "sts %[ocrbh], r25\n\t" \
     "ld r25, Z\n\t" "sts %[ocral], r25\n\t" "sts %[ocrbl], r25\n\t"
@@ -577,6 +435,7 @@ static_assert(SYNTH_OUTPUT_RING_SAMPLES == 16 && SYNTH_BLOCK_SAMPLES == 8,
   "TIMER2_COMPA assumes a sixteen-sample ring of eight-sample halves");
 static_assert(SYNTH_VOICE_BLOCK_SAMPLES == 4, "synth_voices.S renders four-sample voice blocks");
 
+// Writes one PWM sample per 20 kHz period and requests a render after each half ring.
 ISR(TIMER2_COMPA_vect, ISR_NAKED)
 {
   asm volatile(
@@ -592,7 +451,6 @@ ISR(TIMER2_COMPA_vect, ISR_NAKED)
     "clr r31\n\t"
     "subi r30, lo8(-(%[ring]))\n\t"
     "sbci r31, hi8(-(%[ring]))\n\t"
-    // 16-bit timer registers take the high byte first.
     "ldd r25, Z+1\n\t"
     SYNTH_PWM_STORE
     "inc r24\n\t"
@@ -622,11 +480,7 @@ ISR(TIMER2_COMPA_vect, ISR_NAKED)
       [ocrbh] "n"(_SFR_MEM_ADDR(OCR1BH)), [ocrbl] "n"(_SFR_MEM_ADDR(OCR1BL)));
 }
 
-// Renders the eight-sample half that has just been played. Interrupts are
-// re-enabled so TIMER2_COMPA keeps exact output timing (and nests) while this
-// runs; the block must be ready within the seven following output periods.
-// audioRenderBusy stops a late block from being started twice.
-// O2 avoids slow size-optimized shift loops in the renderer.
+// Renders the half ring just played with interrupts on; it must finish within seven periods.
 ISR(TIMER2_COMPB_vect, __attribute__((optimize("O2"))))
 {
   TIMSK2 &= ~_BV(OCIE2B);
@@ -634,7 +488,6 @@ ISR(TIMER2_COMPB_vect, __attribute__((optimize("O2"))))
   uint16_t *output = &audioOutputRing[(audioOutputIndex & SYNTH_BLOCK_SAMPLES) ^ SYNTH_BLOCK_SAMPLES];
   sei();
 
-  // Every stage that is used stores before it adds.
   int16_t busQ7[SYNTH_BLOCK_SAMPLES];
   int16_t dryQ7[SYNTH_BLOCK_SAMPLES];
   uint8_t flags = 0;
@@ -668,8 +521,7 @@ class synth
       }
     }
 
-    // Ends a release and applies the configured envelope and length; call
-    // with interrupts disabled.
+    // Ends a release and restores the configured envelope; call with interrupts off.
     __attribute__((noinline)) void restoreEnvelope(uint8_t voice)
     {
       SynthVoiceEnvelope &configured = synthVoiceEnvelopes[voice];
@@ -683,8 +535,7 @@ class synth
       return voice < SYNTH_VOICE_COUNT;
     }
 
-    // Full vibrato depth is about +/- 6% of pitch: (pitch / 64) * depth / 16,
-    // stored eight times larger for the ISR's 1/256-step multiply.
+    // Vibrato peak: up to about 6% of pitch, scaled by 8 for the renderer.
     static uint16_t vibratoPeakFor(uint16_t pitch, uint8_t depth)
     {
       return (((pitch >> 6) * depth) >> 4) << 3;
@@ -696,8 +547,6 @@ class synth
       TCCR2B = (1 << CS21);
       TCNT2 = 0;
       OCR2A = (uint8_t)((F_CPU / (8UL * FS)) - 1);
-      // Compare B matches just after every period wrap; its interrupt is
-      // enabled only when a rendered block is due.
       OCR2B = 1;
     }
 
@@ -747,7 +596,7 @@ class synth
     {
     }
 
-    // Starts the audio timers with the selected PWM output mode.
+    // Starts the audio timers with the selected PWM output.
     void begin(uint8_t outputMode)
     {
       cli();
@@ -779,7 +628,6 @@ class synth
       sei();
     }
 
-    // Configures all parameters of one melodic voice.
     void setupVoice(uint8_t voice, uint8_t wave, uint8_t pitch, uint8_t env, uint8_t length, uint8_t mod)
     {
       setWave(voice, wave);
@@ -802,7 +650,6 @@ class synth
       }
     }
 
-    // Pulse width is the high portion of the 16-bit oscillator phase.
     void setPulseWidth(uint8_t voice, uint16_t pulseWidth)
     {
       if (!validVoice(voice)) return;
@@ -811,8 +658,7 @@ class synth
       }
     }
 
-    // Crossfades the first two preset waveform sources. A zero rate or an
-    // absent secondary source leaves the regular per-voice assignment intact.
+    // Crossfades the first two preset waveforms with an LFO; a zero rate disables it.
     void configurePresetMorph(uint8_t primaryWave, uint8_t secondaryWave,
       uint16_t frequencyHundredths, bool secondaryEnabled)
     {
@@ -833,6 +679,7 @@ class synth
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) { playMorphActive = false; playMorphLfoFTW = 0; playMorphAmount = 128; }
     }
 
+    // Sets the VCA tremolo depth (0-256) and rate.
     void configurePlayVca(uint16_t depth, uint16_t frequencyHundredths)
     {
       if (depth > 256) depth = 256;
@@ -931,7 +778,7 @@ class synth
       }
     }
 
-    // Sets vibrato depth with 64 as neutral; either direction has equal depth.
+    // Sets vibrato depth; 64 is neutral.
     void setMod(uint8_t voice, uint8_t mod)
     {
       if (!validVoice(voice)) {
@@ -951,7 +798,7 @@ class synth
       }
     }
 
-    // Restarts the envelope at an output level (see SYNTH_LEVEL_BUDGET).
+    // Restarts a voice's envelope at an output level, and the shared filter envelope.
     void trigger(uint8_t voice, uint8_t level)
     {
       if (!validVoice(voice)) {
@@ -964,7 +811,6 @@ class synth
         state.level = level;
         state.envelopePhase = 0;
         state.step = state.pitch;
-        // The dry PLAY background voices do not retrigger the bus filter.
         if (voice < SYNTH_BACKGROUND_VOICE || !backgroundVoices) {
           const uint16_t step = state.envelopeStep;
           filterEnvStep = step ? step << 3 : SYNTH_FILTER_ENV_HOLD_STEP;
@@ -988,8 +834,7 @@ class synth
       }
     }
 
-    // Lowers a voice's output level without restarting its envelope; amp
-    // follows at the next control update. One byte, so no atomic block.
+    // Lowers a voice's level without restarting it.
     void limitLevel(uint8_t voice, uint8_t level)
     {
       if (validVoice(voice) && synthVoices[voice].level > level) {
@@ -997,11 +842,7 @@ class synth
       }
     }
 
-    // Click-free note-off: fades the voice from its current amplitude to
-    // silence in about 21 ms through the normal envelope path, so the audio
-    // ISR does no extra work. amp = 255 * (level + 1) / 256 = level on the
-    // first update, so the fade is continuous; a silent voice stays silent.
-    // The next trigger() or stopVoice() restores the configured envelope.
+    // Click-free note-off: fades through Env0 (which must start at 255) in about 21 ms.
     void releaseVoice(uint8_t voice)
     {
       if (!validVoice(voice)) {
@@ -1011,7 +852,6 @@ class synth
       SynthVoice &state = synthVoices[voice];
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         synthVoiceEnvelopes[voice].releasing = true;
-        // amp includes the limiter gain, which still applies during the fade.
         uint8_t level = 0;
         if (!(state.envelopePhase & 0x8000)) {
           const uint8_t value = pgm_read_byte(state.envelope + (state.envelopePhase >> 8));
@@ -1024,9 +864,7 @@ class synth
       }
     }
 
-    // Starts packed sample playback with tone, decay, and level scaling. The
-    // envelope starts at level * 256 + 255, so its high byte peaks at level,
-    // and its step still reaches zero after the same duration.
+    // Starts a drum hit with tone, decay, and level.
     void triggerDrum(uint8_t type, uint8_t tone, uint8_t decay, uint8_t level)
     {
       if (type >= DRUM_SAMPLE_COUNT) type = DRUM_SAMPLE_COUNT - 1;
@@ -1074,9 +912,7 @@ class synth
       }
     }
 
-    // Fades an active drum hit to silence within 512 samples (about 26 ms)
-    // instead of cutting it; the renderer already decays the envelope
-    // linearly and stops at zero, so only the foreground step changes.
+    // Fades the drum out within about 26 ms.
     void releaseDrum()
     {
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
@@ -1094,14 +930,11 @@ class synth
       }
     }
 
-    // A macro-controlled, 50/50 dry/wet effect with no feedback path on the
-    // voice bus; a running PLAY background sequence on voices 3-4 stays dry.
+    // Selects chorus off, 1, or 2; the delay line is cleared before it turns on.
     void configureChorus(uint8_t mode)
     {
       const uint32_t lfoStep = mode == SYNTH_CHORUS_1 ? SYNTH_CHORUS_1_LFO_STEP :
         mode == SYNTH_CHORUS_2 ? SYNTH_CHORUS_2_LFO_STEP : 0;
-      // The ISR leaves an inactive delay line untouched; clear stale audio
-      // so enabling the effect cannot replay an old signal.
       if (!chorusActive) memset(chorusBuffer, 0, sizeof(chorusBuffer));
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         if (chorusLfoFTW != lfoStep) {
@@ -1113,10 +946,7 @@ class synth
       }
     }
 
-    // Sets the bus low-pass coefficient f (2 sin(pi fc / fs) * 256; 0 is
-    // open) and damping q (128 / Q, 1-128). The renderer slews toward both,
-    // so changes are click-free. envelopeAmount (0-255) scales the shared
-    // filter envelope; 255 sweeps its peak to the brightest coefficient.
+    // Sets the filter target coefficient (0 = open), damping, and envelope amount.
     void setBusFilter(uint8_t coefficient, uint8_t damping, uint8_t envelopeAmount)
     {
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
@@ -1126,8 +956,7 @@ class synth
       }
     }
 
-    // While PLAY's background sequence runs, voices 3-4 bypass morph, filter,
-    // VCA, and chorus; otherwise voice 3 is mixed like voices 0-2.
+    // While set, voices 3-4 bypass morph, filter, VCA, and chorus.
     void setBackgroundVoices(bool background)
     {
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
@@ -1135,6 +964,7 @@ class synth
       }
     }
 
+    // Switches the drone engine and resets the filter and chorus state.
     void setDroneMode(bool enabled)
     {
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
@@ -1143,8 +973,6 @@ class synth
           chorusActive = false;
           chorusLfoFTW = 0;
         }
-        // The drone mix is unfiltered; leaving it, the filter fades in again
-        // from silence.
         busFilterCoefficient = 0;
         busFilterDamping = SYNTH_FILTER_DAMPING_OPEN;
         busFilterLow = 0;

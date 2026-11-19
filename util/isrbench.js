@@ -1,16 +1,6 @@
-// Headless audio-ISR benchmark: calls the Timer2 vectors directly in AVR8js
-// with poked engine state, measures cycles per 20 kHz sample, and records the
-// OCR1A output trace (hashed) for bit-exact before/after comparisons.
-//
-// Usage:
-//   deno run -A util/isrbench.js <firmware.hex> <firmware.nm> [results.json]
-// Environment: ONLY=name,name selects scenarios, FRAMES=n sets their length,
-// PROFILE=name writes per-address cycles to results.json.prof.
-// Prepare the inputs from the repository root:
-//   pio run -e hardware
-//   avr-nm -S -C .pio/build/hardware/firmware.elf > firmware.nm
-// (avr-nm is in ~/.platformio/packages/toolchain-atmelavr/bin). Requires Deno;
-// AVR8js is imported from jsDelivr, so the first run needs network access.
+// Headless audio-ISR benchmark: cycles per 20 kHz sample and a hashed output trace for bit-exact comparisons.
+// Usage: deno run -A util/isrbench.js <firmware.hex> <firmware.nm> [results.json], with firmware.nm from avr-nm -S -C firmware.elf.
+// Options: ONLY=name,name, FRAMES=n, PROFILE=name.
 import { CPU, avrInstruction } from 'https://cdn.jsdelivr.net/npm/avr8js@0.21.1/+esm';
 
 const [hexPath, nmPath, outPath] = Deno.args;
@@ -64,7 +54,7 @@ const w16 = (n, v, i = 0) => {
 const w32 = (n, v, i = 0) => {
   if (n === 'chorusLfoFTW' && has('chorusDelaySamples')) v = v * 2; const a = dataAddr(n) + i * 4; for (let b = 0; b < 4; b++) cpu.data[a + b] = (v >>> (b * 8)) & 0xff; };
 const tbl = (n) => sym(n);
-const SENTINEL = 0x3ff0; // word address never executed
+const SENTINEL = 0x3ff0;
 
 const BLOCK = has('__vector_8') && has('audioOutputRing');
 const vecBWord = BLOCK ? sym('__vector_8') >> 1 : 0;
@@ -85,10 +75,8 @@ function callVector(word) {
     if (PROFILE) PROFILE[pc] = (PROFILE[pc] || 0) + (cpu.cycles - c0);
     if (++guard > 100000) throw new Error('ISR runaway');
   }
-  // +4 interrupt response, +3 vector-table JMP on real hardware.
   return cpu.cycles - start + 7;
 }
-// Returns the audio cycles attributable to one 20 kHz period.
 function callIsr() {
   if (!BLOCK) return callVector(vecWord);
   let c = callVector(vecWord);

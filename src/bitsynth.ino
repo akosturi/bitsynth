@@ -2,9 +2,6 @@
 #include <util/delay.h>
 #include "synth.h"
 
-// Direct port I/O. Mux S0/S1/S2 = D8/D11/D10 (PB0/PB3/PB2); A0/A2 are the
-// parameter/step pot ADC channels, A1/A3 the step/MODE buttons (PC1/PC3).
-// The write-only 4-bit LCD uses RS/E/D4-D7 = D2-D7 (PD2-PD7); D0/D1 are unused.
 const uint8_t kMuxPortMask = _BV(PB0) | _BV(PB2) | _BV(PB3);
 const uint8_t kSettingsAdcChannel = 0;
 const uint8_t kStepButtonBit = PC1;
@@ -38,7 +35,6 @@ const uint16_t kModeIgnoreHoldMs = 650;
 const uint16_t kEditViewMs = 1500;
 const uint8_t kBpmMin = 60;
 const uint8_t kBpmMax = 190;
-// Swing starts each even-numbered step at this percentage of its step pair.
 const uint8_t kSwingPercent = 65;
 const uint8_t kStepNoteMin = 36;
 const uint8_t kStepNoteMax = 59;
@@ -48,7 +44,6 @@ const uint16_t kLfoFrequencyMinHundredths = 5;
 const uint16_t kLfoFrequencyMaxHundredths = 2000;
 const uint8_t kLfoRateCount = 94;
 const uint8_t kPresetVcaModulationCount = 99;
-// Filter cutoff control value that leaves the bus low-pass open.
 const uint8_t kFilterOpen = 127;
 
 enum InstrumentMode : uint8_t { MODE_SEQ = 0, MODE_PLAY = 1, MODE_DRONE = 2 };
@@ -63,8 +58,6 @@ enum MacroParam : uint8_t {
   MACRO_MORPH, MACRO_FILTER, MACRO_RESONANCE, MACRO_FILTER_ENVELOPE
 };
 
-// Direct-macro slots per program. The two LFO target slots follow them, so
-// slot indexes kMacroSlotCount and kMacroSlotCount + 1 address the LFOs.
 const uint8_t kMacroSlotCount = 8;
 const uint8_t kMacroLfoCount = 2;
 
@@ -73,7 +66,6 @@ enum ParameterControl : uint8_t {
   PARAM_SEQ_PRESET, PARAM_SEQ_BPM, PARAM_SEQ_TUNE,
   PARAM_PLAY_PRESET, PARAM_PLAY_ROOT, PARAM_PLAY_SCALE, PARAM_PLAY_STYLE,
   PARAM_MACRO_0,
-  // Rate/depth pairs; the LCD relies on rate controls being even.
   PARAM_LFO_0_RATE = PARAM_MACRO_0 + kMacroSlotCount, PARAM_LFO_0_DEPTH, PARAM_LFO_1_RATE, PARAM_LFO_1_DEPTH
 };
 static_assert((PARAM_LFO_0_RATE & 1) == 0, "LFO rate controls must be even");
@@ -85,8 +77,6 @@ struct VoiceRecipe {
   uint8_t modulation;
 };
 
-// Program data is deliberately split by renderer.  A PCM program never
-// carries inactive oscillator, glide, or PLAY-only fields.
 struct MelodicPreset {
   char label[5];
   uint8_t voiceCount;
@@ -115,7 +105,6 @@ struct DrumPreset {
   uint8_t lfoTargets[kMacroLfoCount];
   uint8_t level;
 };
-// macroForCurrentProgram() reads macro and LFO slots as one flash byte run.
 static_assert(offsetof(MelodicPreset, lfoTargets) == offsetof(MelodicPreset, macros) + kMacroSlotCount,
               "melodic macro and LFO slots must be contiguous");
 static_assert(offsetof(DrumPreset, lfoTargets) == offsetof(DrumPreset, macros) + kMacroSlotCount,
@@ -131,97 +120,57 @@ struct AnalogMotionState {
   bool ready;
 };
 
-// label, voice count, voices {wave, detune cents (-2400 to +2400), envelope,
-// modulation} x4, envelope length, square pulse width, glide, VCA depth,
-// VCA LFO rate, chorus mode, morph speed, filter cutoff (0 about 100 Hz -
-// 126 about 3.3 kHz, 127 open), filter resonance (0 Q about 1 - 127 Q about
-// 6), filter envelope amount (0 off - 127), direct macros x8, LFO targets x2, LFO rate
-// indexes x2 (0-15 = 0.05-0.20 Hz, 16-63 = 0.3-5.0 Hz, 64-93 = 5.5-20 Hz),
-// LFO depths x2 (0 off), output level (255 keeps the automatic level; lower
-// values only attenuate the preset). Every voice uses voice 0's envelope.
-// Available macros: MACRO_NONE, MACRO_PULSE_WIDTH, MACRO_VIBRATO,
-// MACRO_DRUM_TUNE, MACRO_DRUM_DECAY, MACRO_VCA_DEPTH, MACRO_VCA_RATE,
-// MACRO_ENVELOPE, MACRO_ENVELOPE_LENGTH, MACRO_GLIDE, MACRO_CHORUS,
-// MACRO_MORPH, MACRO_FILTER, MACRO_RESONANCE, MACRO_FILTER_ENVELOPE. An LFO that targets PWM or VIB should also have
-// that direct macro, so it sweeps around the preset value.
-// Letters group the catalogue: A bass, B lead, C pad, D keys, E sequence/effect.
 const MelodicPreset kMelodicPresets[] PROGMEM = {
-  // A01 funk bass: a Minimoog-style line in the manner of "Thriller"; two
-  // slowly beating saws over a square sub-octave with a punchy decay.
   {"A01", 3, {{SAW, 0, ENVELOPE5, 64}, {SAW, 8, ENVELOPE5, 64}, {SQUARE, -1200, ENVELOPE5, 64}, {SINE, 0, ENVELOPE5, 64}},
    72, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 52, 24, 88,
    {MACRO_FILTER, MACRO_RESONANCE, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_GLIDE, MACRO_FILTER_ENVELOPE, MACRO_NONE, MACRO_NONE},
    {MACRO_NONE, MACRO_NONE}, {0, 0}, {0, 0}, 255},
-  // A02 Reese bass: drum and bass detuned saws over a sine sub-octave; a slow
-  // filter LFO adds motion, and a faster LFO 1 rate turns it into a wobble.
   {"A02", 3, {{SAW, -14, ENVELOPE4, 64}, {SAW, 14, ENVELOPE4, 64}, {SINE, -1200, ENVELOPE4, 64}, {SINE, 0, ENVELOPE4, 64}},
    106, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 60, 16, 0,
    {MACRO_FILTER, MACRO_RESONANCE, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_GLIDE, MACRO_NONE, MACRO_NONE, MACRO_NONE},
    {MACRO_FILTER, MACRO_NONE}, {16, 0}, {12, 0}, 255},
-  // A03 808 bass: a long sine with pitch slides between notes.
   {"A03", 1, {{SINE, 0, ENVELOPE1, 64}, {SINE, 0, ENVELOPE1, 64}, {SINE, 0, ENVELOPE1, 64}, {SINE, 0, ENVELOPE1, 64}},
    90, 50, 72, 0, 0, SYNTH_CHORUS_OFF, 0, 127, 0, 0,
    {MACRO_GLIDE, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE},
    {MACRO_NONE, MACRO_NONE}, {0, 0}, {0, 0}, 255},
-  // B01 pulse lead: the bright, staccato "Axel F" style; a 30% pulse and a
-  // slightly detuned saw, one octave up.
   {"B01", 2, {{SQUARE, 1200, ENVELOPE5, 64}, {SAW, 1205, ENVELOPE5, 64}, {SINE, 0, ENVELOPE5, 64}, {SINE, 0, ENVELOPE5, 64}},
    87, 30, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 88, 16, 80,
    {MACRO_PULSE_WIDTH, MACRO_FILTER, MACRO_RESONANCE, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_GLIDE, MACRO_VIBRATO, MACRO_FILTER_ENVELOPE},
    {MACRO_NONE, MACRO_NONE}, {0, 0}, {0, 0}, 255},
-  // B02 supersaw: a trance lead in the MicroKorg/JP-8000 manner; three spread
-  // saws one octave up plus one at the played octave, with chorus and glide.
-  // VCD raises a fast 8 Hz VCA pulse; LFO 1 depth adds a slow filter sweep.
   {"B02", 4, {{SAW, 1200, ENVELOPE4, 64}, {SAW, 1185, ENVELOPE4, 64}, {SAW, 1215, ENVELOPE4, 64}, {SAW, 0, ENVELOPE4, 64}},
    106, 50, 12, 0, 74, SYNTH_CHORUS_1, 0, 101, 0, 0,
    {MACRO_FILTER, MACRO_RESONANCE, MACRO_GLIDE, MACRO_CHORUS, MACRO_VIBRATO, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_VCA_DEPTH},
    {MACRO_FILTER, MACRO_NONE}, {5, 0}, {0, 0}, 255},
-  // C01 PWM pad: a Juno-style pulse-width-modulated pad with chorus 1 and a
-  // soft attack; LFO 2 depth adds a slow filter sweep.
   {"C01", 1, {{SQUARE, 0, ENVELOPE2, 64}, {SQUARE, 0, ENVELOPE2, 64}, {SQUARE, 0, ENVELOPE2, 64}, {SQUARE, 0, ENVELOPE2, 64}},
    99, 50, 0, 0, 0, SYNTH_CHORUS_1, 0, 84, 16, 0,
    {MACRO_PULSE_WIDTH, MACRO_FILTER, MACRO_RESONANCE, MACRO_CHORUS, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_NONE, MACRO_NONE},
    {MACRO_PULSE_WIDTH, MACRO_FILTER}, {18, 5}, {49, 0}, 255},
-  // C02 string machine: Jean-Michel Jarre's "Oxygene" style ensemble strings;
-  // a mellow saw with chorus 2, light vibrato, and a slow filter drift.
   {"C02", 1, {{SAW, 0, ENVELOPE2, 66}, {SAW, 0, ENVELOPE2, 66}, {SAW, 0, ENVELOPE2, 66}, {SAW, 0, ENVELOPE2, 66}},
    99, 50, 0, 0, 0, SYNTH_CHORUS_2, 0, 80, 0, 0,
    {MACRO_FILTER, MACRO_RESONANCE, MACRO_CHORUS, MACRO_VIBRATO, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_NONE, MACRO_NONE},
    {MACRO_FILTER, MACRO_NONE}, {7, 0}, {16, 0}, 255},
-  // D01 poly brass: the Oberheim-style saw brass of "Jump", for chords.
   {"D01", 1, {{SAW, 0, ENVELOPE4, 64}, {SAW, 0, ENVELOPE4, 64}, {SAW, 0, ENVELOPE4, 64}, {SAW, 0, ENVELOPE4, 64}},
    106, 50, 0, 0, 0, SYNTH_CHORUS_1, 0, 88, 0, 64,
    {MACRO_FILTER, MACRO_RESONANCE, MACRO_CHORUS, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_GLIDE, MACRO_VIBRATO, MACRO_FILTER_ENVELOPE},
    {MACRO_NONE, MACRO_NONE}, {0, 0}, {0, 0}, 255},
-  // D02 vibraphone: a struck, long-decaying triangle with motor tremolo,
-  // which also passes for a suitcase electric piano.
   {"D02", 1, {{TRIANGLE, 0, ENVELOPE5, 64}, {TRIANGLE, 0, ENVELOPE5, 64}, {TRIANGLE, 0, ENVELOPE5, 64}, {TRIANGLE, 0, ENVELOPE5, 64}},
    99, 50, 0, 96, 69, SYNTH_CHORUS_OFF, 0, 90, 0, 0,
    {MACRO_VCA_DEPTH, MACRO_VCA_RATE, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_FILTER, MACRO_RESONANCE, MACRO_CHORUS, MACRO_NONE},
    {MACRO_NONE, MACRO_NONE}, {0, 0}, {0, 0}, 255},
-  // D03 rock organ: 8', 4', 5 1/3', and 16' sine drawbars with key click,
-  // a fast Leslie-like VCA tremolo, vibrato, and chorus 2. VCR sets the speed.
   {"D03", 4, {{SINE, 0, ENVELOPE3, 66}, {SINE, 1200, ENVELOPE3, 66}, {SINE, 702, ENVELOPE3, 66}, {SINE, -1200, ENVELOPE3, 66}},
    127, 50, 0, 40, 70, SYNTH_CHORUS_2, 0, 127, 0, 0,
    {MACRO_VCA_RATE, MACRO_VCA_DEPTH, MACRO_VIBRATO, MACRO_CHORUS, MACRO_FILTER, MACRO_RESONANCE, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE},
    {MACRO_NONE, MACRO_NONE}, {0, 0}, {0, 0}, 255},
-  // E01 dark arpeggio: the "Stranger Things" style sequence; a saw and a
-  // detuned pulse slowly morph between each other while LFO 1 opens and
-  // closes the filter and LFO 2 modulates the pulse width.
   {"E01", 2, {{SAW, 0, ENVELOPE1, 64}, {SQUARE, 6, ENVELOPE1, 64}, {SINE, 0, ENVELOPE1, 64}, {SINE, 0, ENVELOPE1, 64}},
    66, 40, 0, 0, 0, SYNTH_CHORUS_OFF, 1, 72, 48, 64,
    {MACRO_FILTER, MACRO_RESONANCE, MACRO_MORPH, MACRO_PULSE_WIDTH, MACRO_CHORUS, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_GLIDE},
    {MACRO_FILTER, MACRO_PULSE_WIDTH}, {5, 20}, {40, 28}, 255},
-  // E02 surf: the sea and wind noise of Jarre's "Oxygene"; held white noise
-  // whose filter LFO and slower VCA drift against each other. A short LEN
-  // with ENV 0 turns it into hi-hat-like ticks in SEQ.
   {"E02", 1, {{NOISE, 0, ENVELOPE3, 64}, {NOISE, 0, ENVELOPE3, 64}, {NOISE, 0, ENVELOPE3, 64}, {NOISE, 0, ENVELOPE3, 64}},
    127, 50, 0, 200, 10, SYNTH_CHORUS_OFF, 0, 68, 48, 0,
    {MACRO_FILTER, MACRO_RESONANCE, MACRO_VCA_DEPTH, MACRO_VCA_RATE, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_CHORUS, MACRO_NONE},
    {MACRO_FILTER, MACRO_NONE}, {7, 0}, {45, 0}, 255}
 };
 const uint8_t kMelodicPresetCount = sizeof(kMelodicPresets) / sizeof(kMelodicPresets[0]);
-// SEQ lists every melodic program and then DRM; PLAY omits DRM.
 const uint8_t PRESET_DRUM = kMelodicPresetCount;
 const uint8_t kPresetCount = kMelodicPresetCount + 1;
 const uint8_t kPlayPresetCount = kMelodicPresetCount;
@@ -240,8 +189,6 @@ const char kDroneWaveLabels[kDroneWaveCount][4] PROGMEM = {"SIN", "TRI", "SQR", 
 const char kRootLabels[12][3] PROGMEM = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
 const char kScaleLabels[kScaleCount][4] PROGMEM = {"MAJ", "MIN", "PEN", "BLU"};
 const char kStyleLabels[kPlayStyleCount][5] PROGMEM = {"POLY", "CHRD", "UP", "DOWN", "UPDN", "CUP", "CDWN", "CUDN"};
-// Arpeggio divisions in 24-PPQN ticks. 48 ticks equal one eight-step
-// sequencer cycle, so every division restarts in phase with step 1.
 const uint8_t kArpDivisionCount = 8;
 const uint8_t kArpDivisionTicks[kArpDivisionCount] PROGMEM = {48, 24, 16, 12, 8, 6, 4, 3};
 const char kArpDivisionLabels[kArpDivisionCount][6] PROGMEM = {"1/2", "1/4", "1/4t", "1/8", "1/8t", "1/16", "1/16t", "1/32"};
@@ -249,7 +196,6 @@ const uint8_t kPlayOctaveCount = 5;
 synth edgar;
 InstrumentMode instrumentMode = MODE_SEQ;
 SeqControls seqControls = {0, 126, 64};
-// PLAY indexes its melodic-only catalogue; SEQ indexes the complete catalogue.
 PlayControls playControls = {0, 0, SCALE_MAJOR, STYLE_POLY, 1, 5};
 uint8_t stepNotes[kStepCount] = {36, 38, 40, 41, 43, 45, 47, 48};
 uint8_t stepDrums[kStepCount] = {DRUM_KICK, DRUM_CLOSED_HAT, DRUM_SNARE, DRUM_CLOSED_HAT,
@@ -260,9 +206,6 @@ uint8_t dronePairWave[kSettingCount] = {SINE, TRIANGLE, SQUARE, SAW};
 uint16_t droneLfoRateHundredths[kSettingCount] = {0, 0, 0, 0};
 uint16_t dronePitchWord[kStepCount] = {0};
 uint8_t playGlide = 0;
-// SEQ and PLAY keep separate macro and macro-LFO values for their selected
-// programs. macroMode selects the program and state the macro helpers use:
-// normally the current mode, and SEQ while PLAY triggers its background step.
 struct MacroState {
   uint16_t values[kMacroSlotCount];
   uint8_t lfoRateIndex[kMacroLfoCount];
@@ -278,13 +221,6 @@ uint8_t currentStep = 0;
 uint8_t playingStep = 255;
 unsigned long lastStepMs = 0;
 uint16_t nextStepIntervalMs = 119;
-// One voice or the drum reaches full PWM scale. Voices that can sound at once
-// share kVoiceLevelBudget, twice full scale; the audio engine's bus limiter
-// lowers them together only while their envelopes would exceed full scale, so
-// staggered and decaying notes play louder. PLAY's background voice keeps a fixed
-// share of about three tenths, so it stands out over the live voices and
-// live style changes never need to rescale a ringing sequence. Its short drum
-// hits play louder; the limiter makes room for them under the live voices.
 const uint16_t kVoiceLevelBudget = SYNTH_LEVEL_BUDGET * 2;
 const uint8_t kBackgroundVoiceLevel = 79;
 const uint8_t kBackgroundDrumLevel = 127;
@@ -321,18 +257,10 @@ bool modeDoubleTapArmed = false;
 unsigned long modePageTapAt = 0;
 bool playSequencerEnabled = true;
 bool swingEnabled = false;
-// GEN plays each step from a source step (bits 0-2), optionally an octave up
-// (bit 7). The identity map is the programmed sequence.
 bool generativeEnabled = false;
 uint8_t genSource[kStepCount] = {0, 1, 2, 3, 4, 5, 6, 7};
 uint8_t genRandom = 1;
-// GEN uses the ROM's centred 5x5 asterisk, leaving all of CGRAM free.
 const char kGenChar = '*';
-// Rendered frames hold kGlyphPlaceholder | key; resolveGlyphs() loads each key
-// into a CGRAM slot and writes its mirror code 8-15, so a frame has no NUL.
-// Bar keys: bits 0-2 are height - 1, kGlyphBar a solid bar (else a dotted
-// ghost dash at the bar's top). kGlyphPlayhead alone is a plain checkerboard.
-// Icons follow.
 const uint8_t kGlyphPlaceholder = 0x80;
 const uint8_t kGlyphBar = 0x08;
 const uint8_t kGlyphPlayhead = 0x10;
@@ -340,10 +268,10 @@ const uint8_t kGlyphPlay = 0x20;
 const uint8_t kGlyphStop = 0x21;
 const uint8_t kGlyphKeyEnd = 0x22;
 const uint8_t kGlyphIcons[2][8] PROGMEM = {
-  {0x08, 0x0C, 0x0E, 0x0F, 0x0E, 0x0C, 0x08, 0x00},  // Play.
-  {0x00, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x00, 0x00},  // Stop.
+  {0x08, 0x0C, 0x0E, 0x0F, 0x0E, 0x0C, 0x08, 0x00},
+  {0x00, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x00, 0x00},
 };
-uint8_t glyphKeys[8];  // Key loaded in each CGRAM slot; 0xFF is unknown.
+uint8_t glyphKeys[8];
 uint8_t parameterPage = 0;
 uint16_t parameterPageRaw[4] = {0, 0, 0, 0};
 bool parameterPageLocked[4] = {false, false, false, false};
@@ -409,7 +337,7 @@ void programLabel(uint8_t programId, char label[5]) {
 bool isMacroControl(uint8_t control) { return (uint8_t)(control - PARAM_MACRO_0) < kMacroSlotCount; }
 bool isLfoControl(uint8_t control) { return (uint8_t)(control - PARAM_LFO_0_RATE) < kMacroLfoCount * 2; }
 
-// Slots 0-7 are direct macros and kMacroSlotCount + lfo are LFO targets.
+// Returns a direct macro (slots 0-7) or LFO target (slots 8-9) of the current program.
 uint8_t macroForCurrentProgram(uint8_t slot) {
   const uint8_t programId = macroProgramId();
   const uint8_t *slots = isDrumProgram(programId) ? kDrumPreset.macros :
@@ -417,16 +345,13 @@ uint8_t macroForCurrentProgram(uint8_t slot) {
   return pgm_read_byte(slots + slot);
 }
 
-// Voices 3-4 belong to the background sequencer when it is running, leaving
-// voices 0-2 live. Otherwise POLY can use the complete four-voice pool 0-3.
+// Live PLAY voices end at voice 3 while the background sequence runs, otherwise at 4.
 uint8_t liveVoiceEnd() { return playSequencerEnabled ? SYNTH_BACKGROUND_VOICE : SYNTH_NORMAL_VOICE_COUNT; }
 
-// The end of the voices that the current macro edits and macro LFOs may change.
+// End of the voices that macro edits and macro LFOs change.
 uint8_t macroVoiceEnd() { return macroMode == MODE_PLAY ? liveVoiceEnd() : SYNTH_VOICE_COUNT; }
 
-// The parameter strip is packed left-to-right.  This keeps unavailable
-// controls (such as drum tuning outside DRM) off the LCD and out of the page
-// cycle without needing a RAM-resident page table.
+// Counts the current mode's controls; unused macro and LFO slots are skipped.
 uint8_t parameterControlCount() {
   uint8_t count = instrumentMode == MODE_SEQ ? 2 : 4;
   if (instrumentMode == MODE_SEQ && isDrumProgram(seqControls.preset)) ++count;
@@ -435,6 +360,7 @@ uint8_t parameterControlCount() {
   return count;
 }
 
+// Returns the control at a position of the packed parameter pages.
 uint8_t parameterControlAt(uint8_t index) {
   const bool sequence = instrumentMode == MODE_SEQ;
   const uint8_t fixedCount = sequence ? (isDrumProgram(seqControls.preset) ? 3 : 2) : 4;
@@ -463,11 +389,12 @@ uint8_t parameterPageCount() {
   return (parameterControlCount() + kSettingCount - 1) / kSettingCount;
 }
 
-// Keep preset pulse widths musically useful while retaining one-byte storage.
+// Converts a 5-95% duty cycle to a 16-bit pulse width.
 uint16_t pulseWidthForPercent(uint8_t percent) {
   return (uint16_t)constrain(percent, 5, 95) * 655U;
 }
 
+// Converts Hz to a 20 kHz phase step.
 uint16_t pitchWordForFrequency(uint16_t frequency) {
   return ((uint32_t)frequency * 65535UL + FS / 2) / FS;
 }
@@ -475,16 +402,14 @@ uint16_t pitchWordForFrequency(uint16_t frequency) {
 uint8_t mapIndexHysteresis(uint16_t raw, uint8_t current, uint8_t count);
 uint8_t mapByteHysteresis(uint16_t raw, uint8_t current, int16_t outMin, int16_t outMax);
 
-// Maps the reversed control range to 94 stepped LFO rates, reserving the endpoint for off.
+// Maps LFO rate index 0-93 to 0.05-20 Hz, in hundredths.
 uint16_t lfoRateForIndex(uint8_t index) {
   if (index < 16) return kLfoFrequencyMinHundredths + index;
   if (index < 64) return 20 + (uint16_t)(index - 15) * 10;
   return 500 + (uint16_t)(index - 63) * 50;
 }
 
-// Preset VCA modulation keeps a compact, editable index while covering the
-// full 0.01-20 Hz range: 0.01-0.20 in 0.01 Hz, 0.3-5.0 in 0.1 Hz, then
-// 5.5-20.0 in 0.5 Hz increments.
+// Maps a preset VCA rate index to 0.01-20 Hz, in hundredths; 0 is off.
 uint16_t presetVcaRateHundredths(uint8_t modulation) {
   if (modulation == 0) return 0;
   if (modulation <= 20) return modulation;
@@ -492,12 +417,14 @@ uint16_t presetVcaRateHundredths(uint8_t modulation) {
   return 500 + (uint16_t)(min(modulation, (uint8_t)(kPresetVcaModulationCount - 1)) - 68) * 50;
 }
 
+// Inverse of lfoRateForIndex().
 uint8_t lfoRateIndexForHundredths(uint16_t rate) {
   if (rate <= 20) return rate - kLfoFrequencyMinHundredths;
   if (rate <= 500) return 15 + (rate - 20) / 10;
   return 63 + (rate - 500) / 50;
 }
 
+// Maps a reversed pot to an LFO rate; the low endpoint is off.
 uint16_t lfoRateForRaw(uint16_t raw, uint16_t current) {
   if (raw <= kAnalogEndpointMargin) return kLfoFrequencyMaxHundredths;
   if (raw >= 1023 - kAnalogEndpointMargin) return 0;
@@ -505,13 +432,14 @@ uint16_t lfoRateForRaw(uint16_t raw, uint16_t current) {
   return lfoRateForIndex(mapIndexHysteresis(raw, index, kLfoRateCount));
 }
 
-// Returns the direct-macro slot assigned to parameter, or kMacroSlotCount when there is none.
+// Returns the slot holding a macro, or kMacroSlotCount if there is none.
 uint8_t macroSlot(uint8_t parameter) {
   uint8_t slot = 0;
   while (slot < kMacroSlotCount && macroForCurrentProgram(slot) != parameter) ++slot;
   return slot;
 }
 
+// Returns a macro's current value, or fallback if the program lacks it.
 uint16_t activeMacroValue(uint8_t parameter, uint16_t fallback) {
   const uint8_t slot = macroSlot(parameter);
   return slot < kMacroSlotCount ? macroState->values[slot] : fallback;
@@ -542,10 +470,7 @@ uint16_t macroMaximum(uint8_t parameter) {
   }
 }
 
-// Resolves all LFOs addressed to a numeric macro. At depth 127 an LFO can
-// sweep across that macro's complete valid range; clamping preserves ranges
-// when the direct macro is not centred. Descriptor/list values are never
-// numeric macro targets, so they cannot reach this function.
+// Returns a macro value swept by the LFOs that target it, clamped to its range.
 uint16_t lfoModulatedMacroValue(uint8_t parameter, uint16_t fallback) {
   const uint16_t minimum = macroMinimum(parameter);
   const uint16_t maximum = macroMaximum(parameter);
@@ -563,6 +488,7 @@ uint16_t lfoModulatedMacroValue(uint8_t parameter, uint16_t fallback) {
   return constrain(value, minimum, maximum);
 }
 
+// Maps a pot reading to a macro's value range.
 uint16_t macroValueForRaw(uint8_t parameter, uint16_t raw) {
   switch (parameter) {
     case MACRO_PULSE_WIDTH: return mapByteHysteresis(raw, activeMacroValue(parameter, 50), 95, 5);
@@ -584,14 +510,8 @@ uint16_t macroValueForRaw(uint8_t parameter, uint16_t raw) {
   }
 }
 
-// LEN is a perceptual control, not the raw envelope-step index: 0-126 span roughly
-// 0.2 s to 6.5 s at the 5 kHz envelope rate, and 127 is a held note. The engine's slowest non-zero
-// phase increment is one, so the upper value is necessarily approximate.
 const uint8_t kEnvelopeLengthRateAnchors[] PROGMEM = {33, 22, 15, 10, 7, 5, 3, 2, 1};
 
-// LEN 0-126 run from the shortest to the longest envelope and 127 is HOLD, so
-// turning away from HOLD reaches the longest lengths first instead of
-// cutting held notes off with the shortest one.
 const uint8_t kEnvelopeHoldControl = 127;
 
 // Interpolates a descending nine-anchor flash table at index 0-127.
@@ -603,18 +523,16 @@ uint8_t descendingAnchorValue(const uint8_t *anchors, uint8_t index) {
   return start - (((uint16_t)(start - end) * fraction + 8) >> 4);
 }
 
+// Maps LEN 0-126 to an envelope step (about 0.2-6.5 s); 127 is HOLD.
 uint8_t envelopeRateForControl(uint8_t control) {
   if (control >= kEnvelopeHoldControl) return 0;
   return descendingAnchorValue(kEnvelopeLengthRateAnchors, control);
 }
 
-// State-variable filter coefficients f = 2 sin(pi fc / 20 kHz) * 256 for an
-// exponential 3.3 kHz-100 Hz cutoff sweep. Control 0-126 reads them in
-// reverse, so higher values are brighter (about 100 Hz-3.3 kHz); 127 is open.
 const uint8_t kFilterCoefficientAnchors[] PROGMEM = {255, 169, 110, 72, 46, 30, 19, 12, 8};
-// Damping q = 128 / Q for an exponential Q of 1-6 across RES 0-127.
 const uint8_t kFilterDampingAnchors[] PROGMEM = {128, 102, 82, 65, 52, 42, 33, 27, 21};
 
+// Sends the program's cutoff, resonance, and filter envelope amount to the engine.
 void applyCurrentProgramFilter() {
   const uint8_t programId = macroProgramId();
   uint8_t cutoff = kFilterOpen;
@@ -626,14 +544,13 @@ void applyCurrentProgramFilter() {
     resonance = lfoModulatedMacroValue(MACRO_RESONANCE, preset.filterResonance);
     envelopeAmount = activeMacroValue(MACRO_FILTER_ENVELOPE, preset.filterEnvelopeAmount);
   }
-  // FEG 0-127 maps quadratically to the engine's 0-252 amount, giving finer
-  // control over small sweeps.
   edgar.setBusFilter(cutoff >= kFilterOpen ? 0 :
     descendingAnchorValue(kFilterCoefficientAnchors, kFilterOpen - cutoff),
     descendingAnchorValue(kFilterDampingAnchors, resonance),
     (uint8_t)((uint16_t)(envelopeAmount * envelopeAmount) >> 6));
 }
 
+// Finds the length index whose envelope step is closest to rate.
 uint8_t envelopeLengthIndexForRate(uint8_t rate) {
   uint8_t bestIndex = 0;
   uint16_t bestDifference = 0xFFFF;
@@ -649,6 +566,7 @@ uint8_t envelopeLengthIndexForControl(uint8_t control) {
   return control >= kEnvelopeHoldControl ? 127 : envelopeLengthIndexForRate(envelopeRateForControl(control));
 }
 
+// Finds the LEN value closest to a stored preset length.
 uint8_t envelopeLengthControlForPreset(uint8_t length) {
   const uint16_t rate = envelopeStepForLength(length);
   if (rate == 0) return kEnvelopeHoldControl;
@@ -662,9 +580,7 @@ uint8_t envelopeLengthControlForPreset(uint8_t length) {
   return bestControl;
 }
 
-// Resolves a melodic preset's envelope and envelope-step length index. Without a LEN
-// macro the stored length is used unchanged; LEN 0, or a stored length whose
-// speed is zero, holds the constant full-level envelope until note-off.
+// Resolves a preset's envelope and length from ENV, LEN, and HOLD.
 void presetEnvelope(const MelodicPreset &preset, uint8_t &envelope, uint8_t &length) {
   const uint8_t slot = macroSlot(MACRO_ENVELOPE_LENGTH);
   bool hold;
@@ -679,6 +595,7 @@ void presetEnvelope(const MelodicPreset &preset, uint8_t &envelope, uint8_t &len
   envelope = hold ? ENVELOPE3 : activeMacroValue(MACRO_ENVELOPE, preset.voices[0].envelope);
 }
 
+// Applies the current ENV and LEN to the macro-controlled voices.
 void applyMacroEnvelopeToVoices() {
   const uint8_t programId = macroProgramId();
   if (isDrumProgram(programId)) return;
@@ -690,6 +607,7 @@ void applyMacroEnvelopeToVoices() {
   }
 }
 
+// Shows a parameter's value on the LCD for a moment.
 void showParameterEdit(uint8_t slot, unsigned long now) {
   editedPlayShift = slot + 1;
   editedStep = 255;
@@ -697,7 +615,7 @@ void showParameterEdit(uint8_t slot, unsigned long now) {
   displayDirty = true;
 }
 
-// The VCA follows the stored depth and rate unless a macro or LFO moves them.
+// Sends the program's VCA depth and rate, including macros and LFOs.
 void applyCurrentProgramVca() {
   const uint8_t programId = macroProgramId();
   if (isDrumProgram(programId)) { edgar.disablePlayVca(); return; }
@@ -706,6 +624,7 @@ void applyCurrentProgramVca() {
     presetVcaRateHundredths((uint8_t)lfoModulatedMacroValue(MACRO_VCA_RATE, preset.vcaModulation)));
 }
 
+// Applies the program's filter, VCA, and chorus.
 void applyCurrentProgramBusEffects() {
   applyCurrentProgramFilter();
   applyCurrentProgramVca();
@@ -715,9 +634,7 @@ void applyCurrentProgramBusEffects() {
   edgar.configureChorus(activeMacroValue(MACRO_CHORUS, preset.chorusMode));
 }
 
-// Morph macro values span 0 (off) through 0.16-20.32 Hz.  This is deliberately
-// direct-only: changing its source list from the foreground keeps it out of
-// the macro-LFO update path and preserves the audio ISR's fixed workload.
+// Configures the waveform morph between the first two voice recipes.
 void applyCurrentProgramMorph() {
   const uint8_t programId = macroProgramId();
   if (isDrumProgram(programId)) { edgar.disablePresetMorph(); return; }
@@ -727,6 +644,7 @@ void applyCurrentProgramMorph() {
     (uint16_t)speed << 4, preset.voiceCount > 1);
 }
 
+// Applies a pot to a direct macro and updates the affected engine state.
 void applyMacroValue(uint8_t slot, uint8_t displaySlot, uint16_t raw, unsigned long now) {
   const uint8_t parameter = macroForCurrentProgram(slot);
   if (parameter == MACRO_NONE) return;
@@ -754,7 +672,6 @@ void applyMacroValue(uint8_t slot, uint8_t displaySlot, uint16_t raw, unsigned l
   } else if (parameter == MACRO_MORPH) {
     applyCurrentProgramMorph();
   } else if (parameter >= MACRO_FILTER) {
-    // FLT, RES, and FEG are the last macro IDs.
     applyCurrentProgramFilter();
   } else if (parameter == MACRO_VCA_DEPTH || parameter == MACRO_VCA_RATE) {
     applyCurrentProgramVca();
@@ -762,7 +679,7 @@ void applyMacroValue(uint8_t slot, uint8_t displaySlot, uint16_t raw, unsigned l
   showParameterEdit(displaySlot, now);
 }
 
-// control is 0-3: LFO rate/depth pairs in parameter order.
+// Applies a pot to an LFO rate (even controls) or depth (odd controls).
 void applyLfoControl(uint8_t control, uint8_t displaySlot, uint16_t raw, unsigned long now) {
   const uint8_t lfo = control >> 1;
   const bool depth = (control & 1) != 0;
@@ -779,6 +696,7 @@ void applyLfoControl(uint8_t control, uint8_t displaySlot, uint16_t raw, unsigne
   showParameterEdit(displaySlot, now);
 }
 
+// Soft takeover: a pot acts only after it moves away from its page-change position.
 bool parameterPotUnlocked(uint8_t pot, uint16_t raw) {
   if (!parameterPageLocked[pot]) return true;
   if (abs((int16_t)raw - (int16_t)parameterPageRaw[pot]) < kSettingMovementThreshold) return false;
@@ -786,6 +704,7 @@ bool parameterPotUnlocked(uint8_t pot, uint16_t raw) {
   return true;
 }
 
+// Loads a program's default macro and LFO values.
 void loadProgramMacroDefaults(uint8_t programId) {
   for (uint8_t slot = 0; slot < kMacroSlotCount; ++slot) macroState->values[slot] = 64;
   macroState->lfoDepth[0] = macroState->lfoDepth[1] = 0;
@@ -818,9 +737,7 @@ void loadProgramMacroDefaults(uint8_t programId) {
   applyCurrentProgramMorph();
 }
 
-// Macro LFOs are intentionally evaluated in the foreground at 250 Hz.  They
-// only write resolved engine values, keeping descriptor lookup and routing out
-// of the 20 kHz audio ISR.
+// Advances the macro LFOs at 250 Hz, outside the audio ISR.
 void updateMacroLfos(unsigned long now) {
   if ((unsigned long)(now - lastMacroLfoMs) < 4) return;
   const uint8_t elapsed = min((unsigned long)(now - lastMacroLfoMs), 20UL);
@@ -870,6 +787,7 @@ void setup() {
   lastStepMs = millis();
 }
 
+// Runs the timing-critical tasks before and after the slower control scan.
 void loop() {
   unsigned long now = millis();
   runSequencer(now);
@@ -887,22 +805,19 @@ void loop() {
   renderDisplay(now);
 }
 
-// Channel bits 0/1/2 map to PB0/PB3/PB2. No ISR writes PORTB, so the
-// read-modify-write is safe; Timer1 owns PB1 through OC1A.
+// Selects a mux channel (bits 0/1/2 on PB0/PB3/PB2) and waits for it to settle.
 void selectMuxChannel(uint8_t channel) {
   PORTB = (PORTB & ~kMuxPortMask) | (channel & 0x05) | ((channel & 0x02) << 2);
   _delay_us(kMuxSettleUs);
 }
 
-// One conversion with AVcc reference; the core's init() enabled the ADC at
-// clock/128, as analogRead() used.
 uint16_t readAdc() {
   ADCSRA |= _BV(ADSC);
   while (ADCSRA & _BV(ADSC)) {}
   return ADC;
 }
 
-// Discards settling reads and returns the median to reject analog spikes.
+// Discards settling reads and returns the median to reject spikes.
 uint16_t readMedianAnalog(uint8_t channel) {
   uint16_t samples[kAnalogSamples];
   ADMUX = _BV(REFS0) | channel;
@@ -925,7 +840,7 @@ uint16_t filterAnalog(uint16_t raw, uint16_t &filtered, bool &ready) {
   return (filtered + (1 << (kAnalogFilterFractionBits - 1))) >> kAnalogFilterFractionBits;
 }
 
-// Accepts sustained directional movement while rejecting control jitter.
+// Accepts sustained directional movement and rejects jitter.
 uint16_t acceptAnalogMovement(uint16_t raw, AnalogMotionState &state, uint8_t threshold) {
   if (!state.ready) {
     state.accepted = raw;
@@ -958,19 +873,20 @@ uint16_t acceptAnalogMovement(uint16_t raw, AnalogMotionState &state, uint8_t th
   return state.accepted;
 }
 
+// Returns the pot position of a mapped value.
 uint16_t rawForMappedValue(int16_t value, int16_t outMin, int16_t outMax) {
   if (outMin == outMax) return 0;
   return constrain(map(value, outMin, outMax, 0, 1023), 0, 1023);
 }
 
-// Spreads the 959-count span between the endpoint margins over 0-1022 (x16/15
-// in 16 bits), so the margins do not swallow the values next to each endpoint.
 static_assert(kAnalogEndpointMargin == 32, "usableAnalogRaw scales the 959-count usable span");
+
+// Stretches the span between the endpoint margins to 0-1022.
 uint16_t usableAnalogRaw(uint16_t raw) {
   return (uint16_t)((raw - kAnalogEndpointMargin) << 4) / 15U;
 }
 
-// Maps a control only after it clears the next value boundary and hysteresis.
+// Maps a pot to a range; the value changes only past a boundary plus hysteresis.
 int16_t mapWithHysteresis(uint16_t raw, int16_t current, int16_t outMin, int16_t outMax) {
   const int16_t low = min(outMin, outMax);
   const int16_t high = max(outMin, outMax);
@@ -985,7 +901,6 @@ int16_t mapWithHysteresis(uint16_t raw, int16_t current, int16_t outMin, int16_t
   const uint16_t boundary = (currentRaw + nextRaw) / 2;
   const bool rising = nextRaw > currentRaw;
   if (rising ? raw <= boundary + kAnalogHysteresis : raw + kAnalogHysteresis >= boundary) return current;
-  // Map the reading less the hysteresis, so a slow turn advances one value at a time.
   const int16_t settled = constrain(map(rising ? raw - kAnalogHysteresis : raw + kAnalogHysteresis,
                                         0, 1023, outMin, outMax), low, high);
   return candidate > current ? max(settled, next) : min(settled, next);
@@ -995,14 +910,12 @@ uint8_t mapByteHysteresis(uint16_t raw, uint8_t current, int16_t outMin, int16_t
   return (uint8_t)mapWithHysteresis(raw, current, outMin, outMax);
 }
 
-// raw and count are 16-bit on the ATmega328P.  Keep this product wide: the
-// LFO's 94 bins otherwise overflow above roughly two thirds of the pot,
-// making its 0.05-0.20 Hz range unreachable.
+// Maps a pot to a reversed index; the 32-bit product avoids overflow.
 uint8_t reversedIndexForRaw(uint16_t raw, uint8_t count) {
   return count - 1 - min((uint8_t)(((uint32_t)raw * count) >> 10), (uint8_t)(count - 1));
 }
 
-// Maps a reversed control to a stable discrete index.
+// Maps a reversed pot to a stable discrete index.
 uint8_t mapIndexHysteresis(uint16_t raw, uint8_t current, uint8_t count) {
   if (count <= 1) return 0;
   if (raw <= kAnalogEndpointMargin) return count - 1;
@@ -1012,11 +925,6 @@ uint8_t mapIndexHysteresis(uint16_t raw, uint8_t current, uint8_t count) {
   const uint8_t candidate = reversedIndexForRaw(raw, count);
   if (current >= count || candidate == current) return candidate;
 
-  // Once past the boundary and hysteresis, map the reading less the
-  // hysteresis, so a slow turn advances one index at a time. The boundary is
-  // current's raw edge on the approached side. Keep its product 32-bit for the
-  // same reason as reversedIndexForRaw(): (count - current) << 10 overflows
-  // 16 bits once 64 or more bins remain, which stalled low LFO rates.
   const bool lower = candidate < current;
   const uint16_t boundary = ((uint32_t)(count - current - !lower) << 10) / count;
   if (lower) {
@@ -1027,9 +935,11 @@ uint8_t mapIndexHysteresis(uint16_t raw, uint8_t current, uint8_t count) {
   return max(reversedIndexForRaw(raw + kAnalogHysteresis, count), (uint8_t)(current + 1));
 }
 
+// Rebuilds the live voices after a PLAY setting changes.
 void revoiceHeldButtons();
 void stopNormalVoice(uint8_t voice, bool release = false);
 
+// Arms soft takeover for the four parameter pots.
 void lockParameterPageControls() {
   for (uint8_t pot = 0; pot < kSettingCount; ++pot) {
     parameterPageRaw[pot] = settingValues[pot];
@@ -1037,6 +947,7 @@ void lockParameterPageControls() {
   }
 }
 
+// Applies a parameter pot to its control on the current page.
 void applyParameterControl(uint8_t control, uint8_t pot, uint16_t raw, unsigned long now) {
   if (isMacroControl(control)) {
     applyMacroValue(control - PARAM_MACRO_0, pot, raw, now);
@@ -1092,7 +1003,7 @@ void readParameterPageControls(const uint16_t values[], unsigned long now) {
   }
 }
 
-// Scans a subset of multiplexed controls each loop to limit latency.
+// Scans one parameter pot and two step pots per loop to limit latency.
 void readControls(unsigned long now) {
   const uint8_t setting = settingScanChannel;
   selectMuxChannel(setting);
@@ -1117,10 +1028,8 @@ void readControls(unsigned long now) {
   }
 }
 
-// MODE + a DRONE parameter pot edits that pair's amplitude-LFO rate.
+// DRONE parameter pots set pair waveforms, or LFO rates while MODE is held.
 void readDroneControls(const uint16_t values[], unsigned long now) {
-  // MODE press and release relock the pots, so neither layer jumps to the
-  // position left by the other until that pot moves again.
   if (modeButtonStable == LOW) {
     for (uint8_t pair = 0; pair < kSettingCount; ++pair) {
       if (!parameterPotUnlocked(pair, values[pair])) continue;
@@ -1146,6 +1055,7 @@ void readDroneControls(const uint16_t values[], unsigned long now) {
   }
 }
 
+// Reads a SEQ step pot as a note, or a drum in DRM.
 void readSequencerStepPot(uint8_t step, unsigned long now) {
   selectMuxChannel(step);
   const uint16_t filtered = filterAnalog(readMedianAnalog(kStepAdcChannel), filteredStepRaw[step], stepFilterReady[step]);
@@ -1169,17 +1079,15 @@ void readSequencerStepPot(uint8_t step, unsigned long now) {
   }
 }
 
+// Reads PLAY step pots 1-3: octave, tempo, and arpeggio division.
 void readPlayStepPot(uint8_t step, unsigned long now) {
   selectMuxChannel(step);
   const uint16_t filtered = filterAnalog(readMedianAnalog(kStepAdcChannel), filteredStepRaw[step], stepFilterReady[step]);
   const uint16_t raw = acceptAnalogMovement(filtered, stepMotion[step], kStepMovementThreshold);
   if (step == 0) {
     const uint8_t next = mapIndexHysteresis(raw, playControls.octave, kPlayOctaveCount);
-    // Held notes keep sounding; the new octave applies from the next press,
-    // or the next clock for arpeggios, so turning the pot never retriggers.
     if (next != playControls.octave) { playControls.octave = next; displayDirty = true; }
   } else if (step == 1) {
-    // The tempo is shared with SEQ, so it waits for movement after entering PLAY.
     if (playBpmPotLocked) {
       if (abs((int16_t)raw - (int16_t)playBpmPotRaw) < kStepMovementThreshold) return;
       playBpmPotLocked = false;
@@ -1192,7 +1100,7 @@ void readPlayStepPot(uint8_t step, unsigned long now) {
   }
 }
 
-
+// Reads a DRONE step pot as oscillator frequency.
 void readDronePitchPot(uint8_t voice, unsigned long now) {
   const uint16_t lowPitch = pitchWordForFrequency(kDroneFrequencyMin);
   const uint16_t highPitch = pitchWordForFrequency(kDroneFrequencyMax);
@@ -1216,23 +1124,16 @@ void readDronePitchPot(uint8_t voice, unsigned long now) {
   }
 }
 
-// One short MODE tap pages through controls; two quick taps change mode.
+// Debounces MODE: one tap pages, two quick taps change mode, holding is a modifier.
 void scanModeButton(unsigned long now) {
   const uint8_t reading = (PINC >> kModeButtonBit) & 1;
   if (reading != modeButtonReading) { modeButtonReading = reading; modeButtonChangedAt = now; }
   if ((unsigned long)(now - modeButtonChangedAt) >= kButtonDebounceMs && reading != modeButtonStable) {
     modeButtonStable = reading;
-    // DRONE's waveform and MODE + pot LFO layers share pots; soft takeover
-    // applies whenever MODE switches between them.
     if (instrumentMode == MODE_DRONE) lockParameterPageControls();
     if (reading == LOW) {
       modeButtonPressedAt = now;
-      // A chord step may already be held: it can be accepted while MODE is
-      // still settling (see handleStepButton()).
       modeButtonChordUsed = modeChordStep != 255;
-      // The second tap counts when it is pressed within the window after the
-      // first release; requiring its release there was too tight for a real,
-      // debounced button.
       modeDoubleTapArmed = modePageTapPending &&
         (unsigned long)(now - modePageTapAt) <= kModeDoubleTapMs;
     } else if (!modeButtonChordUsed &&
@@ -1246,7 +1147,6 @@ void scanModeButton(unsigned long now) {
         modePageTapAt = now;
       }
     } else if (!modeButtonChordUsed) {
-      // A held MODE is only a modifier; it is never a standalone gesture.
       modePageTapPending = false;
     }
   }
@@ -1254,7 +1154,6 @@ void scanModeButton(unsigned long now) {
       (unsigned long)(now - modePageTapAt) > kModeDoubleTapMs) {
     modePageTapPending = false;
     if (instrumentMode == MODE_DRONE) {
-      // DRONE retains its dedicated controls and has no performance pages.
       displayDirty = true;
     } else {
       parameterPage = (parameterPage + 1) % parameterPageCount();
@@ -1266,6 +1165,7 @@ void scanModeButton(unsigned long now) {
   }
 }
 
+// Debounces the eight step buttons.
 void scanStepButtons(unsigned long now) {
   for (uint8_t button = 0; button < kStepCount; ++button) {
     selectMuxChannel(button);
@@ -1277,16 +1177,12 @@ void scanStepButtons(unsigned long now) {
   }
 }
 
-// Routes step buttons to gates, drone toggles, or live notes by mode.
+// Routes step buttons to MODE combinations, gates, drone toggles, or live notes.
 void handleStepButton(uint8_t button, bool pressed) {
   if (button == modeChordStep) {
     if (!pressed) modeChordStep = 255;
     return;
   }
-  // MODE + step 8 toggles GEN and MODE + step 2 swing in SEQ and PLAY;
-  // MODE + step 1 toggles PLAY's background sequence. The chord button's
-  // release is swallowed. MODE's raw reading also counts, so a chord whose
-  // step lands up to one debounce period before MODE plays no live note.
   if (pressed && (modeButtonStable == LOW || modeButtonReading == LOW) && instrumentMode != MODE_DRONE &&
       (button == 7 || button == 1 || (button == 0 && instrumentMode == MODE_PLAY))) {
     modeButtonChordUsed = true;
@@ -1297,7 +1193,6 @@ void handleStepButton(uint8_t button, bool pressed) {
       for (uint8_t step = 0; step < kStepCount; ++step) genSource[step] = step;
       genRandom = (genRandom ^ TCNT0) | 1;
     } else if (button == 1) {
-      // The new step lengths start with the next step.
       swingEnabled = !swingEnabled;
     } else togglePlaySequencer();
     displayDirty = true;
@@ -1321,7 +1216,7 @@ void handleStepButton(uint8_t button, bool pressed) {
   displayDirty = true;
 }
 
-// Stops the previous engine and initializes the selected mode safely.
+// Stops the previous engine and initializes the selected mode.
 void changeMode(InstrumentMode nextMode, unsigned long now) {
   if (nextMode == instrumentMode) return;
   const InstrumentMode previous = instrumentMode;
@@ -1373,7 +1268,7 @@ void changeMode(InstrumentMode nextMode, unsigned long now) {
   displayDirty = true;
 }
 
-// A PLAY note-off releases the voice with a short fade instead of cutting it.
+// Stops a voice, or fades it out when release is set.
 void stopNormalVoice(uint8_t voice, bool release) {
   if (release) edgar.releaseVoice(voice); else edgar.stopVoice(voice);
   normalCurrentPitch[voice] = 0; normalTargetPitch[voice] = 0; normalGlide[voice] = 0;
@@ -1388,9 +1283,7 @@ uint16_t pitchForNote(int16_t note) {
   return pitchWordForNote(note);
 }
 
-// Presets may specify every integer cent from -2400 to +2400. A nearby pitch
-// table value keeps the control-rate calculation compact; the residual is
-// then applied as a fixed-point detune correction.
+// Returns a note's pitch word detuned by -2400 to +2400 cents.
 uint16_t pitchForNoteWithDetuneCents(int16_t note, int16_t detuneCents) {
   detuneCents = constrain(detuneCents, -2400, 2400);
   const int16_t semitones = detuneCents >= 0 ?
@@ -1402,14 +1295,14 @@ uint16_t pitchForNoteWithDetuneCents(int16_t note, int16_t detuneCents) {
   return constrain(result, 1, 65535);
 }
 
-// Splits budget evenly between voices, capped at full level; a preset level
-// below 255 only attenuates that share.
+// Splits a level budget evenly between voices, capped at full scale and scaled by the preset level.
 __attribute__((noinline)) uint8_t outputLevel(uint16_t budget, uint8_t voices, uint8_t presetLevel) {
   uint16_t share = budget / voices;
   if (share > 255) share = 255;
   return (share * (presetLevel + 1U)) >> 8;
 }
 
+// Starts a voice at its live or sequence level, gliding when enabled.
 void triggerNormalVoice(uint8_t voice, uint16_t pitch, uint8_t glide) {
   normalTargetPitch[voice] = pitch; normalGlide[voice] = glide;
   if (glide == 0 || normalCurrentPitch[voice] == 0) {
@@ -1419,7 +1312,7 @@ void triggerNormalVoice(uint8_t voice, uint16_t pitch, uint8_t glide) {
     liveVoiceLevel : sequenceVoiceLevel);
 }
 
-// Moves active voices toward their target pitch once per millisecond.
+// Moves gliding voices toward their target pitch once per millisecond.
 void updateGlide(unsigned long now) {
   if ((unsigned long)(now - lastGlideMs) < 1) return;
   lastGlideMs = now;
@@ -1433,9 +1326,7 @@ void updateGlide(unsigned long now) {
   }
 }
 
-// Builds a sequencer voice stack from the selected preset. PLAY's background
-// plays up to its first two voices on voices 3-4, each at the fixed
-// background level.
+// Plays a sequencer note as the preset's voice stack; the PLAY background uses at most two voices.
 void triggerSequencerNote(uint8_t note, bool backgroundOnly) {
   edgar.stopDrum();
   MelodicPreset preset; readMelodicPreset(seqControls.preset, preset);
@@ -1450,7 +1341,6 @@ void triggerSequencerNote(uint8_t note, bool backgroundOnly) {
   sequenceVoiceLevel = backgroundOnly ? outputLevel(kBackgroundVoiceLevel, 1, preset.level) :
     outputLevel(kVoiceLevelBudget, voiceCount, preset.level);
 
-  // Unused voices stop first, so louder new levels never overlap them.
   for (uint8_t voice = firstVoice + voiceCount; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
   for (uint8_t voice = firstVoice; voice < firstVoice + voiceCount; ++voice) {
     const VoiceRecipe &recipe = preset.voices[voice - firstVoice];
@@ -1471,7 +1361,7 @@ void triggerDrum(uint8_t drum, bool backgroundOnly) {
     outputLevel(backgroundOnly ? kBackgroundDrumLevel : kVoiceLevelBudget, 1, preset.level));
 }
 
-// A step's note as GEN currently plays it.
+// Returns a step's note as GEN currently plays it.
 uint8_t sequencerStepNote(uint8_t step) {
   const uint8_t source = genSource[step];
   return stepNotes[source & 7] + (source & 0x80 ? 12 : 0);
@@ -1482,14 +1372,13 @@ void triggerSequencerStep(uint8_t step, bool backgroundOnly) {
   else triggerSequencerNote(sequencerStepNote(step), backgroundOnly);
 }
 
+// 8-bit xorshift for GEN.
 uint8_t nextGenRandom() {
   genRandom ^= genRandom << 7; genRandom ^= genRandom >> 5; genRandom ^= genRandom << 3;
   return genRandom;
 }
 
-// GEN changes at most one step per eight-step cycle, using only gated steps'
-// own notes and octaves, so the pitch-class set and rhythm stay as programmed.
-// Step 1 never changes and anchors the key; reverts pull the line back home.
+// GEN: changes at most one step per cycle; step 1, the rhythm, and the pitch set stay.
 void mutateGenerativeSteps() {
   const uint8_t roll = nextGenRandom();
   const uint8_t step = roll & 7;
@@ -1502,16 +1391,14 @@ void mutateGenerativeSteps() {
   genSource[step] = source;
 }
 
-// A step pair lasts two sixteenths. Swing lengthens the odd-numbered (first)
-// step and delays the even-numbered step by the same amount, so pairs and the
-// tempo stay exact. 60 BPM x 65% is 32,500, inside 16 bits.
+// Returns a step's length in ms; swing shifts time within each step pair.
 uint16_t stepIntervalMs(uint8_t step) {
   const uint16_t pair = 30000U / seqControls.bpm;
   const uint16_t first = swingEnabled ? pair * kSwingPercent / 100U : pair / 2;
   return (step & 1) ? pair - first : first;
 }
 
-// Advances the shared sequencer without accumulating large timing drift.
+// Advances the sequencer without accumulating timing drift.
 void runSequencer(unsigned long now) {
   if (instrumentMode == MODE_DRONE || (unsigned long)(now - lastStepMs) < nextStepIntervalMs) return;
   lastStepMs += nextStepIntervalMs;
@@ -1530,17 +1417,14 @@ void runSequencer(unsigned long now) {
   } else if (bitRead(seqGateMask, currentStep)) {
     triggerSequencerStep(currentStep, false);
   } else {
-    // A rest fades the previous step out instead of cutting it.
     edgar.releaseDrum();
     for (uint8_t voice = 0; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice, true);
   }
   currentStep = (currentStep + 1) % kStepCount;
-  // SEQ redraws its playhead every step; PLAY's play icon changes every two.
   if (instrumentMode == MODE_SEQ || !(playingStep & 1)) displayDirty = true;
 }
 
-// Clocks arpeggios from the sequencer position: each step spans six ticks,
-// interpolated from the elapsed part of the current step interval.
+// Clocks arpeggios at six ticks per sequencer step.
 void runArpeggio(unsigned long now) {
   if (instrumentMode != MODE_PLAY || playingStep >= kStepCount) return;
   uint8_t sub = (uint16_t)(now - lastStepMs) * 6U / nextStepIntervalMs;
@@ -1553,6 +1437,7 @@ void runArpeggio(unsigned long now) {
   if (due && playControls.style >= STYLE_ARP_UP) advanceArpeggio();
 }
 
+// Applies the PLAY program to the live voices and sets their level.
 void applyLiveConfiguration() {
   MelodicPreset preset; readMelodicPreset(playProgramId(), preset);
   applyCurrentProgramBusEffects();
@@ -1560,9 +1445,6 @@ void applyLiveConfiguration() {
   uint8_t envelope, envelopeLength;
   presetEnvelope(preset, envelope, envelopeLength);
   playGlide = activeMacroValue(MACRO_GLIDE, preset.glide);
-  // Live notes take effect at their next trigger. Every setting that changes
-  // the simultaneous voice count also stops and revoices the live notes.
-  // Arpeggios play a multi-voice program as one unison stack, like POLY.
   uint8_t liveVoices = 1;
   if (playControls.style == STYLE_CHORD) liveVoices = 3;
   else if (playControls.style == STYLE_POLY || preset.voiceCount > 1) {
@@ -1580,16 +1462,19 @@ void applyLiveConfiguration() {
   }
 }
 
+// Returns the scale note for a PLAY button.
 uint8_t liveNoteForButton(uint8_t button) {
   const int8_t offset = pgm_read_byte(&kScaleOffsets[playControls.scale][button]);
   return constrain(24 + playControls.octave * 12 + playControls.root + offset, 0, 127);
 }
 
+// Returns a scale degree's semitone offset, wrapping into higher octaves.
 int8_t scaleDegreeOffset(uint8_t scale, uint8_t degree) {
   const uint8_t length = pgm_read_byte(&kScaleLengths[scale]);
   return pgm_read_byte(&kScaleOffsets[scale][degree % length]) + (degree / length) * 12;
 }
 
+// Returns the most recently pressed held button, or -1.
 int8_t latestHeldButton() {
   int8_t latest = -1; uint16_t latestOrder = 0;
   for (uint8_t button = 0; button < kStepCount; ++button) {
@@ -1613,8 +1498,7 @@ void clearHeldNotes() {
   resetLiveAssignments();
 }
 
-// Plays one note as a multi-voice program's detuned unison stack across the
-// live pool: four oscillators normally, or three while the background sequences.
+// Plays one note as a multi-voice program's unison stack across the live voices.
 void triggerLiveStack(const MelodicPreset &preset, int16_t note, bool release) {
   const uint8_t liveEnd = liveVoiceEnd();
   const uint8_t stackVoiceCount = min(preset.voiceCount, liveEnd);
@@ -1627,15 +1511,11 @@ void triggerLiveStack(const MelodicPreset &preset, int16_t note, bool release) {
   for (uint8_t voice = stackVoiceCount; voice < liveEnd; ++voice) stopNormalVoice(voice, release);
 }
 
-// Assigns a free live voice or steals the oldest active one.
+// Assigns a free live voice, or steals the oldest one.
 void triggerPolyButton(uint8_t button) {
   const uint8_t liveEnd = liveVoiceEnd();
   MelodicPreset preset; readMelodicPreset(playProgramId(), preset);
-  // A multi-voice program is a unison stack in POLY.  It consumes the whole
-  // live pool: four oscillators normally, or three while the background sequences.
   if (preset.voiceCount > 1) { triggerLiveStack(preset, liveNoteForButton(button), false); return; }
-  // Free voices are taken from the bottom, so voice 3 is used last and
-  // starting the background sequence rarely has to end a live note.
   int8_t voice = -1;
   for (uint8_t candidate = 0; candidate < liveEnd; ++candidate) {
     if (liveButtonForVoice[candidate] < 0) { voice = candidate; break; }
@@ -1652,6 +1532,7 @@ void triggerPolyButton(uint8_t button) {
   triggerNormalVoice(voice, pitchForNote(liveNoteForButton(button)), playGlide);
 }
 
+// Plays the 1-3-5 chord of the latest held button.
 void triggerHeldChord() {
   const int8_t button = latestHeldButton();
   if (button < 0) {
@@ -1671,7 +1552,7 @@ uint8_t collectHeldButtons(uint8_t buttons[kStepCount]) {
   return count;
 }
 
-// Sounds an arpeggio note: a single voice, or a multi-voice program's unison stack.
+// Sounds an arpeggio note: one voice, or a multi-voice program's unison stack.
 void triggerArpeggioNote(int16_t note) {
   MelodicPreset preset; readMelodicPreset(playProgramId(), preset);
   if (preset.voiceCount > 1) { triggerLiveStack(preset, note, true); return; }
@@ -1679,7 +1560,7 @@ void triggerArpeggioNote(int16_t note) {
   triggerNormalVoice(0, pitchForNote(note), playGlide);
 }
 
-// Advances the current arpeggio pattern across held buttons, or the latest held chord.
+// Advances the arpeggio across the held buttons, or the latest held chord.
 void advanceArpeggio() {
   uint8_t buttons[kStepCount];
   const uint8_t count = collectHeldButtons(buttons);
@@ -1709,15 +1590,15 @@ void advanceArpeggio() {
     liveNoteForButton(buttons[position]));
 }
 
+// Plays a PLAY press; arpeggios pick it up at their next clock.
 void handleLivePress(uint8_t button) {
   applyLiveConfiguration();
   if (playControls.style == STYLE_POLY) triggerPolyButton(button);
   else if (playControls.style == STYLE_CHORD) triggerHeldChord();
-  // Arpeggios read heldButtonMask only from runSequencer(), so a key pressed
-  // between clocks cannot retrigger an off-grid note.
   else if ((heldButtonMask & ~(1 << button)) == 0) { arpPosition = 0; arpDirection = 1; }
 }
 
+// Releases a PLAY note; arpeggios pick it up at their next clock.
 void handleLiveRelease(uint8_t button) {
   if (playControls.style == STYLE_POLY) {
     MelodicPreset preset; readMelodicPreset(playProgramId(), preset);
@@ -1730,22 +1611,15 @@ void handleLiveRelease(uint8_t button) {
       stopNormalVoice(voice, true); liveButtonForVoice[voice] = -1; liveVoiceForButton[button] = -1;
     }
   } else if (playControls.style == STYLE_CHORD) triggerHeldChord();
-  // Keep the current arp note until the next sequencer clock, where the
-  // updated held-button set is applied.
 }
 
-// Fades PLAY's background notes or drum (voices 3-4).
+// Fades PLAY's background notes or drum.
 void releaseBackgroundVoices() {
   for (uint8_t voice = SYNTH_BACKGROUND_VOICE; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice, true);
   edgar.releaseDrum();
 }
 
-// Hands voice 3 between PLAY's background sequence and the live pool without
-// restarting ringing live notes. POLY fills voice 3 last, so only a fourth
-// held note or a unison stack's fourth voice fades when the sequence starts;
-// stopping it fades the background notes. The other live voices are only
-// capped to the new level share (a no-op when the share grows). Like a key
-// press, the toggle refreshes the live configuration.
+// Toggles PLAY's background sequence without restarting ringing live notes.
 void togglePlaySequencer() {
   playSequencerEnabled = !playSequencerEnabled;
   const int8_t button = liveButtonForVoice[SYNTH_BACKGROUND_VOICE];
@@ -1756,7 +1630,6 @@ void togglePlaySequencer() {
   for (uint8_t voice = 0; voice < SYNTH_BACKGROUND_VOICE; ++voice) edgar.limitLevel(voice, liveVoiceLevel);
 }
 
-// Rebuilds live voice assignments after a play setting changes.
 void revoiceHeldButtons() {
   if (instrumentMode != MODE_PLAY) return;
   for (uint8_t voice = 0; voice < liveVoiceEnd(); ++voice) stopNormalVoice(voice, true);
@@ -1810,7 +1683,7 @@ void frameNumber(uint8_t row, uint8_t column, uint16_t value) {
   frameText(row, column, text);
 }
 
-// Latches one LCD nibble (bits 7-4) with RS (bit 2); E is high for >= 1 us.
+// Latches one LCD nibble (bits 7-4) with RS (bit 2).
 void lcdNibble(uint8_t value) {
   PORTD = value;
   PORTD = value | kLcdEnable;
@@ -1818,22 +1691,21 @@ void lcdNibble(uint8_t value) {
   PORTD = value;
 }
 
-// Writes a command (rs = 0) or data byte (rs = kLcdRs), then waits out the
-// 37 us execution time scaled to the slowest 190 kHz controller clock.
+// Writes an LCD command (rs = 0) or data byte, then waits out its execution time.
 void lcdWrite(uint8_t value, uint8_t rs) {
   lcdNibble((value & 0xF0) | rs);
   lcdNibble((uint8_t)(value << 4) | rs);
   _delay_us(53);
 }
 
-// HD44780 4-bit initialization by instruction; CGRAM loads on demand.
 const uint8_t kLcdInitCommands[] PROGMEM = {
-  0x28,  // 4-bit, two lines, 5x8 font.
-  0x0C,  // Display on, cursor and blink off.
-  0x06,  // Increment, no shift.
-  0x01,  // Clear.
+  0x28,
+  0x0C,
+  0x06,
+  0x01,
 };
 
+// Initializes the HD44780 in 4-bit mode.
 void lcdBegin() {
   DDRD |= 0xFC;
   _delay_ms(50);
@@ -1842,13 +1714,12 @@ void lcdBegin() {
   _delay_us(53);
   for (uint8_t i = 0; i < sizeof(kLcdInitCommands); ++i) {
     lcdWrite(pgm_read_byte(&kLcdInitCommands[i]), 0);
-    _delay_ms(2);  // Covers clear's 1.52 ms at 270 kHz, scaled to 190 kHz.
+    _delay_ms(2);
   }
   memset(glyphKeys, 0xFF, sizeof(glyphKeys));
 }
 
-// Loads a glyph key into a CGRAM slot (about 0.55 ms). Every flush run sets
-// its DDRAM address first, so the address may be left in CGRAM.
+// Loads a CGRAM glyph: a bar or dash (height in bits 0-2), the playhead, or an icon.
 void loadGlyph(uint8_t slot, uint8_t key) {
   lcdWrite(0x40 | (slot << 3), 0);
   const uint8_t top = 7 - (key & 7);
@@ -1862,15 +1733,11 @@ void loadGlyph(uint8_t slot, uint8_t key) {
   }
 }
 
-// Maps placeholders to CGRAM codes 8-15. Glyphs already loaded keep their
-// slots, so a playhead move reloads at most two. No view needs more than
-// eight distinct glyphs (the SEQ contour: seven steps plus the playhead), so
-// pass 1 always finds a slot that pass 0 left unused.
+// Maps glyph placeholders to CGRAM codes 8-15, reusing glyphs already loaded.
 void resolveGlyphs() {
   char *const frame = &displayFrame[0][0];
   uint8_t used = 0;
   for (uint8_t pass = 0; pass < 2; ++pass) {
-    // Both rows as one array; row 1 starts at 17, and each row's NUL is skipped.
     for (uint8_t i = 0; i < sizeof(displayFrame); ++i) {
       const uint8_t key = (uint8_t)frame[i] - kGlyphPlaceholder;
       if (key >= kGlyphKeyEnd) continue;
@@ -1889,7 +1756,7 @@ void resolveGlyphs() {
   }
 }
 
-// Writes only LCD regions that differ from the rendered frame.
+// Writes only the LCD characters that changed.
 void flushDisplayFrame() {
   for (uint8_t row = 0; row < 2; ++row) {
     uint8_t column = 0;
@@ -1897,7 +1764,7 @@ void flushDisplayFrame() {
       while (column < 16 && renderedFrameReady &&
              displayFrame[row][column] == renderedFrame[row][column]) ++column;
       if (column >= 16) break;
-      lcdWrite(0x80 | (row ? 0x40 : 0) | column, 0);  // Set DDRAM address.
+      lcdWrite(0x80 | (row ? 0x40 : 0) | column, 0);
       while (column < 16 && (!renderedFrameReady ||
              displayFrame[row][column] != renderedFrame[row][column])) {
         lcdWrite(displayFrame[row][column], kLcdRs);
@@ -1909,7 +1776,7 @@ void flushDisplayFrame() {
   renderedFrameReady = true;
 }
 
-// Chooses the active view and refreshes it only when needed.
+// Redraws the active view only when needed.
 void renderDisplay(unsigned long now) {
   const bool inlineEditVisible = (long)(inlineEditUntilMs - now) > 0 &&
     ((instrumentMode != MODE_DRONE && (editedStep < kStepCount || editedPlayShift != 0)) ||
@@ -1948,6 +1815,7 @@ void frameMacroName(uint8_t column, uint8_t parameter) {
   }
 }
 
+// Draws a pot's parameter name, or the value of self-describing controls.
 void renderParameterName(uint8_t pot) {
   const uint8_t column = pot * 4;
   const uint8_t control = parameterControlForPot(pot);
@@ -1961,7 +1829,6 @@ void renderParameterName(uint8_t pot) {
   }
   switch (control) {
     case PARAM_SEQ_TUNE: frameText(0, column, F("TUN")); break;
-    // Program, tempo, root, scale, and style values identify themselves, so they stay shown.
     case PARAM_SEQ_PRESET:
     case PARAM_PLAY_PRESET:
     case PARAM_SEQ_BPM:
@@ -1997,17 +1864,12 @@ void renderParameterValue(uint8_t pot) {
   }
 }
 
-// Each step is a bar whose height follows its note as GEN plays it (C2-B3 in
-// eight heights of three semitones, so B3 fills the character; clamped above),
-// or KICK/SNAR/CHH low, middle, and full height in DRM. Disabled
-// steps show only a dotted dash at that height; the playhead step is a plain
-// checkerboard.
+// Draws SEQ: parameter names and the step contour.
 void renderSequencerDashboard(bool inlineEditVisible) {
   for (uint8_t pot = 0; pot < 4; ++pot) renderParameterName(pot);
   const bool drums = isDrumProgram(seqControls.preset);
   for (uint8_t step = 0; step < kStepCount; ++step) {
     const uint8_t height = drums ? stepDrums[step] * 3 + 1
-      // x86 >> 8 equals / 3 over the span, including GEN's octave up.
       : min((uint8_t)((uint8_t)(sequencerStepNote(step) - kStepNoteMin) * 86U >> 8), (uint8_t)7);
     frameChar(1, step, kGlyphPlaceholder | (step == playingStep ? kGlyphPlayhead
       : height | (bitRead(seqGateMask, step) ? kGlyphBar : 0)));
@@ -2027,10 +1889,9 @@ void renderSequencerDashboard(bool inlineEditVisible) {
   } else if (inlineEditVisible && editedPlayShift > 0) renderParameterValue(editedPlayShift - 1);
 }
 
+// Draws PLAY: parameter names, sequence status, octave, tempo, and division.
 void renderPlayDashboard(bool inlineEditVisible) {
   for (uint8_t pot = 0; pot < 4; ++pot) renderParameterName(pot);
-  // The play icon blinks with the beat: lit for the first two steps of each
-  // four-step quarter note. GEN's asterisk replaces it and blinks alike.
   frameChar(1, 0, !playSequencerEnabled ? kGlyphPlaceholder | kGlyphStop
     : (playingStep & 2) ? ' ' : generativeEnabled ? kGenChar : kGlyphPlaceholder | kGlyphPlay);
   frameChar(1, 1, 'O'); frameChar(1, 2, '1' + playControls.octave);
@@ -2039,6 +1900,7 @@ void renderPlayDashboard(bool inlineEditVisible) {
   if (inlineEditVisible && editedPlayShift > 0) renderParameterValue(editedPlayShift - 1);
 }
 
+// Draws DRONE: pair waveforms and oscillator gates.
 void renderDroneDashboard(bool inlineEditVisible) {
   frameText(0, 0, F("DRN "));
   for (uint8_t pair = 0; pair < kSettingCount; ++pair) {

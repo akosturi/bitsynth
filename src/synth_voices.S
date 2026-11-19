@@ -1,27 +1,27 @@
-; BitSynth block renderer for the ATmega328P (called from TIMER2_COMPB in
-; synth.h): voice blocks, drum playback, per-block voice control, and the
-; bus stage (low-pass filter, VCA, chorus, dither, and quantizer). Every routine is bit-exact
-; with the C formulas documented in synth.h and follows the avr-gcc ABI
-; (r2-r17 and r28-r29 preserved, r1 zero on return).
-;
-; void synthRenderVoices(SynthVoice *voice, uint8_t count,
-;                        int16_t *accumulator, uint8_t flags, int16_t *dry);
-;
-; Adds a four-sample block of each of `count` consecutive voices to
-; accumulator[0..3] (Q7). With RENDER_CLEAR the accumulators start at zero
-; instead of being loaded. With RENDER_SPLIT only the first BACKGROUND_VOICE
-; voices go to accumulator; the remaining count - BACKGROUND_VOICE voices are
-; then rendered unmorphed, from zero, and stored to dry[0..3].
-; Per sample a voice advances its 16-bit phase by its step, reads a signed
-; 9-bit sample, and adds floor(sample * amp / 2). With RENDER_MORPH every
-; voice crossfades the two block-constant sources described by
-; synthMorphSourceA/B, synthMorphKinds, and synthMorphAmount:
-; a + floor((b - a) * amount / 128). The caller normalizes a square or noise A
-; with a table B to table A, B square or noise, and 128 - amount, which is
-; exactly equal.
-;
-; Looped kernels keep the four accumulators in r2:r3..r8:r9, add each sample
-; to r2:r3, and rotate the pairs, so four iterations restore their order.
+// BitSynth block renderer for the ATmega328P (called from TIMER2_COMPB in
+// synth.h): voice blocks, drum playback, per-block voice control, and the
+// bus stage (low-pass filter, VCA, chorus, dither, and quantizer). Every
+// routine is bit-exact with the formula documented above it and follows the
+// avr-gcc ABI (r2-r17 and r28-r29 preserved, r1 zero on return).
+//
+// void synthRenderVoices(SynthVoice *voice, uint8_t count,
+//                        int16_t *accumulator, uint8_t flags, int16_t *dry);
+//
+// Adds a four-sample block of each of `count` consecutive voices to
+// accumulator[0..3] (Q7). With RENDER_CLEAR the accumulators start at zero
+// instead of being loaded. With RENDER_SPLIT only the first BACKGROUND_VOICE
+// voices go to accumulator; the remaining count - BACKGROUND_VOICE voices are
+// then rendered unmorphed, from zero, and stored to dry[0..3].
+// Per sample a voice advances its 16-bit phase by its step, reads a signed
+// 9-bit sample, and adds floor(sample * amp / 2). With RENDER_MORPH every
+// voice crossfades the two block-constant sources described by
+// synthMorphSourceA/B, synthMorphKinds, and synthMorphAmount:
+// a + floor((b - a) * amount / 128). The caller normalizes a square or noise A
+// with a table B to table A, B square or noise, and 128 - amount, which is
+// exactly equal.
+//
+// Looped kernels keep the four accumulators in r2:r3..r8:r9, add each sample
+// to r2:r3, and rotate the pairs, so four iterations restore their order.
 
 __zero_reg__ = 1
 __tmp_reg__ = 0
@@ -42,32 +42,32 @@ VOICE_VIBRATO_PEAK = 19
 VOICE_VIBRATO_DEPTH = 21
 VOICE_LEVEL = 22
 VOICE_SIZE = 23
-; First dry PLAY background voice with RENDER_SPLIT (SYNTH_BACKGROUND_VOICE).
+// First dry PLAY background voice with RENDER_SPLIT (SYNTH_BACKGROUND_VOICE).
 BACKGROUND_VOICE = 3
-; Bus limiter gain recovery per control block (SYNTH_LIMITER_RELEASE).
+// Bus limiter gain recovery per control block.
 LIMITER_RELEASE = 48
 
-; synthMorphKinds bits (a clear pair of bits means a flash wavetable)
+// synthMorphKinds bits (a clear pair of bits means a flash wavetable)
 KIND_A_SQUARE = 0
 KIND_A_NOISE = 1
 KIND_B_SQUARE = 2
 KIND_B_NOISE = 3
 
-; synthRenderVoices flags
+// synthRenderVoices flags
 RENDER_MORPH = 0
 RENDER_CLEAR = 1
 RENDER_SPLIT = 2
 
-; Register use
-;   r2:r3 .. r8:r9  accumulators         r10:r11 phase      r12:r13 step
-;   r14:r15 source / slot A              r16 amp            r17 kinds | count
-;   r18 remaining voices (dry voices in the high nibble)   r19 morph amount   r20:r21 sample A
-;   r22:r23 sample B / difference        r24:r25 slot B     X accumulator ptr
-;   Y voice pointer                      Z table pointer    T morph flag
+// Register use
+//   r2:r3 .. r8:r9  accumulators         r10:r11 phase      r12:r13 step
+//   r14:r15 source / slot A              r16 amp            r17 kinds | count
+//   r18 remaining voices (dry voices in the high nibble)   r19 morph amount   r20:r21 sample A
+//   r22:r23 sample B / difference        r24:r25 slot B     X accumulator ptr
+//   Y voice pointer                      Z table pointer    T morph flag
 
-; Adds floor(\lo:\hi * amp / 2) to r2:r3 for a signed 9-bit sample. The high
-; byte is 0x00 or 0xFF, so lo * amp - (hi & amp) * 256 is the exact 17-bit
-; product; its sign is the subtraction's borrow, shifted back in by ror.
+// Adds floor(\lo:\hi * amp / 2) to r2:r3 for a signed 9-bit sample. The high
+// byte is 0x00 or 0xFF, so lo * amp - (hi & amp) * 256 is the exact 17-bit
+// product; its sign is the subtraction's borrow, shifted back in by ror.
 .macro SCALE_ADD_TO lo, hi, alo, ahi
   mul \lo, r16
   and \hi, r16
@@ -82,8 +82,8 @@ RENDER_SPLIT = 2
   SCALE_ADD_TO \lo, \hi, r2, r3
 .endm
 
-; r20:r21 += floor((r22:r23 - r20:r21) * r19 / 128), exact, from a 24-bit
-; product in r0:r31:r30 built from the low and signed high partial products.
+// r20:r21 += floor((r22:r23 - r20:r21) * r19 / 128), exact, from a 24-bit
+// product in r0:r31:r30 built from the low and signed high partial products.
 .macro BLEND
   sub r22, r20
   sbc r23, r21
@@ -100,7 +100,7 @@ RENDER_SPLIT = 2
   adc r21, r0
 .endm
 
-; Reads table \slo:\shi at 2 * phase high byte into \dlo:\dhi.
+// Reads table \slo:\shi at 2 * phase high byte into \dlo:\dhi.
 .macro TABLE_READ slo, shi, dlo, dhi
   movw r30, \slo
   add r30, r11
@@ -111,7 +111,7 @@ RENDER_SPLIT = 2
   lpm \dhi, Z
 .endm
 
-; Unrolled sample of the flash wavetable r14:r15.
+// Unrolled sample of the flash wavetable r14:r15.
 .macro T_SAMPLE alo, ahi
   add r10, r12
   adc r11, r13
@@ -120,7 +120,7 @@ RENDER_SPLIT = 2
   clr r1
 .endm
 
-; Unrolled morph samples: table A (r14:r15) with table B (r24:r25) ...
+// Unrolled morph samples: table A (r14:r15) with table B (r24:r25) ...
 .macro TT_SAMPLE alo, ahi
   add r10, r12
   adc r11, r13
@@ -131,7 +131,7 @@ RENDER_SPLIT = 2
   clr r1
 .endm
 
-; ... and table A with a square B of pulse width r24:r25.
+// ... and table A with a square B of pulse width r24:r25.
 .macro TS_SAMPLE alo, ahi
   add r10, r12
   adc r11, r13
@@ -149,7 +149,7 @@ RENDER_SPLIT = 2
   clr r1
 .endm
 
-; Moves the next accumulator into r2:r3 and restores the zero register.
+// Moves the next accumulator into r2:r3 and restores the zero register.
 .macro ROTATE
   movw r0, r2
   movw r2, r4
@@ -159,9 +159,9 @@ RENDER_SPLIT = 2
   clr r1
 .endm
 
-; Reads one sample into \dlo:\dhi from the source kind in r17 bits
-; \square/\noise. \slo:\shi holds a table address, a pulse width, or a noise
-; LFSR state. \dlo and \dhi must be upper registers.
+// Reads one sample into \dlo:\dhi from the source kind in r17 bits
+// \square/\noise. \slo:\shi holds a table address, a pulse width, or a noise
+// LFSR state. \dlo and \dhi must be upper registers.
 .macro FETCH square, noise, slo, shi, dlo, dhi
   sbrc r17, \square
   rjmp 1f
@@ -277,7 +277,7 @@ synthRenderVoices:
   brne 4f
   rjmp .Lnoise
 
-  ; Flash wavetable.
+  // Flash wavetable.
 4:
   T_SAMPLE r2, r3
   T_SAMPLE r4, r5
@@ -285,7 +285,7 @@ synthRenderVoices:
   T_SAMPLE r8, r9
   rjmp .Lstore
 
-  ; Generated square: both scaled levels are constant for the block.
+  // Generated square: both scaled levels are constant for the block.
 .Lsquare:
   ldi r20, 0xFF
   mul r20, r16
@@ -320,7 +320,7 @@ synthRenderVoices:
   brcc .Lsquare_loop
   rjmp .Lstore
 
-  ; Generated white noise from the voice's 16-bit Galois LFSR.
+  // Generated white noise from the voice's 16-bit Galois LFSR.
 .Lnoise:
   ldd r14, Y + VOICE_NOISE
   ldd r15, Y + VOICE_NOISE + 1
@@ -344,7 +344,7 @@ synthRenderVoices:
   std Y + VOICE_NOISE + 1, r15
   rjmp .Ladvance
 
-  ; Two-source waveform morph.
+  // Two-source waveform morph.
 .Lmorph:
   lds r17, synthMorphKinds
   lds r19, synthMorphAmount
@@ -416,7 +416,7 @@ synthRenderVoices:
   std Y + VOICE_NOISE + 1, r25
   rjmp .Lstore
 
-  ; Silent or noise voices keep phase continuity without reading a table.
+  // Silent or noise voices keep phase continuity without reading a table.
 .Ladvance:
   movw r20, r12
   lsl r20
@@ -447,9 +447,9 @@ synthRenderVoices:
   swap r18
   tst r18
   breq 4f
-  ; Continue with the r18 dry background voices: unmorphed, from zero,
-  ; stored to dry[] (the saved r16:r17 argument, four and three bytes above
-  ; the stack pointer).
+  // Continue with the r18 dry background voices: unmorphed, from zero,
+  // stored to dry[] (the saved r16:r17 argument, four and three bytes above
+  // the stack pointer).
   in r30, IO_SPL
   in r31, IO_SPH
   ldd r26, Z + 4
@@ -483,28 +483,41 @@ synthRenderVoices:
   ret
   .size synthRenderVoices, . - synthRenderVoices
 
-; void synthFinishBlock(int16_t *bus, const int16_t *dry, uint16_t *output,
-;                       uint8_t flags);
-;
-; Finishes an eight-sample block in one pass. With FINISH_VCA the bus is
-; scaled by the low byte of playVcaGain (1-255 or 0), with FINISH_CHORUS it
-; passes through the 50% wet chorus, and with FINISH_DRY dry[] is added. The
-; sum is dithered, quantized with error feedback, and written as 9-bit PWM
-; compare values. Every step is bit-exact with the documented C formulas in
-; synth.h.
+// void synthFinishBlock(int16_t *bus, const int16_t *dry, uint16_t *output,
+//                       uint8_t flags);
+//
+// Finishes an eight-sample block in one pass. With FINISH_VCA the bus is
+// scaled by the low byte of playVcaGain (1-255 or 0), with FINISH_CHORUS it
+// passes through the 50% wet chorus, and with FINISH_DRY dry[] is added. The
+// sum is dithered, quantized with error feedback, and written as 9-bit PWM
+// compare values.
+//
+// VCA (scalePlayMix in synth.h), with gain = playVcaGain (0-255):
+//   y = sign(x) * (high(|x|) * gain + ((low(|x|) * (gain / 2) * 2 + 128) >> 8))
+// Chorus, per sample:
+//   lfoPhase += lfoStep; triangle = lfoPhase >> 16, mirrored when bit 31 is set
+//   high = triangle >> 7; low = (uint8_t)(triangle << 1)
+//   delayQ8 = 8500 + high * 0x49 + (high * 0xCC >> 8) + (low * 0x49 >> 8)
+//   (triangle * 18892 / 32768, i.e. 1.66-5.35 ms, within 1/128 sample)
+//   dryHalf = x >> 1, stored at the write index; first/next are the samples
+//   delayQ8 >> 8 and that plus one older
+//   y = dryHalf + first + floor((next - first) * (delayQ8 & 0xFF) / 256)
+// Quantizer, with an 8-bit Galois LFSR (taps 0xB8):
+//   s = mix + error + ((lfsr & 15) - (lfsr >> 4)) * 4; t = s + 64
+//   pwm = (t >> 7) + 256; error = (t & 127) - 64
 
 FINISH_VCA = 0
 FINISH_CHORUS = 1
 FINISH_DRY = 2
 CHORUS_SAMPLES = 108
-; -SYNTH_CHORUS_MIN_DELAY_Q8 (8500) for subi/sbci addition.
+// -SYNTH_CHORUS_MIN_DELAY_Q8 (8500) for subi/sbci addition.
 CHORUS_MIN_DELAY_NEG = 0xDECC
 
-; Register use
-;   r2:r3 quantization error  r4:r5 output pointer   r6:r7 chorus dry half
-;   r8..r11 chorus step        r12..r15 chorus phase  r16 VCA gain
-;   r17 chorus write index     r19 flags | count      X bus pointer
-;   Y dry pointer              Z delay line / output pointer
+// Register use
+//   r2:r3 quantization error  r4:r5 output pointer   r6:r7 chorus dry half
+//   r8..r11 chorus step        r12..r15 chorus phase  r16 VCA gain
+//   r17 chorus write index     r19 flags | count      X bus pointer
+//   Y dry pointer              Z delay line / output pointer
 
   .section .text.synthFinishBlock,"ax",@progbits
   .global synthFinishBlock
@@ -560,7 +573,7 @@ synthFinishBlock:
   ld r25, X+
   sbrs r19, FINISH_VCA
   rjmp .Lno_vca
-  ; scalePlayMix: |x| high * gain + ((|x| low * (gain / 2) * 2 + 128) >> 8).
+  // scalePlayMix: |x| high * gain + ((|x| low * (gain / 2) * 2 + 128) >> 8).
   tst r16
   brne 2f
   clr r24
@@ -594,7 +607,7 @@ synthFinishBlock:
 .Lno_vca:
   sbrs r19, FINISH_CHORUS
   rjmp .Lno_chorus
-  ; Advance the LFO; its upper 16 bits, mirrored, form a 15-bit triangle.
+  // Advance the LFO; its upper 16 bits, mirrored, form a 15-bit triangle.
   add r12, r8
   adc r13, r9
   adc r14, r10
@@ -605,8 +618,8 @@ synthFinishBlock:
   com r20
   com r21
 4:
-  ; high = triangle >> 7, low = triangle << 1;
-  ; delay = 8500 + high*0x49 + (high*0xCC >> 8) + (low*0x49 >> 8).
+  // high = triangle >> 7, low = triangle << 1;
+  // delay = 8500 + high*0x49 + (high*0xCC >> 8) + (low*0x49 >> 8).
   mov r22, r20
   lsl r22
   mov r23, r21
@@ -625,8 +638,8 @@ synthFinishBlock:
   adc r21, r1
   subi r20, lo8(CHORUS_MIN_DELAY_NEG)
   sbci r21, hi8(CHORUS_MIN_DELAY_NEG)
-  ; Write the dry half, then read the delayed pair. r21 = whole samples,
-  ; r20 = Q8 fraction.
+  // Write the dry half, then read the delayed pair. r21 = whole samples,
+  // r20 = Q8 fraction.
   movw r6, r24
   asr r7
   ror r6
@@ -667,7 +680,7 @@ synthFinishBlock:
   adc r31, r1
   ld r22, Z
   ldd r23, Z + 1
-  ; first + (next - first) * fraction / 256, exact, then add the dry half.
+  // first + (next - first) * fraction / 256, exact, then add the dry half.
   sub r22, r24
   sbc r23, r25
   mov r18, r20
@@ -688,7 +701,7 @@ synthFinishBlock:
   add r24, r20
   adc r25, r21
 1:
-  ; 8-bit Galois LFSR dither: ((low nibble - high nibble) << 2).
+  // 8-bit Galois LFSR dither: ((low nibble - high nibble) << 2).
   lds r18, pwmDitherLfsr
   lsr r18
   brcc 2f
@@ -711,8 +724,8 @@ synthFinishBlock:
   adc r25, r3
   add r24, r20
   adc r25, r21
-  ; t = sample + 64; error = (t & 127) - 64; PWM = (t >> 7) + 256.
-  ; t >> 7 is always -256..255, so the PWM value needs no clipping.
+  // t = sample + 64; error = (t & 127) - 64; PWM = (t >> 7) + 256.
+  // t >> 7 is always -256..255, so the PWM value needs no clipping.
   subi r24, 0xC0
   sbci r25, 0xFF
   mov r2, r24
@@ -737,8 +750,8 @@ synthFinishBlock:
   sts pwmQuantizationError + 1, r3
   rjmp .Lfinish_effects_done
 
-  ; Without bus effects: bus (+ dry) straight to the quantizer, with the
-  ; dither LFSR kept in r18.
+  // Without bus effects: bus (+ dry) straight to the quantizer, with the
+  // dither LFSR kept in r18.
 .Lquantize_only:
   lds r18, pwmDitherLfsr
   movw r30, r4
@@ -821,27 +834,29 @@ synthFinishBlock:
   ret
   .size synthFinishBlock, . - synthFinishBlock
 
-; void synthFilterBlock(int16_t *bus, uint8_t coefficient, uint8_t damping,
-;                       uint8_t gain);
-;
-; Chamberlin state-variable low-pass over an eight-sample bus block, in
-; place. With f = coefficient (1-255), q = damping (1-128), g = gain
-; (1-128), L = busFilterLow and B = busFilterBand, per sample exactly
-; (int16_t values; sat() saturates a sum or difference to -32768..32767):
-;   h = x >> 2
-;   L = sat(L + ((B * f) >> 8))
-;   H = sat(sat(((h * g) >> 7) - ((B * q) >> 7)) - L)
-;   B = sat(B + ((H * f) >> 8))
-;   x = clamp(L, -8160, 8128) * 4
-; Each product is a signed 24-bit value built from the low and signed high
-; partial products; bits 8..23 (f) or 7..22 (g, q) are the 16-bit result.
-; After a signed overflow the result's sign is inverted, so each saturation
-; stub picks 0x7FFF for a negative and 0x8000 for a positive wrapped result.
-;
-; Register use
-;   r24:r25 L   r20:r21 B   r22 f   r23 q   r18 g   r16:r17 x, h, then H
-;   r26 r27 partial-product bytes, then output   r14 r15 clamp limit high
-;   bytes   r28 count   r29 zero   Z bus pointer
+// void synthFilterBlock(int16_t *bus, uint8_t coefficient, uint8_t damping,
+//                       uint8_t gain);
+//
+// Chamberlin state-variable low-pass over an eight-sample bus block, in
+// place. f = 2 sin(pi fc / 20 kHz) * 256 (about 100 Hz-3.3 kHz) and
+// Q = 128 / q; the caller passes g = (5 * q + 384) >> 3, between 1 and 1/Q,
+// so the passband falls by g / 128 while the resonant peak rises by g / q. With f = coefficient (1-255), q = damping (1-128), g = gain
+// (1-128), L = busFilterLow and B = busFilterBand, per sample exactly
+// (int16_t values; sat() saturates a sum or difference to -32768..32767):
+//   h = x >> 2
+//   L = sat(L + ((B * f) >> 8))
+//   H = sat(sat(((h * g) >> 7) - ((B * q) >> 7)) - L)
+//   B = sat(B + ((H * f) >> 8))
+//   x = clamp(L, -8160, 8128) * 4
+// Each product is a signed 24-bit value built from the low and signed high
+// partial products; bits 8..23 (f) or 7..22 (g, q) are the 16-bit result.
+// After a signed overflow the result's sign is inverted, so each saturation
+// stub picks 0x7FFF for a negative and 0x8000 for a positive wrapped result.
+//
+// Register use
+//   r24:r25 L   r20:r21 B   r22 f   r23 q   r18 g   r16:r17 x, h, then H
+//   r26 r27 partial-product bytes, then output   r14 r15 clamp limit high
+//   bytes   r28 count   r29 zero   Z bus pointer
 
   .section .text.synthFilterBlock,"ax",@progbits
   .global synthFilterBlock
@@ -980,15 +995,23 @@ synthFilterBlock:
   rjmp .Lfilter_band_done
   .size synthFilterBlock, . - synthFilterBlock
 
-; void synthUpdateVoices(int8_t vibratoLfo);
-;
-; Once per block, for each of the first `count` voices: advances the envelope, looks
-; up its value, and scales it by the voice level to
-; amp = envelope * (level + 1) / 256, so level 255 keeps the envelope exact;
-; then it sets the oscillator step from the pitch plus
-; the exact floor(vibratoPeak * vibratoLfo / 256) vibrato offset. Afterwards
-; the bus limiter (see synth.h) scales every amp by one shared gain so the
-; amps and the drum's envelope peak cannot exceed full scale together.
+// void synthUpdateVoices(int8_t vibratoLfo, uint8_t count);
+//
+// Once per four-sample block, for each of the first `count` voices:
+//   if (!(envelopePhase & 0x8000)) { envelopePhase += envelopeStep;
+//     amp = (envelopePhase & 0x8000) ? 0 :
+//       envelope[envelopePhase >> 8] * (level + 1) >> 8; }
+//   else amp = 0
+//   step = pitch + floor(vibratoPeak * vibratoLfo / 256) when vibratoDepth != 0
+// Then the bus limiter, with S = the sum of those amps, Sc = (S + 7) >> 3,
+// d = drumActive ? drumEnvelope >> 8 : 0, L = 8192 - 32 * d, and
+// G = synthLimiterGain:
+//   G = min(G + LIMITER_RELEASE, 0xFFFF); k = G >> 8
+//   if (Sc * (k + 1) >= L) { k = the largest k with Sc * (k + 1) < L, else 0;
+//     G = k << 8 }
+//   every amp = amp * (k + 1) >> 8
+// so the amps and the drum peak never sum above full scale. The gain drops
+// at once and recovers in about 0.14 s; below full scale it is unity.
 
   .section .text.synthUpdateVoices,"ax",@progbits
   .global synthUpdateVoices
@@ -1055,7 +1078,7 @@ synthUpdateVoices:
   adiw r28, VOICE_SIZE
   dec r25
   brne .Lcontrol_voice
-  ; Bus limiter. r23 = count, r18 = d = drum envelope peak (0 when inactive).
+  // Bus limiter. r23 = count, r18 = d = drum envelope peak (0 when inactive).
   mov r23, r24
   clr r18
   lds r19, drumActive
@@ -1063,7 +1086,7 @@ synthUpdateVoices:
   breq 1f
   lds r18, drumEnvelope + 1
 1:
-  ; G = min(G + LIMITER_RELEASE, 0xFFFF); k = r25.
+  // G = min(G + LIMITER_RELEASE, 0xFFFF); k = r25.
   lds r24, synthLimiterGain
   lds r25, synthLimiterGain + 1
   adiw r24, LIMITER_RELEASE
@@ -1071,7 +1094,7 @@ synthUpdateVoices:
   ldi r24, 0xFF
   ldi r25, 0xFF
 2:
-  ; r26 = Sc = (S + 7) >> 3, where S = r27:r26 <= 1275, so r27 becomes zero.
+  // r26 = Sc = (S + 7) >> 3, where S = r27:r26 <= 1275, so r27 becomes zero.
   adiw r26, 7
   lsr r27
   ror r26
@@ -1079,23 +1102,23 @@ synthUpdateVoices:
   ror r26
   lsr r27
   ror r26
-  ; r21:r20 = L - 1 = 8191 - 32 * d.
+  // r21:r20 = L - 1 = 8191 - 32 * d.
   ldi r19, 32
   mul r18, r19
   ldi r20, 0xFF
   ldi r21, 0x1F
   sub r20, r0
   sbc r21, r1
-  ; Keep k while Sc * (k + 1) <= L - 1.
+  // Keep k while Sc * (k + 1) <= L - 1.
   mul r26, r25
   add r0, r26
   adc r1, r27
   cp r20, r0
   cpc r21, r1
   brsh .Lgain_ok
-  ; Otherwise k = q - 1 (0 when q = 0) for q = floor((L - 1) / Sc), the
-  ; largest k that fits; G restarts at k * 256. Sc * (k + 1) > L - 1 makes
-  ; q < 256, so a restoring division with an 8-bit quotient in r20 suffices.
+  // Otherwise k = q - 1 (0 when q = 0) for q = floor((L - 1) / Sc), the
+  // largest k that fits; G restarts at k * 256. Sc * (k + 1) > L - 1 makes
+  // q < 256, so a restoring division with an 8-bit quotient in r20 suffices.
   ldi r22, 8
 3:
   lsl r20
@@ -1119,7 +1142,7 @@ synthUpdateVoices:
   clr r1
   sts synthLimiterGain, r24
   sts synthLimiterGain + 1, r25
-  ; amp = amp * (k + 1) >> 8; k = 255 is unity, so it is skipped.
+  // amp = amp * (k + 1) >> 8; k = 255 is unity, so it is skipped.
   cpi r25, 0xFF
   breq 8f
   ldi r28, lo8(synthVoices)
@@ -1142,17 +1165,17 @@ synthUpdateVoices:
   ret
   .size synthUpdateVoices, . - synthUpdateVoices
 
-; void synthRenderDrum(int16_t *accumulator);
-;
-; Stores the active drum's four-sample block. Per sample, while the envelope
-; is nonzero and the sample index is inside the sample, it reads the packed
-; offset-binary 9-bit sample, scales it by the envelope's high byte with
-; floor(sample * gain / 2), advances the 16.16 sample phase, and decays the
-; envelope. When the end is reached, drumActive is cleared and the rest of the
-; block is silent, exactly like the C reference.
-;
-; A packed sample spans bytes index + index / 8 and the next one; multiplying
-; that word by 128 >> (index & 7) aligns its nine bits at 7..15.
+// void synthRenderDrum(int16_t *accumulator);
+//
+// Stores the active drum's four-sample block. Per sample, while the envelope
+// is nonzero and the sample index is inside the sample, it reads the packed
+// offset-binary 9-bit sample, scales it by the envelope's high byte with
+// floor(sample * gain / 2), advances the 16.16 sample phase, and decays the
+// envelope. When the end is reached, drumActive is cleared and the rest of the
+// block is silent.
+//
+// A packed sample spans bytes index + index / 8 and the next one; multiplying
+// that word by 128 >> (index & 7) aligns its nine bits at 7..15.
 
   .section .text.synthRenderDrum,"ax",@progbits
   .global synthRenderDrum
@@ -1221,7 +1244,7 @@ synthRenderDrum:
   movw r6, r0
   mul r9, r28
   add r7, r0
-  ; (aligned >> 7) - 256: low byte r7 after the shift, high byte carry - 1.
+  // (aligned >> 7) - 256: low byte r7 after the shift, high byte carry - 1.
   lsl r6
   rol r7
   sbc r9, r9

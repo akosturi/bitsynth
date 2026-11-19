@@ -1,19 +1,6 @@
-// Full-firmware integration run: real Timer0/Timer2/ADC/ports in AVR8js,
-// nested interrupts, the foreground loop, and a scripted front-panel session
-// (SEQ -> PLAY with held notes -> DRONE with gates -> SEQ). Reports audio
-// interrupt load, missed output samples, render span, output RMS, mode, and
-// the lowest stack pointer, and stops on any register-clobbering ISR or reset.
-//
-// Usage:
-//   deno run -A util/fullsim.js <firmware.hex> <firmware.nm> [crash-trace.txt]
-// Alternative sessions via environment: SEQTOGGLE=1 (PLAY background toggle
-// with a held note), SLOWTAP=1 (slow MODE double tap), DRONETEST=out.txt and
-// DUMPOUT=out.txt (write output samples), PHASES=1 (print voice phases).
-// Prepare the inputs from the repository root:
-//   pio run -e hardware
-//   avr-nm -S -C .pio/build/hardware/firmware.elf > firmware.nm
-// (avr-nm is in ~/.platformio/packages/toolchain-atmelavr/bin). Requires Deno;
-// AVR8js is imported from jsDelivr, so the first run needs network access.
+// Full-firmware AVR8js run of a scripted SEQ -> PLAY -> DRONE -> SEQ session; reports ISR load, missed samples, and stack depth.
+// Usage: deno run -A util/fullsim.js <firmware.hex> <firmware.nm> [crash-trace.txt], with firmware.nm from avr-nm -S -C firmware.elf.
+// Options: SEQTOGGLE=1, SLOWTAP=1, DRONETEST=out.txt, DUMPOUT=out.txt, PHASES=1.
 import {
   AVRADC, AVRIOPort, AVRTimer, CPU, adcConfig, avrInstruction,
   portBConfig, portCConfig, portDConfig, timer0Config, timer2Config,
@@ -49,13 +36,12 @@ const portC = new AVRIOPort(cpu, portCConfig);
 new AVRIOPort(cpu, portDConfig);
 const adc = new AVRADC(cpu, adcConfig);
 
-// Front panel: 4 parameter pots, 8 step pots, 8 step buttons, MODE.
 const settingPots = [0, 420, 511, 511];
 const stepPots = [0, 89, 178, 223, 312, 401, 489, 534];
 const pressed = new Array(8).fill(false);
 let modePressed = false;
 function muxChannel() {
-  const b = cpu.data[0x25]; // PORTB: D8=bit0, D10=bit2, D11=bit3
+  const b = cpu.data[0x25];
   return ((b >> 0) & 1) | (((b >> 3) & 1) << 1) | (((b >> 2) & 1) << 2);
 }
 function updateInputs() {
@@ -68,9 +54,7 @@ function updateInputs() {
 portB.addListener(() => updateInputs());
 updateInputs();
 
-// Interrupt accounting: a stack of active vectors, with cycles attributed to
-// the innermost one. Vector entry = PC in the vector table after dispatch.
-const VEC7 = 7 * 2, VEC8 = 8 * 2; // word addresses of TIMER2_COMPA/COMPB
+const VEC7 = 7 * 2, VEC8 = 8 * 2;
 const stack = [];
 const snaps = [];
 let audioCycles = 0, compaCount = 0, compbCount = 0, maxCompbSpan = 0;
@@ -85,8 +69,6 @@ function step() {
   const isReti = program[pc] === RETI;
   const wasEnabled = cpu.data[95] & 0x80;
   avrInstruction(cpu);
-  // Hardware executes one more instruction after the I flag is set (SEI,
-  // RETI, or an SREG write) before servicing an interrupt.
   if (!wasEnabled && (cpu.data[95] & 0x80)) {
     cpu.data[95] &= 0x7f; cpu.tick(); cpu.data[95] |= 0x80;
   } else cpu.tick();
@@ -104,12 +86,11 @@ function step() {
     if (v === VEC8) maxCompbSpan = Math.max(maxCompbSpan, cpu.cycles - compbStart);
   }
   if (cpu.pc < 26 * 2 && cpu.pc !== pc + 1 && cpu.pc > 0) {
-    // Dispatched into the vector table.
     stack.push(cpu.pc);
     snaps.push(cpu.data.slice(0, 32));
     if (cpu.pc === VEC7) compaCount++;
     if (cpu.pc === VEC8) { compbCount++; compbStart = cpu.cycles; }
-    if (cpu.pc === VEC7 || cpu.pc === VEC8) audioCycles += 2; // dispatch cost attributed
+    if (cpu.pc === VEC7 || cpu.pc === VEC8) audioCycles += 2;
   }
   const sp = cpu.data[0x5d] | (cpu.data[0x5e] << 8);
   if (sp < minSp) minSp = sp;
