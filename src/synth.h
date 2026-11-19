@@ -955,6 +955,15 @@ class synth
       }
     }
 
+    // Lowers a voice's output level without restarting its envelope; amp
+    // follows at the next control update. One byte, so no atomic block.
+    void limitLevel(uint8_t voice, uint8_t level)
+    {
+      if (validVoice(voice) && synthVoices[voice].level > level) {
+        synthVoices[voice].level = level;
+      }
+    }
+
     // Click-free note-off: fades the voice from its current amplitude to
     // silence in about 21 ms through the normal envelope path, so the audio
     // ISR does no extra work. amp = 255 * (level + 1) / 256 = level on the

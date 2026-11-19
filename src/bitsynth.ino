@@ -320,10 +320,24 @@ bool swingEnabled = false;
 bool generativeEnabled = false;
 uint8_t genSource[kStepCount] = {0, 1, 2, 3, 4, 5, 6, 7};
 uint8_t genRandom = 1;
-// The HD44780 A00 ROM has no '×', so GEN uses CGRAM glyph 0, written as its
-// mirror code 8 so the LCD frame never contains a NUL.
-const char kGenChar = 8;
-const uint8_t kGenGlyph[8] PROGMEM = {0x00, 0x00, 0x0A, 0x04, 0x0A, 0x00, 0x00, 0x00};
+// GEN uses the ROM's centred 5x5 asterisk, leaving all of CGRAM free.
+const char kGenChar = '*';
+// Rendered frames hold kGlyphPlaceholder | key; resolveGlyphs() loads each key
+// into a CGRAM slot and writes its mirror code 8-15, so a frame has no NUL.
+// Bar keys: bits 0-2 are height - 1, kGlyphBar a solid bar (else a dotted
+// ghost dash at the bar's top). kGlyphPlayhead alone is a plain checkerboard.
+// Icons follow.
+const uint8_t kGlyphPlaceholder = 0x80;
+const uint8_t kGlyphBar = 0x08;
+const uint8_t kGlyphPlayhead = 0x10;
+const uint8_t kGlyphPlay = 0x20;
+const uint8_t kGlyphStop = 0x21;
+const uint8_t kGlyphKeyEnd = 0x22;
+const uint8_t kGlyphIcons[2][8] PROGMEM = {
+  {0x08, 0x0C, 0x0E, 0x0F, 0x0E, 0x0C, 0x08, 0x00},  // Play.
+  {0x00, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x00, 0x00},  // Stop.
+};
+uint8_t glyphKeys[8];  // Key loaded in each CGRAM slot; 0xFF is unknown.
 uint8_t parameterPage = 0;
 uint16_t parameterPageRaw[4] = {0, 0, 0, 0};
 bool parameterPageLocked[4] = {false, false, false, false};
@@ -1205,7 +1219,9 @@ void scanModeButton(unsigned long now) {
     if (instrumentMode == MODE_DRONE) lockParameterPageControls();
     if (reading == LOW) {
       modeButtonPressedAt = now;
-      modeButtonChordUsed = false;
+      // A chord step may already be held: it can be accepted while MODE is
+      // still settling (see handleStepButton()).
+      modeButtonChordUsed = modeChordStep != 255;
       // The second tap counts when it is pressed within the window after the
       // first release; requiring its release there was too tight for a real,
       // debounced button.
@@ -1261,8 +1277,9 @@ void handleStepButton(uint8_t button, bool pressed) {
   }
   // MODE + step 8 toggles GEN and MODE + step 2 swing in SEQ and PLAY;
   // MODE + step 1 toggles PLAY's background sequence. The chord button's
-  // release is swallowed.
-  if (pressed && modeButtonStable == LOW && instrumentMode != MODE_DRONE &&
+  // release is swallowed. MODE's raw reading also counts, so a chord whose
+  // step lands up to one debounce period before MODE plays no live note.
+  if (pressed && (modeButtonStable == LOW || modeButtonReading == LOW) && instrumentMode != MODE_DRONE &&
       (button == 7 || button == 1 || (button == 0 && instrumentMode == MODE_PLAY))) {
     modeButtonChordUsed = true;
     modeChordStep = button;
@@ -1274,12 +1291,7 @@ void handleStepButton(uint8_t button, bool pressed) {
     } else if (button == 1) {
       // The new step lengths start with the next step.
       swingEnabled = !swingEnabled;
-    } else {
-      playSequencerEnabled = !playSequencerEnabled;
-      edgar.setVoiceZeroBackground(playSequencerEnabled);
-      stopNormalVoice(0); edgar.stopDrum();
-      revoiceHeldButtons();
-    }
+    } else togglePlaySequencer();
     displayDirty = true;
     return;
   }
@@ -1451,12 +1463,15 @@ void triggerDrum(uint8_t drum, bool backgroundOnly) {
     outputLevel(backgroundOnly ? kBackgroundVoiceLevel : SYNTH_LEVEL_BUDGET, 1, preset.level));
 }
 
+// A step's note as GEN currently plays it.
+uint8_t sequencerStepNote(uint8_t step) {
+  const uint8_t source = genSource[step];
+  return stepNotes[source & 7] + (source & 0x80 ? 12 : 0);
+}
+
 void triggerSequencerStep(uint8_t step, bool backgroundOnly) {
   if (isDrumProgram(seqControls.preset)) triggerDrum(stepDrums[step], backgroundOnly);
-  else {
-    const uint8_t source = genSource[step];
-    triggerSequencerNote(stepNotes[source & 7] + (source & 0x80 ? 12 : 0), backgroundOnly);
-  }
+  else triggerSequencerNote(sequencerStepNote(step), backgroundOnly);
 }
 
 uint8_t nextGenRandom() {
@@ -1512,7 +1527,8 @@ void runSequencer(unsigned long now) {
     for (uint8_t voice = 0; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice, true);
   }
   currentStep = (currentStep + 1) % kStepCount;
-  if (instrumentMode == MODE_SEQ) displayDirty = true;
+  // SEQ redraws its playhead every step; PLAY's play icon changes every two.
+  if (instrumentMode == MODE_SEQ || !(playingStep & 1)) displayDirty = true;
 }
 
 // Clocks arpeggios from the sequencer position: each step spans six ticks,
@@ -1611,8 +1627,10 @@ void triggerPolyButton(uint8_t button) {
   // A multi-voice program is a unison stack in POLY.  It consumes the whole
   // live pool: four oscillators normally, or three while voice 0 sequences.
   if (preset.voiceCount > 1) { triggerLiveStack(preset, liveNoteForButton(button), false); return; }
+  // Free voices are taken from the top, so voice 0 is used last and starting
+  // the background sequence rarely has to end a live note.
   int8_t voice = -1;
-  for (uint8_t candidate = firstVoice; candidate < SYNTH_VOICE_COUNT; ++candidate) {
+  for (int8_t candidate = SYNTH_VOICE_COUNT - 1; candidate >= (int8_t)firstVoice; --candidate) {
     if (liveButtonForVoice[candidate] < 0) { voice = candidate; break; }
   }
   if (voice < 0) {
@@ -1709,6 +1727,22 @@ void handleLiveRelease(uint8_t button) {
   // updated held-button set is applied.
 }
 
+// Hands voice 0 between PLAY's background sequence and the live pool without
+// restarting ringing live notes. POLY fills voice 0 last, so only a fourth
+// held note or a unison stack's first voice fades when the sequence starts;
+// stopping it fades the background note. The other live voices are only
+// capped to the new level share (a no-op when the share grows). Like a key
+// press, the toggle refreshes the live configuration.
+void togglePlaySequencer() {
+  playSequencerEnabled = !playSequencerEnabled;
+  const int8_t button = liveButtonForVoice[0];
+  if (button >= 0) { liveVoiceForButton[button] = -1; liveButtonForVoice[0] = -1; }
+  stopNormalVoice(0, true); edgar.releaseDrum();
+  edgar.setVoiceZeroBackground(playSequencerEnabled);
+  applyLiveConfiguration();
+  for (uint8_t voice = 1; voice < SYNTH_VOICE_COUNT; ++voice) edgar.limitLevel(voice, liveVoiceLevel);
+}
+
 // Rebuilds live voice assignments after a play setting changes.
 void revoiceHeldButtons() {
   if (instrumentMode != MODE_PLAY) return;
@@ -1779,13 +1813,12 @@ void lcdWrite(uint8_t value, uint8_t rs) {
   _delay_us(53);
 }
 
-// HD44780 4-bit initialization by instruction, then the GEN glyph in CGRAM 0.
+// HD44780 4-bit initialization by instruction; CGRAM loads on demand.
 const uint8_t kLcdInitCommands[] PROGMEM = {
   0x28,  // 4-bit, two lines, 5x8 font.
   0x0C,  // Display on, cursor and blink off.
   0x06,  // Increment, no shift.
   0x01,  // Clear.
-  0x40,  // CGRAM address 0.
 };
 
 void lcdBegin() {
@@ -1798,7 +1831,49 @@ void lcdBegin() {
     lcdWrite(pgm_read_byte(&kLcdInitCommands[i]), 0);
     _delay_ms(2);  // Covers clear's 1.52 ms at 270 kHz, scaled to 190 kHz.
   }
-  for (uint8_t row = 0; row < 8; ++row) lcdWrite(pgm_read_byte(&kGenGlyph[row]), kLcdRs);
+  memset(glyphKeys, 0xFF, sizeof(glyphKeys));
+}
+
+// Loads a glyph key into a CGRAM slot (about 0.55 ms). Every flush run sets
+// its DDRAM address first, so the address may be left in CGRAM.
+void loadGlyph(uint8_t slot, uint8_t key) {
+  lcdWrite(0x40 | (slot << 3), 0);
+  const uint8_t top = 7 - (key & 7);
+  for (uint8_t row = 0; row < 8; ++row) {
+    uint8_t bits;
+    if (key >= kGlyphPlay) bits = pgm_read_byte(&kGlyphIcons[key - kGlyphPlay][row]);
+    else if (key & kGlyphPlayhead) bits = (row & 1) ? 0x0A : 0x15;
+    else if (key & kGlyphBar) bits = row >= top ? 0x1F : 0;
+    else bits = row == top ? 0x15 : 0;
+    lcdWrite(bits, kLcdRs);
+  }
+}
+
+// Maps placeholders to CGRAM codes 8-15. Glyphs already loaded keep their
+// slots, so a playhead move reloads at most two. No view needs more than
+// eight distinct glyphs (the SEQ contour: seven steps plus the playhead), so
+// pass 1 always finds a slot that pass 0 left unused.
+void resolveGlyphs() {
+  char *const frame = &displayFrame[0][0];
+  uint8_t used = 0;
+  for (uint8_t pass = 0; pass < 2; ++pass) {
+    // Both rows as one array; row 1 starts at 17, and each row's NUL is skipped.
+    for (uint8_t i = 0; i < sizeof(displayFrame); ++i) {
+      const uint8_t key = (uint8_t)frame[i] - kGlyphPlaceholder;
+      if (key >= kGlyphKeyEnd) continue;
+      uint8_t slot = 8, spare = 0, bit = 1;
+      for (uint8_t s = 0; s < 8; ++s, bit <<= 1) {
+        if (glyphKeys[s] == key) slot = s;
+        if (!(used & bit)) spare = s;
+      }
+      if (slot == 8) {
+        if (!pass) continue;
+        slot = spare; loadGlyph(slot, key); glyphKeys[slot] = key;
+      }
+      used |= 1 << slot;
+      frame[i] = 8 + slot;
+    }
+  }
 }
 
 // Writes only LCD regions that differ from the rendered frame.
@@ -1833,6 +1908,7 @@ void renderDisplay(unsigned long now) {
   if (instrumentMode == MODE_SEQ) renderSequencerDashboard(inlineEditVisible);
   else if (instrumentMode == MODE_PLAY) renderPlayDashboard(inlineEditVisible);
   else renderDroneDashboard(inlineEditVisible);
+  resolveGlyphs();
   flushDisplayFrame();
 
   renderedInlineEditVisible = inlineEditVisible;
@@ -1908,15 +1984,22 @@ void renderParameterValue(uint8_t pot) {
   }
 }
 
+// Each step is a bar whose height follows its note as GEN plays it (C2-B3 in
+// eight heights of three semitones, so B3 fills the character; clamped above),
+// or KICK/SNAR/CHH low, middle, and full height in DRM. Disabled
+// steps show only a dotted dash at that height; the playhead step is a plain
+// checkerboard.
 void renderSequencerDashboard(bool inlineEditVisible) {
   for (uint8_t pot = 0; pot < 4; ++pot) renderParameterName(pot);
+  const bool drums = isDrumProgram(seqControls.preset);
   for (uint8_t step = 0; step < kStepCount; ++step) {
-    const bool enabled = bitRead(seqGateMask, step);
-    frameChar(1, step, step == playingStep ? (enabled ? 'O' : 'o') : (enabled ? 'x' : '-'));
+    const uint8_t height = drums ? stepDrums[step] * 3 + 1
+      // x86 >> 8 equals / 3 over the span, including GEN's octave up.
+      : min((uint8_t)((uint8_t)(sequencerStepNote(step) - kStepNoteMin) * 86U >> 8), (uint8_t)7);
+    frameChar(1, step, kGlyphPlaceholder | (step == playingStep ? kGlyphPlayhead
+      : height | (bitRead(seqGateMask, step) ? kGlyphBar : 0)));
   }
   if (generativeEnabled) frameChar(1, 8, kGenChar);
-  // A four-letter drum name in the step edit briefly covers the swing mark.
-  if (swingEnabled) frameChar(1, 15, 'S');
   if (inlineEditVisible && editedStep < kStepCount) {
     frameChar(1, 9, 'S'); frameChar(1, 10, '1' + editedStep); frameChar(1, 11, ':');
     if (isDrumProgram(seqControls.preset)) frameProgmemText(1, 12, kDrumLabels[stepDrums[editedStep]]);
@@ -1933,7 +2016,10 @@ void renderSequencerDashboard(bool inlineEditVisible) {
 
 void renderPlayDashboard(bool inlineEditVisible) {
   for (uint8_t pot = 0; pot < 4; ++pot) renderParameterName(pot);
-  if (playSequencerEnabled) frameChar(1, 0, generativeEnabled ? kGenChar : '*');
+  // The play icon blinks with the beat: lit for the first two steps of each
+  // four-step quarter note. GEN's asterisk replaces it and blinks alike.
+  frameChar(1, 0, !playSequencerEnabled ? kGlyphPlaceholder | kGlyphStop
+    : (playingStep & 2) ? ' ' : generativeEnabled ? kGenChar : kGlyphPlaceholder | kGlyphPlay);
   frameChar(1, 1, 'O'); frameChar(1, 2, '1' + playControls.octave);
   frameNumber(1, seqControls.bpm < 100 ? 5 : 4, seqControls.bpm); frameText(1, 7, F("BPM"));
   frameProgmemText(1, 11, kArpDivisionLabels[playControls.arpDivision]);

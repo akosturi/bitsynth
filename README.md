@@ -128,6 +128,9 @@ In DRONE, hold **MODE** while turning a parameter pot to set that oscillator
 pair's VCA-LFO rate. In PLAY, hold **MODE** and press step button 1 to toggle
 the background sequence. In SEQ and PLAY, hold **MODE** and press step button 2
 to toggle swing, or step button 8 to toggle `GEN`. None of these MODE combinations counts as a tap gesture.
+A combination also registers when its step button lands up to one debounce
+period (25 ms) before **MODE**, so a near-simultaneous press neither plays a
+note nor toggles a gate.
 
 ### SEQ - eight-step sequencer
 
@@ -148,13 +151,12 @@ does not appear for melodic programs. Empty macro and LFO slots are skipped,
 so no completely empty parameter page is shown. The `DRM` direct macro is
 `DEC` (decay).
 
-The LCD's upper row shows the selected control page's parameter names, except program and tempo, which always show the selected program and BPM value, and briefly (about 1.5 s) shows values when they change. The lower row shows the gate pattern: `x` is an enabled step, `-` is disabled, and `O`/`o` marks the current enabled/disabled step. Turning a step pot briefly shows its step number and note name, or drum name in `DRM`, at the lower right. A `×` after the gate pattern shows that `GEN` is on, and an `S` in the last character that swing is on; a four-letter drum name covers the `S` while it is shown.
+The LCD's upper row shows the selected control page's parameter names, except program and tempo, which always show the selected program and BPM value, and briefly (about 1.5 s) shows values when they change. The lower row shows the sequence as a melody contour: each step is a bar whose height follows its note as currently played, from C2 at the bottom to B3 filling the whole character, in eight heights of three semitones, including `GEN`'s changes (its octave-up notes stay at the top). In `DRM`, `KICK`, `SNAR`, and `CHH` are low, middle, and full height. An enabled step is a full-width solid bar and a disabled step only a dotted dash at that height; the current step, enabled or not, is shown as a plain checkerboard. Turning a step pot briefly shows its step number and note name, or drum name in `DRM`, at the lower right. A small centred `*` after the contour shows that `GEN` is on.
 
 #### Swing
 
 Hold **MODE** and press step button 2 in SEQ or PLAY to switch swing on or
-off; it is off at power-up. SEQ marks it with an `S` in the last character
-of the lower row; PLAY has no mark. Swing delays the even-numbered steps (2, 4, 6, and
+off; it is off at power-up. The LCD does not mark it. Swing delays the even-numbered steps (2, 4, 6, and
 8) to 65% of each pair of steps, a light shuffle between straight sixteenths
 (50%) and a triplet feel (67%). Each pair keeps its straight length, so the
 tempo is unchanged. It applies to every program, including `DRM`, and to
@@ -327,6 +329,8 @@ sweep.
 - `POLY` allows four simultaneous live notes while the background sequence is
   off. With it on, voice 0 remains reserved for the sequence, so POLY allows
   three notes; the next note steals the oldest live voice in either case.
+  Free voices are taken from voice 3 down, so voice 0 carries a live note only
+  when all four are in use.
 - `CHRD` plays a scale-derived 1-3-5 chord from the most recently held button,
   using the preset's first voice recipe.
 - `UP`, `DOWN`, and `UPDN` arpeggiate held buttons at step pot 3's division of the sequencer clock, including triplets; every division restarts in phase with sequencer step 1. With swing on, `1/2`, `1/4`, and `1/8` keep their straight timing, while the other divisions follow the swung steps. Button presses and releases are applied at the next clock, so they cannot retrigger an off-grid note.
@@ -339,7 +343,10 @@ immediately.
 
 The background sequence keeps its position when entering PLAY. Hold **MODE**
 and press step button 1 to toggle it. A `DRUM` sequence uses its dedicated PCM
-path and does not consume a normal voice.
+path and does not consume a normal voice. Toggling does not restart ringing
+live notes: stopping the sequence fades its note out, and starting it fades
+only a live note on voice 0 (a fourth POLY note, or a unison stack's first
+voice) and lowers the other live voices to their smaller level share.
 
 #### Program macros and LFOs
 
@@ -353,10 +360,9 @@ LCD's upper row shows the current page's four three-character parameter names;
 program, tempo, and PLAY's root note, scale, and style, show their current
 values instead (for example `KEY C#  MIN UPDN`). While a parameter is being adjusted, its
 field shows the value for about 1.5 s, then returns to its name. In SEQ, the lower row remains the step-gate view; in
-PLAY it shows background-sequence status (`*` running, `×` running with
-`GEN`, blank off) in its first character, then octave, tempo, and arpeggio
-division. The HD44780 character ROM has no `×`, so it is a custom CGRAM
-character. A macro slot without an
+PLAY it shows background-sequence status (`▶` running, or `*` running with
+`GEN`, either blinking with the beat for the first half of each quarter note;
+`■` off) in its first character, then octave, tempo, and arpeggio division. The bars, checkerboard, `▶`, and `■` are custom CGRAM characters. A macro slot without an
 assigned parameter shows `---`. The first LFO supplies rate/depth pair 1; the
 second supplies pair 2. Their LCD rate values are steps 1-94, corresponding to
 the same 0.05-20 Hz range as DRONE.
@@ -427,7 +433,7 @@ On Windows, set `RAW_TO_H_OUTPUT_BITS` to `9` near the top of `util/raw_to_h.bat
 - **Output level:** each voice's envelope is scaled by its level at the 5 kHz control rate, so it costs no per-sample work. The levels of all voices that can sound together never exceed the mix's full scale, which keeps the summed bus inside the PWM range without a limiter or clipping stage.
 - **Direct I/O:** multiplexer address lines are set in one port write and the ADC is read through its registers. The LCD is driven write-only in 4-bit mode with only the HD44780 commands the firmware uses, waiting the controller's worst-case execution time instead of polling the busy flag.
 - **Stable controls:** multiplexed analog inputs use settling reads, median sampling, smoothing, movement confirmation, and hysteresis. Buttons are debounced in software.
-- **Efficient LCD updates:** a two-line shadow buffer writes only changed characters, avoiding visible flicker and unnecessary time in the control loop.
+- **Efficient LCD updates:** a two-line shadow buffer writes only changed characters, avoiding visible flicker and unnecessary time in the control loop. The eight CGRAM characters are loaded on demand: a glyph already in CGRAM keeps its slot, so a playhead move reloads at most two (about 0.55 ms each).
 - **Simulator fidelity:** Timer1 mode 6 is modeled explicitly. Like the hardware, the simulator executes one more instruction after interrupts are enabled before serving one, which GCC's stack-pointer updates rely on. PWM edges feed an exact state-space model of the RC ladder and AC-coupling stage, followed by oversampling and a four-pole anti-alias filter before Web Audio output.
 
 ## Limitations

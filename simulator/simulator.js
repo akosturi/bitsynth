@@ -189,8 +189,8 @@ function setLcdLines(line1, line2, cgram = lcdCgram) {
   lcdCgram = cgram;
   lcdText = [line1, line2].map((line) => String(line).padEnd(16).slice(0, 16));
   ui.lcdLines.forEach((element, index) => {
-    // The text fallback cannot show CGRAM glyphs; GEN's '×' is the only one.
-    const text = lcdText[index].replace(/[\x00-\x0f]/g, '×');
+    // The text fallback cannot show CGRAM glyphs, so it marks them with a block.
+    const text = lcdText[index].replace(/[\x00-\x0f]/g, '█');
     if (element.textContent !== text) element.textContent = text;
   });
   scheduleLcdDotMatrix();
