@@ -91,6 +91,7 @@ The step buttons play the notes of a scale, while the SEQ sequence can keep runn
 | Step pot 1 | Octave, O1-O5 (applies from the next note) |
 | Step pot 2 | Tempo, shared with SEQ (takes effect once you move it) |
 | Step pot 3 | Arpeggio speed: `1/2`, `1/4`, `1/4t`, `1/8`, `1/8t`, `1/16`, `1/16t`, `1/32` |
+| Step pot 8 | Balance: turn up for a louder background sequence, down for louder live notes |
 | Step buttons 1-8 | Consecutive scale notes |
 
 Styles:
@@ -102,7 +103,7 @@ Styles:
 
 Arpeggios lock to the sequencer clock: button changes take effect on the next arpeggio note, and every division stays in phase with step 1. A multi-voice program plays each note (in `POLY` and in arpeggios) as one thick unison stack; single-voice programs stay polyphonic. Released notes fade out in about 20 ms.
 
-**Background sequence:** the SEQ pattern keeps playing with the SEQ program and its settings (`DRM` too) on its own voices, at a fixed level, without the filter, chorus, or tremolo. It keeps its position when you enter PLAY, and switching it on or off does not restart notes you are holding.
+**Background sequence:** the SEQ pattern keeps playing with the SEQ program and its settings (`DRM` too) on its own voices, at the level step pot 8 sets, without the filter, chorus, or tremolo. It keeps its position when you enter PLAY, and switching it on or off does not restart notes you are holding.
 
 The bottom row shows `▶` (running, blinking with the beat; `*` with `GEN`) or `■` (stopped), then octave, tempo, and arpeggio speed. The top row shows program, root, scale, and style, for example `A01 C#  MIN UPDN`. `DRM` is available only in SEQ.
 

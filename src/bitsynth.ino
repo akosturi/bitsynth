@@ -222,10 +222,9 @@ uint8_t playingStep = 255;
 unsigned long lastStepMs = 0;
 uint16_t nextStepIntervalMs = 119;
 const uint16_t kVoiceLevelBudget = SYNTH_LEVEL_BUDGET * 2;
-const uint8_t kBackgroundVoiceLevel = 79;
-const uint8_t kBackgroundDrumLevel = 127;
-uint8_t sequenceVoiceLevel = kBackgroundVoiceLevel;
-uint8_t liveVoiceLevel = kBackgroundVoiceLevel;
+uint8_t backgroundVoiceLevel = 79;
+uint8_t sequenceVoiceLevel = 79;
+uint8_t liveVoiceLevel = 79;
 uint16_t normalCurrentPitch[SYNTH_VOICE_COUNT] = {0};
 uint16_t normalTargetPitch[SYNTH_VOICE_COUNT] = {0};
 uint8_t normalGlide[SYNTH_VOICE_COUNT] = {0};
@@ -1079,7 +1078,7 @@ void readSequencerStepPot(uint8_t step, unsigned long now) {
   }
 }
 
-// Reads PLAY step pots 1-3: octave, tempo, and arpeggio division.
+// Reads PLAY step pots 1-3 and 8: octave, tempo, arpeggio division, and background balance.
 void readPlayStepPot(uint8_t step, unsigned long now) {
   selectMuxChannel(step);
   const uint16_t filtered = filterAnalog(readMedianAnalog(kStepAdcChannel), filteredStepRaw[step], stepFilterReady[step]);
@@ -1097,6 +1096,11 @@ void readPlayStepPot(uint8_t step, unsigned long now) {
   } else if (step == 2) {
     const uint8_t next = mapIndexHysteresis(raw, playControls.arpDivision, kArpDivisionCount);
     if (next != playControls.arpDivision) { playControls.arpDivision = next; displayDirty = true; }
+  } else if (step == 7) {
+    const uint8_t next = mapByteHysteresis(raw, backgroundVoiceLevel, 255, 0);
+    if (next == backgroundVoiceLevel) return;
+    backgroundVoiceLevel = next;
+    if (playSequencerEnabled) applyLiveConfiguration();
   }
 }
 
@@ -1338,7 +1342,7 @@ void triggerSequencerNote(uint8_t note, bool backgroundOnly) {
   const uint8_t glide = activeMacroValue(MACRO_GLIDE, preset.glide);
   const uint16_t pulseWidth = pulseWidthForPercent(
     lfoModulatedMacroValue(MACRO_PULSE_WIDTH, preset.squarePulseWidthPercent));
-  sequenceVoiceLevel = backgroundOnly ? outputLevel(kBackgroundVoiceLevel, 1, preset.level) :
+  sequenceVoiceLevel = backgroundOnly ? outputLevel(backgroundVoiceLevel, 1, preset.level) :
     outputLevel(kVoiceLevelBudget, voiceCount, preset.level);
 
   for (uint8_t voice = firstVoice + voiceCount; voice < SYNTH_VOICE_COUNT; ++voice) stopNormalVoice(voice);
@@ -1358,7 +1362,7 @@ void triggerDrum(uint8_t drum, bool backgroundOnly) {
   const uint8_t decay = lfoModulatedMacroValue(MACRO_DRUM_DECAY, preset.decay);
   const uint8_t tone = lfoModulatedMacroValue(MACRO_DRUM_TUNE, seqControls.drumTone);
   edgar.triggerDrum(min(drum, (uint8_t)(kDrumCount - 1)), tone, decay,
-    outputLevel(backgroundOnly ? kBackgroundDrumLevel : kVoiceLevelBudget, 1, preset.level));
+    outputLevel(backgroundOnly ? backgroundVoiceLevel * 13U / 8 : kVoiceLevelBudget, 1, preset.level));
 }
 
 // Returns a step's note as GEN currently plays it.
@@ -1437,7 +1441,7 @@ void runArpeggio(unsigned long now) {
   if (due && playControls.style >= STYLE_ARP_UP) advanceArpeggio();
 }
 
-// Applies the PLAY program to the live voices and sets their level.
+// Applies the PLAY program to the live voices and moves ringing live notes to their level.
 void applyLiveConfiguration() {
   MelodicPreset preset; readMelodicPreset(playProgramId(), preset);
   applyCurrentProgramBusEffects();
@@ -1452,12 +1456,12 @@ void applyLiveConfiguration() {
       liveVoiceEnd());
   }
   liveVoiceLevel = outputLevel(playSequencerEnabled ?
-    kVoiceLevelBudget - kBackgroundVoiceLevel : kVoiceLevelBudget, liveVoices, preset.level);
+    kVoiceLevelBudget - backgroundVoiceLevel : kVoiceLevelBudget, liveVoices, preset.level);
   applyCurrentProgramMorph();
   for (uint8_t voice = 0; voice < liveVoiceEnd(); ++voice) {
     edgar.setWave(voice, preset.voices[0].wave);
     edgar.setEnvelope(voice, envelope);
-    edgar.setPulseWidth(voice, pulseWidth);
+    edgar.setPulseWidth(voice, pulseWidth); edgar.setLevel(voice, liveVoiceLevel);
     edgar.setLength(voice, envelopeLength); edgar.setMod(voice, lfoModulatedMacroValue(MACRO_VIBRATO, preset.voices[0].modulation));
   }
 }
@@ -1627,7 +1631,6 @@ void togglePlaySequencer() {
   releaseBackgroundVoices();
   edgar.setBackgroundVoices(playSequencerEnabled);
   applyLiveConfiguration();
-  for (uint8_t voice = 0; voice < SYNTH_BACKGROUND_VOICE; ++voice) edgar.limitLevel(voice, liveVoiceLevel);
 }
 
 void revoiceHeldButtons() {

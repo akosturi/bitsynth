@@ -834,10 +834,10 @@ class synth
       }
     }
 
-    // Lowers a voice's level without restarting it.
-    void limitLevel(uint8_t voice, uint8_t level)
+    // Changes a sounding voice's level without restarting it; release fades keep theirs.
+    void setLevel(uint8_t voice, uint8_t level)
     {
-      if (validVoice(voice) && synthVoices[voice].level > level) {
+      if (validVoice(voice) && !synthVoiceEnvelopes[voice].releasing) {
         synthVoices[voice].level = level;
       }
     }
@@ -899,9 +899,11 @@ class synth
 
       ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
         drumActive = false;
-        synthVoices[0].envelopePhase = 0x8000;
-        synthVoices[0].amp = 0;
-        synthVoices[0].step = 0;
+        if (!backgroundVoices) {
+          synthVoices[0].envelopePhase = 0x8000;
+          synthVoices[0].amp = 0;
+          synthVoices[0].step = 0;
+        }
         drumSampleAddress = sampleAddress;
         drumSampleLength = sampleLength;
         drumSamplePhase = 0;
