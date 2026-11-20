@@ -14,9 +14,21 @@ import {
 
 const CLOCK_HZ = 16_000_000;
 const FLASH_BYTES = 32 * 1024;
-const PROGRAM_WORDS = 0x8000; // Matches AVR8js's ATmega328P demo allocation.
+const PROGRAM_WORDS = 0x8000;
 const AUDIO_OVERSAMPLE = 2;
 const AUDIO_BUFFER_SIZE = 2048;
+const AUDIO_ISR_BUDGET_CYCLES = 800;
+const CYCLE_METER_SMOOTHING = 0.15;
+const CYCLE_METER_UPDATE_MS = 500;
+const CYCLE_METER_BLOCKS = 4;
+const INTERRUPT_ENTRY_CYCLES = 4;
+const INTERRUPT_ENTRY_EXTRA_CYCLES = 2;
+const TIMER2_COMPA_VECTOR = timer2Config.compAInterrupt;
+const TIMER2_COMPB_VECTOR = timer2Config.compBInterrupt;
+const VECTOR_TABLE_WORDS = 52;
+const RETI_OPCODE = 0x9518;
+const SREG = 0x5f;
+const AUDIO_BLOCK_CYCLES = 8 * AUDIO_ISR_BUDGET_CYCLES;
 const TCCR1A = 0x80;
 const TCCR1B = 0x81;
 const OCR1AL = 0x88;
@@ -26,7 +38,7 @@ const FALLBACK_HARDWARE = {
   source: 'embedded fallback',
   settings: [0, 420, 511, 511].map((value, index) => ({
     id: `setting${index + 1}`,
-    label: ['P1 PRESET', 'P2 BPM', 'P3 COLOR', 'P4 SHAPE'][index],
+    label: `P${index + 1} MACRO`,
     value,
   })),
   steps: [0, 89, 178, 223, 312, 401, 489, 534].map((value, index) => ({
@@ -62,6 +74,8 @@ const ui = {
   volume: $('#volume'),
   runtimeNote: $('#runtime-note'),
   scope: $('#scope'),
+  cycleMeter: $('#cycle-meter'),
+  cycleMeterScrew: $('#preset-screw'),
 };
 const hardwareView = document.body.classList.contains('hardware-ui');
 
@@ -75,9 +89,8 @@ let audioContext = null;
 let audioNode = null;
 let running = false;
 let audioFailureReported = false;
+let cycleMeterUpdatedAt = 0;
 
-// Five column bitmap glyphs for printable ASCII. Each byte is one vertical
-// column, with the least-significant bit at the top of the 5x8 character cell.
 const LCD_FONT_5X8 = new Uint8Array(`
   00 00 00 00 00  00 00 5f 00 00  00 07 00 07 00  14 7f 14 7f 14
   24 2a 7f 2a 12  23 13 08 64 62  36 49 55 22 50  00 05 03 00 00
@@ -107,7 +120,9 @@ const LCD_FONT_5X8 = new Uint8Array(`
 
 let lcdText = ui.lcdLines.map((line) => (line?.textContent ?? '').padEnd(16).slice(0, 16));
 let lcdDrawFrame = 0;
+let lcdCgram = new Uint8Array(64);
 
+// Draws the LCD as a 5x8 dot matrix, CGRAM glyphs included.
 function drawLcdDotMatrix() {
   const canvas = ui.lcdCanvas;
   if (!canvas) return;
@@ -159,7 +174,10 @@ function drawLcdDotMatrix() {
       for (let column = 0; column < 5; column++) {
         const bits = LCD_FONT_5X8[glyph * 5 + column];
         for (let row = 0; row < 8; row++) {
-          if (!(bits & (1 << row))) continue;
+          const lit = code < 16
+            ? lcdCgram[(code & 7) * 8 + row] & (0x10 >> column)
+            : bits & (1 << row);
+          if (!lit) continue;
           const x = originX + (character * 6 + column) * unit + dotInset;
           const y = originY + (line * 10 + row) * unit + dotInset;
           context.fillRect(x, y, dotSize, dotSize);
@@ -169,10 +187,12 @@ function drawLcdDotMatrix() {
   }
 }
 
-function setLcdLines(line1, line2) {
+function setLcdLines(line1, line2, cgram = lcdCgram) {
+  lcdCgram = cgram;
   lcdText = [line1, line2].map((line) => String(line).padEnd(16).slice(0, 16));
   ui.lcdLines.forEach((element, index) => {
-    if (element.textContent !== lcdText[index]) element.textContent = lcdText[index];
+    const text = lcdText[index].replace(/[\x00-\x0f]/g, '█');
+    if (element.textContent !== text) element.textContent = text;
   });
   scheduleLcdDotMatrix();
 }
@@ -197,6 +217,7 @@ function connectionOtherEnd(connections, endpoint) {
   return null;
 }
 
+// Resolves a diagram.json endpoint to its Arduino pin.
 function unoPin(connections, endpoint) {
   const other = connectionOtherEnd(connections, endpoint);
   if (!other?.startsWith('uno:')) return null;
@@ -204,15 +225,16 @@ function unoPin(connections, endpoint) {
   return /^\d+$/.test(pin) ? Number(pin) : pin;
 }
 
+// Reads the pin mapping from diagram.json.
 async function readDiagram() {
   try {
-    const response = await fetch('../wokwi/diagram.json', { cache: 'no-store' });
+    const response = await fetch('./diagram.json', { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const diagram = await response.json();
     const part = (id) => diagram.parts.find((item) => item.id === id);
     const label = (id, fallback) => part(id)?.attrs?.text || fallback;
     hardware = {
-      source: 'wokwi/diagram.json',
+      source: 'simulator/diagram.json',
       settings: Array.from({ length: 4 }, (_, index) => ({
         id: `setting${index + 1}`,
         label: label(`settingText${index + 1}`, `P${index + 1}`),
@@ -272,6 +294,7 @@ function makeKnob(control, small = false) {
     control.value = Math.max(0, Math.min(1023, Math.round(next)));
     render();
   };
+  control.setValue = setValue;
 
   let dragStartY = 0;
   let dragStartValue = 0;
@@ -357,6 +380,7 @@ function buildControls() {
   bindMomentary(ui.modeButton, setModePressed);
 }
 
+// Write-only HD44780 model driven by the 4-bit LCD port.
 class HD44780 {
   constructor(render) {
     this.render = render;
@@ -365,6 +389,8 @@ class HD44780 {
 
   reset() {
     this.ddram = new Uint8Array(0x80).fill(32);
+    this.cgram = new Uint8Array(64);
+    this.cgramMode = false;
     this.address = 0;
     this.pendingNibble = null;
     this.fourBit = false;
@@ -397,26 +423,37 @@ class HD44780 {
     if (value === 0x01) {
       this.ddram.fill(32);
       this.address = 0;
+      this.cgramMode = false;
       this.paint();
-    } else if (value === 0x02) {
+    } else if ((value & 0xfe) === 0x02) {
       this.address = 0;
+      this.cgramMode = false;
     } else if (value & 0x80) {
       this.address = value & 0x7f;
+      this.cgramMode = false;
+    } else if (value & 0x40) {
+      this.address = value & 0x3f;
+      this.cgramMode = true;
     } else if ((value & 0xfc) === 0x04) {
       this.increment = Boolean(value & 0x02);
     }
   }
 
   writeData(value) {
-    this.ddram[this.address & 0x7f] = value;
-    this.address = (this.address + (this.increment ? 1 : -1)) & 0x7f;
+    if (this.cgramMode) {
+      this.cgram[this.address & 0x3f] = value & 0x1f;
+      this.address = (this.address + (this.increment ? 1 : -1)) & 0x3f;
+    } else {
+      this.ddram[this.address & 0x7f] = value;
+      this.address = (this.address + (this.increment ? 1 : -1)) & 0x7f;
+    }
     this.paint();
   }
 
   paint() {
     const line = (offset) => Array.from(this.ddram.slice(offset, offset + 16), (code) =>
-      code >= 32 && code <= 126 ? String.fromCharCode(code) : ' ').join('');
-    this.render(line(0x00), line(0x40));
+      code < 16 || (code >= 32 && code <= 126) ? String.fromCharCode(code) : ' ').join('');
+    this.render(line(0x00), line(0x40), this.cgram);
   }
 }
 
@@ -432,6 +469,7 @@ function multiplyMatrices(left, right) {
   return output;
 }
 
+// Matrix exponential by scaling and squaring.
 function matrixExponential(matrix) {
   const size = matrix.length;
   const identity = Array.from({ length: size }, (_, row) =>
@@ -457,6 +495,7 @@ function matrixExponential(matrix) {
   return result;
 }
 
+// Exact state-space model of the RC output ladder and AC coupling.
 class OutputFilter {
   constructor() {
     const r1 = 2200;
@@ -478,12 +517,10 @@ class OutputFilter {
       [0, 0, g4 / c4, -g4 / c4],
     ];
     this.b = [g1 / c1, 0, 0, 0];
-    this.state = new Float64Array(4); // v1, v2, v3, voltage across C4
+    this.state = new Float64Array(4);
     this.input = 0;
     this.lastCycle = 0;
     this.cache = new Map();
-    // Build every possible step before audio starts, so coefficient creation
-    // can never cause a real-time deadline miss in the first notes.
     for (let cycles = 1; cycles <= 512; cycles++) this.coefficients(cycles);
   }
 
@@ -531,12 +568,11 @@ class OutputFilter {
 
   sample(cycle) {
     this.integrateTo(cycle);
-    return this.state[2] - this.state[3]; // Node after C4. Rout is unloaded by a high-Z input.
+    return this.state[2] - this.state[3];
   }
 }
 
-// Bitsynth-specific Timer1 mode 6 model: 9-bit, single-slope Fast PWM,
-// OCR1A double-buffered at BOTTOM, non-inverting output on OC1A/D9.
+// Timer1 9-bit Fast PWM on D9; each period's mean voltage drives the filter, so the carrier does not alias.
 class FastPwm9 {
   constructor(filter) {
     this.filter = filter;
@@ -547,13 +583,17 @@ class FastPwm9 {
     this.activeCompare = 0;
     this.pendingCompare = 0;
     this.hasPendingCompare = false;
-    this.high = false;
+    this.voltage = 0;
   }
 
-  setOutput(high, cycle) {
-    if (this.high === high) return;
-    this.high = high;
-    this.filter.setInputVoltage(high ? 5 : 0, cycle);
+  setVoltage(voltage, cycle) {
+    if (this.voltage === voltage) return;
+    this.voltage = voltage;
+    this.filter.setInputVoltage(voltage, cycle);
+  }
+
+  periodVoltage() {
+    return this.activeCompare >= 511 ? 5 : 5 * (this.activeCompare + 1) / 512;
   }
 
   start(cycle, compare) {
@@ -563,7 +603,7 @@ class FastPwm9 {
     this.activeCompare = Math.min(compare, 511);
     this.pendingCompare = this.activeCompare;
     this.hasPendingCompare = false;
-    if (this.enabled) this.setOutput(true, cycle);
+    if (this.enabled) this.setVoltage(this.periodVoltage(), cycle);
   }
 
   stop(cycle) {
@@ -580,42 +620,102 @@ class FastPwm9 {
   setEnabled(enabled, cycle, portHigh) {
     this.advanceTo(cycle);
     this.enabled = enabled;
-    if (enabled) this.setOutput(this.activeCompare === 511 || this.phase <= this.activeCompare, cycle);
-    else this.setOutput(portHigh, cycle);
-  }
-
-  cyclesUntil(eventPhase) {
-    const distance = (eventPhase - this.phase + 512) % 512;
-    return distance || 512;
+    this.setVoltage(enabled ? this.periodVoltage() : (portHigh ? 5 : 0), cycle);
   }
 
   advanceTo(targetCycle) {
     if (!this.running || targetCycle <= this.lastCycle) return;
     while (this.lastCycle < targetCycle) {
-      const clearPhase = Math.min(this.activeCompare + 1, 511);
-      let distance = this.cyclesUntil(0);
-      if (this.enabled && this.activeCompare < 511) distance = Math.min(distance, this.cyclesUntil(clearPhase));
+      const distance = 512 - this.phase;
       if (this.lastCycle + distance > targetCycle) {
-        const elapsed = targetCycle - this.lastCycle;
-        this.filter.integrateTo(targetCycle);
-        this.phase = (this.phase + elapsed) % 512;
+        this.phase += targetCycle - this.lastCycle;
         this.lastCycle = targetCycle;
+        this.filter.integrateTo(targetCycle);
         return;
       }
-
       this.lastCycle += distance;
-      this.phase = (this.phase + distance) % 512;
-      this.filter.integrateTo(this.lastCycle);
-      if (this.phase === 0) {
-        if (this.hasPendingCompare) {
-          this.activeCompare = this.pendingCompare;
-          this.hasPendingCompare = false;
-        }
-        if (this.enabled) this.setOutput(true, this.lastCycle);
-      } else if (this.enabled && this.activeCompare < 511 && this.phase === this.activeCompare + 1) {
-        this.setOutput(false, this.lastCycle);
+      this.phase = 0;
+      if (this.hasPendingCompare) {
+        this.activeCompare = this.pendingCompare;
+        this.hasPendingCompare = false;
       }
+      if (this.enabled) this.setVoltage(this.periodVoltage(), this.lastCycle);
     }
+  }
+}
+
+// Timer2 CTC with compare A/B interrupts; schedules only the next match, for speed.
+class CtcTimer2 {
+  constructor(cpu) {
+    const { TIFR, TIMSK, TCNT, OCRA, OCRB, TCCRA, TCCRB } = timer2Config;
+    const interrupt = (address, mask) =>
+      ({ address, flagRegister: TIFR, flagMask: mask, enableRegister: TIMSK, enableMask: mask });
+    this.cpu = cpu;
+    this.compA = interrupt(timer2Config.compAInterrupt, 2);
+    this.compB = interrupt(timer2Config.compBInterrupt, 4);
+    this.divider = 0;
+    this.top = 0;
+    this.ocrB = 0;
+    this.base = 0;
+    this.match = () => this.onMatch();
+    const configure = (register) => (value) => {
+      const count = this.count();
+      const phase = this.divider ? (cpu.cycles - this.base) % this.divider : 0;
+      cpu.data[register] = value;
+      this.divider = timer2Config.dividers[cpu.data[TCCRB] & 7] || 0;
+      if ((cpu.data[TCCRA] & 3) !== 2 || (cpu.data[TCCRB] & 8)) this.divider = 0;
+      this.top = cpu.data[OCRA];
+      this.ocrB = cpu.data[OCRB];
+      this.restart(register === TCNT ? value : Math.min(count, this.top), phase % (this.divider || 1));
+      return true;
+    };
+    for (const register of [TCCRA, TCCRB, OCRA, OCRB, TCNT]) cpu.writeHooks[register] = configure(register);
+    cpu.readHooks[TCNT] = () => this.count();
+    cpu.writeHooks[TIFR] = (value) => {
+      cpu.data[TIFR] = value;
+      cpu.clearInterruptByFlag(this.compA, value);
+      cpu.clearInterruptByFlag(this.compB, value);
+      return true;
+    };
+    cpu.writeHooks[TIMSK] = (value) => {
+      cpu.updateInterruptEnable(this.compA, value);
+      cpu.updateInterruptEnable(this.compB, value);
+    };
+  }
+
+  count() {
+    if (!this.divider) return this.cpu.data[timer2Config.TCNT];
+    const ticks = Math.floor((this.cpu.cycles - this.base) / this.divider);
+    return ticks % (this.top + 1);
+  }
+
+  restart(count, phase) {
+    this.cpu.clearClockEvent(this.match);
+    this.cpu.data[timer2Config.TCNT] = count;
+    if (!this.divider) return;
+    this.base = this.cpu.cycles - phase - count * this.divider;
+    this.schedule(count);
+  }
+
+  schedule(count) {
+    const period = this.top + 1;
+    let next = period;
+    for (const target of [this.top, this.ocrB]) {
+      if (target > this.top) continue;
+      const distance = (target - count + period) % period || period;
+      next = Math.min(next, distance);
+    }
+    const ticks = Math.floor((this.cpu.cycles - this.base) / this.divider);
+    this.cpu.addClockEvent(this.match, this.base + (ticks + next) * this.divider - this.cpu.cycles);
+  }
+
+  onMatch() {
+    const ticks = Math.floor((this.cpu.cycles - this.base) / this.divider);
+    const count = ticks % (this.top + 1);
+    if (count === this.top) this.cpu.setInterruptFlag(this.compA);
+    if (count === this.ocrB) this.cpu.setInterruptFlag(this.compB);
+    this.base += (ticks - count) * this.divider;
+    this.schedule(count);
   }
 }
 
@@ -642,12 +742,11 @@ class BiquadLowPass {
   }
 }
 
+// Four-pole Butterworth anti-alias filter for the monitor output.
 class MonitorAntiAliasFilter {
   constructor(outputSampleRate) {
     const oversampledRate = outputSampleRate * AUDIO_OVERSAMPLE;
     const cutoff = Math.min(18_000, outputSampleRate * 0.4);
-    // Two Butterworth sections form a flat 4-pole low-pass. This models the
-    // anti-alias stage of the browser/audio interface, not part of the synth.
     this.sections = [
       new BiquadLowPass(oversampledRate, cutoff, 0.5411961),
       new BiquadLowPass(oversampledRate, cutoff, 1.306563),
@@ -666,7 +765,7 @@ class BitsynthMachine {
     new Uint8Array(this.program.buffer).set(bytes.subarray(0, FLASH_BYTES));
     this.cpu = new CPU(this.program);
     this.timer0 = new AVRTimer(this.cpu, timer0Config);
-    this.timer2 = new AVRTimer(this.cpu, timer2Config);
+    this.timer2 = new CtcTimer2(this.cpu);
     this.portB = new AVRIOPort(this.cpu, portBConfig);
     this.portC = new AVRIOPort(this.cpu, portCConfig);
     this.portD = new AVRIOPort(this.cpu, portDConfig);
@@ -679,9 +778,16 @@ class BitsynthMachine {
     this.scope = new Float32Array(2048);
     this.scopeIndex = 0;
     this.sampleCycle = 0;
-    this.previewBuild = false;
     this.antiAlias = null;
     this.antiAliasSampleRate = 0;
+    this.isrStack = [];
+    this.meterWindows = 0;
+    this.audioIsrWindowCycles = 0;
+    this.audioIsrWindowStart = 0;
+    this.audioIsrCallbackCycles = 0;
+    this.audioIsrCycles = 0;
+    this.audioIsrMaxCycles = 0;
+    this.audioIsrBlockMax = 0;
 
     this.portB.addListener((value, oldValue) => this.outputChanged('B', value, oldValue));
     this.portD.addListener((value, oldValue) => {
@@ -744,16 +850,8 @@ class BitsynthMachine {
       channel | (this.arduinoPin(pin) ? (1 << bit) : 0), 0);
   }
 
-  isPreviewBuild() {
-    const tccr1a = this.cpu.data[TCCR1A];
-    const tccr1b = this.cpu.data[TCCR1B];
-    return !(tccr1a & 0xc0) || !(tccr1b & 0x07);
-  }
-
   adcVoltage(control) {
-    // The real front panel pots are wired opposite to Wokwi's visual value.
-    // WOKWI_SIMULATION firmware already performs this inversion itself.
-    const raw = this.isPreviewBuild() ? control.value : 1023 - control.value;
+    const raw = 1023 - control.value;
     return (raw / 1023) * 5;
   }
 
@@ -767,21 +865,91 @@ class BitsynthMachine {
     this.portC.setPin(3, !modePressed);
   }
 
+  // Runs to targetCycle; like the hardware, one more instruction runs after interrupts are enabled.
+  run(targetCycle) {
+    const cpu = this.cpu;
+    const data = cpu.data;
+    while (cpu.cycles < targetCycle) {
+      const enabled = data[SREG] & 0x80;
+      avrInstruction(cpu);
+      if (!enabled && (data[SREG] & 0x80)) {
+        data[SREG] &= 0x7f;
+        cpu.tick();
+        data[SREG] |= 0x80;
+      } else {
+        cpu.tick();
+        if (enabled && cpu.pc < VECTOR_TABLE_WORDS) cpu.cycles += INTERRUPT_ENTRY_EXTRA_CYCLES;
+      }
+    }
+  }
+
+  // Like run(), with audio-ISR cycle accounting for the meter.
+  runMetered(targetCycle) {
+    const cpu = this.cpu;
+    const data = cpu.data;
+    const program = this.program;
+    const stack = this.isrStack;
+    const audio = (vector) => vector === TIMER2_COMPA_VECTOR || vector === TIMER2_COMPB_VECTOR;
+    while (cpu.cycles < targetCycle && this.meterWindows) {
+      const before = cpu.cycles;
+      const returns = program[cpu.pc] === RETI_OPCODE;
+      const enabled = data[SREG] & 0x80;
+      avrInstruction(cpu);
+      let entered = false;
+      if (!enabled && (data[SREG] & 0x80)) {
+        data[SREG] &= 0x7f;
+        cpu.tick();
+        data[SREG] |= 0x80;
+      } else {
+        cpu.tick();
+        entered = enabled && cpu.pc < VECTOR_TABLE_WORDS;
+        if (entered) cpu.cycles += INTERRUPT_ENTRY_EXTRA_CYCLES;
+      }
+      const entry = entered ? INTERRUPT_ENTRY_CYCLES : 0;
+      if (audio(stack[stack.length - 1])) this.audioIsrWindowCycles += cpu.cycles - before - entry;
+      if (returns && stack.length) stack.pop();
+      if (entered) {
+        stack.push(cpu.pc);
+        if (audio(cpu.pc)) this.audioIsrWindowCycles += entry;
+      }
+      if (cpu.cycles - this.audioIsrWindowStart >= AUDIO_BLOCK_CYCLES) {
+        const perSample = this.audioIsrWindowCycles * AUDIO_ISR_BUDGET_CYCLES /
+          (cpu.cycles - this.audioIsrWindowStart);
+        if (this.audioIsrWindowWarm) {
+          this.audioIsrBlockMax = Math.max(this.audioIsrBlockMax, perSample);
+          this.audioIsrCallbackCycles += this.audioIsrWindowCycles;
+          this.audioIsrMeasuredCycles += cpu.cycles - this.audioIsrWindowStart;
+        }
+        this.audioIsrWindowWarm = true;
+        this.audioIsrWindowCycles = 0;
+        this.audioIsrWindowStart = cpu.cycles;
+        this.meterWindows--;
+      }
+    }
+  }
+
+  // Runs the firmware for one audio callback and samples the filtered output.
   renderAudio(outputLeft, outputRight, volume) {
     const outputSampleRate = audioContext.sampleRate;
     if (!this.antiAlias || this.antiAliasSampleRate !== outputSampleRate) {
       this.antiAlias = new MonitorAntiAliasFilter(outputSampleRate);
       this.antiAliasSampleRate = outputSampleRate;
     }
+    this.audioIsrBlockMax = 0;
+    this.audioIsrCallbackCycles = 0;
+    this.meterWindows = ui.cycleMeter && !ui.cycleMeter.hidden ? 1 + CYCLE_METER_BLOCKS : 0;
+    this.isrStack.length = 0;
+    this.audioIsrWindowCycles = 0;
+    this.audioIsrWindowStart = this.cpu.cycles;
+    this.audioIsrWindowWarm = false;
+    this.audioIsrMeasuredCycles = 0;
     const cyclesPerSubsample = CLOCK_HZ / (outputSampleRate * AUDIO_OVERSAMPLE);
     for (let index = 0; index < outputLeft.length; index++) {
       let sample = 0;
       for (let subSample = 0; subSample < AUDIO_OVERSAMPLE; subSample++) {
         this.sampleCycle += cyclesPerSubsample;
-        while (this.cpu.cycles < this.sampleCycle) {
-          avrInstruction(this.cpu);
-          this.cpu.tick();
-        }
+        if (this.meterWindows) this.runMetered(this.sampleCycle);
+        this.run(this.sampleCycle);
         this.pwm.advanceTo(this.cpu.cycles);
         const voltage = this.filter.sample(this.cpu.cycles);
         sample = this.antiAlias.process(voltage / 2.5);
@@ -791,7 +959,15 @@ class BitsynthMachine {
       outputRight[index] = monitored;
       this.scope[this.scopeIndex++ & (this.scope.length - 1)] = monitored;
     }
-    this.previewBuild = this.isPreviewBuild();
+    if (this.audioIsrBlockMax) {
+      const average = this.audioIsrCallbackCycles * AUDIO_ISR_BUDGET_CYCLES /
+        Math.max(1, this.audioIsrMeasuredCycles);
+      this.audioIsrCycles = this.audioIsrCycles
+        ? this.audioIsrCycles * (1 - CYCLE_METER_SMOOTHING) +
+          average * CYCLE_METER_SMOOTHING
+        : average;
+      this.audioIsrMaxCycles = Math.max(this.audioIsrMaxCycles, Math.round(this.audioIsrBlockMax));
+    }
   }
 }
 
@@ -949,7 +1125,7 @@ async function unlockAudio() {
     await audioContext.resume();
     ui.engineStatus.textContent = 'engine: running';
     ui.engineStatus.className = 'badge live';
-  } catch { /* The next user gesture can try again. */ }
+  } catch {}
 }
 
 function showHardwareLoadPrompt() {
@@ -961,7 +1137,7 @@ function showHardwareLoadPrompt() {
 
 async function loadDefaultHardwareFirmware() {
   try {
-    const response = await fetch('../.pio/build/browser/firmware.hex', { cache: 'no-store' });
+    const response = await fetch('../.pio/build/hardware/firmware.hex', { cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const buffer = await response.arrayBuffer();
     const file = new File([buffer], 'firmware.hex', { type: 'text/plain' });
@@ -975,7 +1151,7 @@ function stopAudio() {
   running = false;
   ui.runButton.classList.remove('active');
   if (audioNode) {
-    try { audioNode.disconnect(); } catch { /* already disconnected */ }
+    try { audioNode.disconnect(); } catch {}
   }
   if (firmwareImage) {
     ui.runButton.textContent = 'Start audio';
@@ -991,16 +1167,16 @@ function reportRuntimeError(error) {
   ui.runtimeNote.textContent = error instanceof Error ? error.message : String(error);
 }
 
-function resetMachine() {
+async function resetMachine() {
   if (!firmwareImage) return;
   const wasRunning = running;
   stopAudio();
   machine = new BitsynthMachine(firmwareImage.bytes);
   ui.runtimeNote.textContent = `${firmwareImage.detail}. Reset complete.`;
-  if (wasRunning) startAudio().catch(reportRuntimeError);
+  if (wasRunning) await startAudio();
 }
 
-function drawScope() {
+function drawScope(now = performance.now()) {
   const canvas = ui.scope;
   if (canvas) {
     const rect = canvas.getBoundingClientRect();
@@ -1035,8 +1211,18 @@ function drawScope() {
     }
   }
   if (running && machine) {
-    const mode = machine.previewBuild ? '1-bit Wokwi preview' : '9-bit Fast PWM · 31.25 kHz';
-    ui.runtimeNote.textContent = `${mode} · ${audioContext.sampleRate.toLocaleString()} Hz monitor · local execution`;
+    ui.runtimeNote.textContent = `9-bit Fast PWM · 31.25 kHz · ${audioContext.sampleRate.toLocaleString()} Hz monitor · local execution`;
+  }
+  if (ui.cycleMeter && !ui.cycleMeter.hidden &&
+      now - cycleMeterUpdatedAt >= CYCLE_METER_UPDATE_MS) {
+    cycleMeterUpdatedAt = now;
+    const cycles = Math.round(machine?.audioIsrCycles || 0);
+    const maxCycles = machine?.audioIsrMaxCycles || 0;
+    const text = cycles
+      ? `ISR ${cycles} / ${AUDIO_ISR_BUDGET_CYCLES} cycles (${Math.round(cycles / AUDIO_ISR_BUDGET_CYCLES * 100)}%) · MAX ${maxCycles}`
+      : `ISR -- / ${AUDIO_ISR_BUDGET_CYCLES} cycles · MAX --`;
+    if (ui.cycleMeter.textContent !== text) ui.cycleMeter.textContent = text;
+    ui.cycleMeter.classList.toggle('over-budget', maxCycles > AUDIO_ISR_BUDGET_CYCLES);
   }
   requestAnimationFrame(drawScope);
 }
@@ -1096,10 +1282,21 @@ ui.runButton.addEventListener('click', () => {
   if (running) stopAudio();
   else startAudio().catch(reportRuntimeError);
 });
-ui.resetButton.addEventListener('click', resetMachine);
+ui.resetButton.addEventListener('click', () => resetMachine().catch(reportRuntimeError));
 
 await readDiagram();
 buildControls();
+ui.cycleMeterScrew?.addEventListener('click', () => {
+  const show = ui.cycleMeter.hidden;
+  ui.cycleMeter.hidden = !show;
+  ui.cycleMeterScrew.setAttribute('aria-label', `${show ? 'Hide' : 'Show'} audio ISR cycle meter`);
+  ui.cycleMeterScrew.setAttribute('aria-pressed', String(show));
+  if (show && machine) {
+    machine.audioIsrCycles = 0;
+    machine.audioIsrMaxCycles = 0;
+  }
+  cycleMeterUpdatedAt = 0;
+});
 drawScope();
 scheduleLcdDotMatrix();
 if (hardwareView) await loadDefaultHardwareFirmware();

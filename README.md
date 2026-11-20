@@ -1,240 +1,243 @@
-# bitsynth
+# BitSynth
 
-## Browser simulator
+BitSynth is a small wavetable synthesizer and eight-step sequencer built around a single 16 MHz ATmega328P. It is a reimagining of a project I first built about ten years ago: the hardware stays deliberately limited, but the firmware tries to squeeze as much music out of it as possible.
 
-The buildless simulator lives in `simulator/`. It loads AVR8js 0.21.1 from a
-pinned jsDelivr URL and runs ELF, Intel HEX, or raw BIN firmware locally in the
-browser. The controls and their initial values are read from
-`wokwi/diagram.json`; an embedded copy of the current mapping is used only when
-that file cannot be fetched.
+What you get:
 
-Build firmware with the normal 9-bit Timer1 PWM output:
+- **SEQ** – an eight-step sequencer with swing and optional generative variation (`GEN`)
+- **PLAY** – live playing in a scale, with chords and arpeggios over a running background sequence
+- **DRONE** – eight free-running oscillators with their own tremolo
+- Twelve melodic programs plus a PCM drum kit, a resonant filter, chorus, and a 16x2 LCD
+
+The same firmware runs on the real instrument and in the browser simulator, so you can try everything without building anything.
+
+## Quick start
+
+### Build and upload
+
+Install [Visual Studio Code](https://code.visualstudio.com/) with the **PlatformIO IDE** extension (or just PlatformIO Core). No external libraries or Node.js packages are needed.
 
 ```sh
-pio run -e browser
+pio run -e hardware              # build
+pio run -e hardware -t upload    # build and upload
 ```
 
-Then serve the repository with any static HTTP server. Python is one option
-(Node.js is not required):
+The target is an Arduino Pro Mini (ATmega328P, 5 V, 16 MHz); an Uno or Nano wired to the same pins works too. A Pro Mini needs a 5 V USB-to-serial adapter; if PlatformIO does not find it, set `upload_port` in `platformio.ini`. The last build used 30,474 bytes of flash (99.2%) and 1,104 bytes of RAM (53.9%).
+
+### Try it in the browser
+
+After building, open `simulator/hardware.html` in a browser. It loads `.pio/build/hardware/firmware.hex` automatically and runs the real firmware with AVR8js. If local files are blocked, serve the repository root instead:
 
 ```sh
 python -m http.server 8000
 ```
 
-Open `http://localhost:8000/simulator/`, load
-`.pio/build/browser/firmware.elf` (or `firmware.hex`), and press **Start audio**.
-Browsers require the explicit button press before Web Audio may start. Drag a
-knob vertically or use its mouse wheel. Keys `1`-`8` hold the eight step
-buttons, and `M` holds MODE/PANIC. The same controls are clickable on screen.
+and open `http://localhost:8000/simulator/hardware.html`. You can also click the LCD to load an ELF, HEX, or BIN file. The first load needs an internet connection (AVR8js comes from jsDelivr), and you may need to click or press a key once to start the audio.
 
-Two interfaces use the same simulator engine:
+| Simulator | Action |
+|---|---|
+| Knobs | Drag vertically, or use the mouse wheel |
+| `1`-`8` | Step buttons (hold to keep pressed) |
+| `M` | MODE: tap, double-tap, or hold with `1`, `2`, or `8` |
 
-- `simulator/index.html` is the compact laboratory view with an oscilloscope.
-- `simulator/hardware.html` recreates the physical front panel from the supplied
-  photographs, with a blue/white 16x2 LCD rendered as 5x8 dot-matrix cells,
-  image-based knobs and buttons, plus reset and monitor-volume controls. It
-  intentionally omits the oscilloscope. This
-  view automatically loads and starts `.pio/build/browser/firmware.hex`. If the
-  file is unavailable, click the LCD to choose ELF, HEX, or BIN firmware.
+The simulator plays the actual 9-bit PWM output through a model of the analog output filter, so it sounds like the instrument.
 
-Prefer the `browser` environment for this simulator. The `wokwi` environment
-still emits its intentional carrier-free 1-bit buzzer preview, which the browser
-can run but identifies as lower fidelity.
+## Playing BitSynth
 
-The firmware's Timer1 and `OCR1A` behavior is not modified. A specialized model
-reproduces Timer1 mode 6 as 9-bit Fast PWM: the counter runs from 0 to 511, the
-buffered compare value takes effect at BOTTOM, and the non-inverting D9 output
-switches between 0 V and 5 V at the real 31.25 kHz carrier rate. Those edges
-drive the loaded, coupled R1/C1-R2/C2-R3/C3 passive ladder and then the C4/R4
-AC-coupling stage. The linear circuit is advanced with an exact state-transition
-matrix rather than fixed approximation steps. Before conversion to the
-browser's output rate, the analog result is sampled at 2x the monitor rate and
-passed through a 4-pole anti-alias filter, comparable to a line-input ADC.
-The 1 kohm `Rout` is modeled as unloaded because the documented destination is
-a high-impedance line input, so it has no material effect. Speaker, headphone,
-volume-pot, cable, and amplifier loading are not modeled; the monitor-level
-slider is a browser output gain only.
+### The MODE button
 
-Nyolclépes, három üzemmódú wavetable szintetizátor Arduino Pro Minihez. A firmware a kevés kezelőszervet közvetlen, előadás közben is használható funkciókra osztja: sequencer, skálára kvantált free play és nyolcoszcillátoros drone mód.
+BitSynth starts in SEQ. **MODE** does three things:
 
-## Hardver
+- **Tap** – next parameter page (SEQ and PLAY)
+- **Double-tap** (within 350 ms) – next mode: SEQ → PLAY → DRONE → SEQ
+- **Hold + something** – a shortcut:
 
-A program 16 MHz-es ATmega328P alapú Arduino laphoz készült, például 5 V-os Pro Minihez, Nanóhoz vagy Unóhoz.
+| Shortcut | Where | What it does |
+|---|---|---|
+| MODE + step button 1 | PLAY | Background sequence on/off |
+| MODE + step button 2 | SEQ, PLAY | Swing on/off |
+| MODE + step button 8 | SEQ, PLAY | `GEN` on/off |
+| MODE + parameter pot | DRONE | Tremolo rate of that oscillator pair |
 
-- Mux címvezetékek: `D8`, `D11`, `D10`
-- Négy paraméterpoti: muxon keresztül `A0`
-- Nyolc step gomb: muxon keresztül `A1`
-- Nyolc step poti: muxon keresztül `A2`
-- Módválasztó/panic gomb: `A3`
-- 16×2 LiquidCrystal LCD: `D2–D7`
-- 9 bites PWM audiokimenet: `D9`
+Holding MODE alone does nothing, and a shortcut also works if the step button lands a moment (up to 25 ms) before MODE.
 
-A hangot Timer1 állítja elő 9 bites PWM-mel, a 20 kHz-es audio interruptot Timer2 adja. A PWM kimenet után külső analóg aluláteresztő- és kimeneti fokozat szükséges.
-Az oszcillátorok 256 mintás hullámtáblákat használnak; ez nem változtatja meg a 9 bites PWM-kimenet felbontását.
+**Soft takeover:** after a page or layer change, a pot does nothing until you move it, so values never jump.
 
-## Módváltás
+**Parameter pages:** the four parameter pots work on pages of four. Each mode fills its pages left to right with what the current program offers (see [Parameters](#parameters)); empty slots are skipped. The LCD's top row shows the four names; when you turn a pot, its value appears for about 1.5 s.
 
-Az `A3` gomb rövid megnyomása körben vált:
+### SEQ – step sequencer
 
-`SEQ → PLAY → DRONE → SEQ`
+| Control | Function |
+|---|---|
+| Parameter pots | Program, tempo (60-190 BPM), then the program's parameters |
+| Step pots 1-8 | Note of each step, C2 to B3 (drum sound in `DRM`) |
+| Step buttons 1-8 | Step on/off |
 
-Egy másodperces nyomva tartás panic műveletet hajt végre. Ez leállítja a normál hangokat, PLAY módban törli a tartott billentyűket, DRONE módban pedig kikapcsolja mind a nyolc oszcillátort.
+The sequence runs in sixteenth notes. A step that is off fades the previous note out in about 20 ms instead of cutting it.
 
-## SEQ — nyolclépes sequencer
+The LCD's bottom row is a little melody graph: each step is a bar whose height follows its note (C2 at the bottom, B3 full height; in `DRM` kick, snare, and hat are low, middle, and full). An active step is a solid bar, an inactive one a dotted dash, and the current step is a checkerboard. Turning a step pot briefly shows the step and its note at the lower right. A `*` means `GEN` is on.
 
-- Paraméterpoti 1: preset
-- Paraméterpoti 2: `60–220 BPM`
-- Paraméterpoti 3: presetfüggő `COLOR`
-- Paraméterpoti 4: presetfüggő `SHAPE`; `LEAD` esetén glide
-- Step potik 1–8: kromatikus hangok `C2–B3` között; `DRUM` presetben dobhangszerválasztók
-- Step gombok 1–8: az adott lépés be/ki
+**Swing** (off at power-up, not shown on the LCD) delays steps 2, 4, 6, and 8 to 65% of each step pair, a light shuffle; the tempo stays the same. It applies to every program, to PLAY's background sequence, and to arpeggios (`1/2`, `1/4`, and `1/8` stay straight).
 
-A lépések tizenhatodok. Az LCD alsó sorában `x` jelöli a bekapcsolt, `-` a kikapcsolt lépést, `O/o` pedig az aktuális lépést.
+**GEN** slowly varies a melodic sequence while it plays. At the start of each eight-step cycle it may change one step: it borrows the note of another active step, jumps an octave, or returns home. Step 1 and the rhythm never change and only notes already in the sequence are used, so the key stays. Turning a step pot resets that step; switching `GEN` off restores the original. `DRM` is not affected.
 
-### Sequencer presetek
+### PLAY – live playing
 
-| Preset | Felépítés | COLOR | SHAPE |
-|---|---|---|---|
-| `SUB` | sine + square szuboktáv | detune | decay |
-| `BASS` | saw + square szuboktáv | pitch sweep | decay |
-| `PLUK` | triangle + square oktáv | detune | decay |
-| `BELL` | sine felhangok + triangle | inharmonikus eltolás | ring hossz |
-| `LEAD` | saw + ramp | spread | glide |
-| `CHRD` | négyrétegű akkord | minor/major/sus2/sus4 | decay |
-| `CHIP` | két square oktávban | sample-hold/crush | decay |
-| `PERC` | noise + mély sine | zajhang/pitch sweep | decay |
-| `DRUM` | monofonikus 8 bites PCM dobmotor | lejátszási hangolás | decay |
+The step buttons play the notes of a scale, while the SEQ sequence can keep running in the background.
 
-### DRUM preset
+| Control | Function |
+|---|---|
+| Parameter pots | Program, root note, scale (`MAJ`, `MIN`, `PEN`, `BLU`), style, then the program's parameters |
+| Step pot 1 | Octave, O1-O5 (applies from the next note) |
+| Step pot 2 | Tempo, shared with SEQ (takes effect once you move it) |
+| Step pot 3 | Arpeggio speed: `1/2`, `1/4`, `1/4t`, `1/8`, `1/8t`, `1/16`, `1/16t`, `1/32` |
+| Step pot 8 | Balance: turn up for a louder background sequence, down for louder live notes |
+| Step buttons 1-8 | Consecutive scale notes |
 
-A `DRUM` nem hoz létre további sequencer-sávokat: minden lépés pontosan egy dobhangot tárol. A következő aktív lépés az előző dobhangot azonnal megszakítja, ezért nincs dobhang-átfedés vagy drum voice stealing.
+Styles:
 
-- Step potik: `KICK`, `SNAR`, `CHH`
-- Step gombok: az adott dobütés be/ki
-- Paraméterpoti 3 / `T`: az aktuális dobok közös tone/tuning makrója
-- Paraméterpoti 4 / `D`: hangszerfüggő decay
+- `POLY` – up to four notes at once (three while the background sequence runs); a new note takes over the oldest.
+- `CHRD` – a 1-3-5 chord from the most recently held button.
+- `UP`, `DOWN`, `UPDN` – arpeggiate the held buttons.
+- `CUP`, `CDWN`, `CUDN` – arpeggiate the chord of the most recently held button.
 
-A dobok külön monofonikus PCM-lejátszóból szólnak. A minták előjeles 9 bites, monó, 20 kHz-es adatokként, veszteségmentesen bitcsomagolva találhatók a `src/tables.h` fájlban. A lejátszó közvetlenül a flashből olvas, RAM-másolat nélkül. A `T` poti 0,75×–1,25× között változtatja a lejátszási sebességet, a `D` poti pedig a minta hosszának 25–100%-ára állítja a lecsengő amplitúdóburkolót. Új ütés az előző mintát azonnal újraindítja. PLAY módban a DRUM sequencer ugyanazon a fenntartott monó háttérhelyen fut tovább, így a három live voice megmarad.
+Arpeggios lock to the sequencer clock: button changes take effect on the next arpeggio note, and every division stays in phase with step 1. A multi-voice program plays each note (in `POLY` and in arpeggios) as one thick unison stack; single-voice programs stay polyphonic. Released notes fade out in about 20 ms.
 
-## PLAY — skálabiztos élő játék
+**Background sequence:** the SEQ pattern keeps playing with the SEQ program and its settings (`DRM` too) on its own voices, at the level step pot 8 sets, without the filter, chorus, or tremolo. It keeps its position when you enter PLAY, and switching it on or off does not restart notes you are holding.
 
-A sequencer PLAY módban is megszakítás nélkül fut tovább. Voice 0 a kapcsolható monó háttérszekvenszeré, voice 1–3 az élő játéké.
+The bottom row shows `▶` (running, blinking with the beat; `*` with `GEN`) or `■` (stopped), then octave, tempo, and arpeggio speed. The top row shows program, root, scale, and style, for example `A01 C#  MIN UPDN`. `DRM` is available only in SEQ.
 
-- Paraméterpoti 1: live preset
-- Paraméterpoti 2: gyökérhang `C–B`
-- Paraméterpoti 3: `MAJ`, `MIN`, `PEN`, `BLU` skála
-- Paraméterpoti 4: `POLY`, `CHRD`, `UP`, `DOWN`, `UPDN`
-- Step poti 1: `C2–C5` oktávsáv
-- Step potik 2–8: nincs funkció
-- Step gombok 1–8: a kiválasztott skála egymást követő hangjai
+### DRONE – eight oscillators
 
-A gombok lenyomásra indítják, felengedésre leállítják a hangot. `POLY` módban három hang szólhat egyszerre; a negyedik lenyomás a legrégebbi voice-t veszi át. `CHRD` skálán belüli 1–3–5 akkordot játszik. Az arpeggiók a tartott gombokat a sequencer tizenhatod-órajelével járják be.
+| Control | Function |
+|---|---|
+| Parameter pots 1-4 | Waveform (sine, triangle, square, saw) of oscillator pairs 1-2, 3-4, 5-6, 7-8 |
+| MODE + parameter pots 1-4 | Tremolo rate of each pair: off, or 94 steps from 0.05 to 20 Hz (LCD 0-94) |
+| Step pots 1-8 | Frequency, 80-600 Hz, unquantized |
+| Step buttons 1-8 | Oscillator on/off |
 
-PLAY módban a MODE gomb nyomva tartása közben az első step gomb kapcsolja be vagy ki a háttérszekvenszert. A kijelzőn `SEQ+` jelzi a bekapcsolt, `SEQ-` a némított állapotot. A szekvenszer órája és pozíciója kikapcsolt háttérhang mellett is tovább fut, ezért az arpeggiók tempója nem áll meg.
+Oscillators fade in and out without clicks. DRONE skips the filter and chorus. Leaving DRONE restarts the sequence from step 1.
 
-MODE nyomva tartása közben a négy paraméterpoti a három élő voice közös hullámtábla-morphját és low-pass szűrőjét vezérli:
+## Sounds
 
-- Paraméterpoti 1: háromszög LFO `OFF`, illetve `0,1–5,0 Hz` között, `0,1 Hz`-es lépésekben
-- Paraméterpoti 2: második hullámforma; teljesen letekerve `OFF`, fölötte `SIN`, `TRI`, `SQR`, `SAW`
-- Paraméterpoti 3: a három élő voice közös egyszerű low-pass szűrője; `OFF`, majd körülbelül `6,6 kHz`, `4,4 kHz`, `2,2 kHz`, `916 Hz`, `425 Hz`, `205 Hz` és `101 Hz`
-- Paraméterpoti 4: háromszög filter-LFO `OFF`, illetve `0,1–5,0 Hz` között, `0,1 Hz`-es lépésekben
+Program names start with a category letter: `A` bass, `B` lead, `C` pad, `D` keys, `E` sequence and effect. The descriptions say what each program aims for within this little engine, not a copy of the original.
 
-Kikapcsolt második hullámformánál az LFO nem állítható. Második hullámforma és kikapcsolt LFO esetén csak a második hullám szól; aktív LFO-nál a hang folyamatosan halad az eredeti preset-hullám és a második hullám között. A két táblát minden voice ugyanannál a fázispozíciónál olvassa, ezért a morph nem használ további oszcillátort, és nem változtatja meg a hangmagasságot. A háttérszekvenszer számára fenntartott voice 0 nem kap morphot.
+| Program | Sound | Voices |
+|---|---|---|
+| `A01` | Funk bass in the style of "Thriller": two beating saws over a square sub-octave | 3 |
+| `A02` | Reese bass: two detuned saws over a sine sub-octave, slow filter motion | 3 |
+| `A03` | 808 bass: a long, sliding sine | 1 |
+| `B01` | Pulse lead in the style of "Axel F" | 2 |
+| `B02` | Supersaw trance lead with chorus and glide | 4 |
+| `C01` | Juno-style PWM pad with chorus | 1 |
+| `C02` | String machine in the style of Jarre's "Oxygène" | 1 |
+| `D01` | Saw poly brass in the style of "Jump", for chords | 1 |
+| `D02` | Vibraphone or electric piano with motor tremolo | 1 |
+| `D03` | Rock organ: four sine drawbars, key click, Leslie-like tremolo | 4 |
+| `E01` | Dark arpeggio in the style of "Stranger Things": saw and pulse morphing, filter slowly moving | 2 |
+| `E02` | Surf noise in the style of "Oxygène": drifting filtered white noise | 1 |
+| `DRM` | Drum kit: `KICK`, `SNAR`, `CHH` per step (SEQ only) | - |
 
-Kikapcsolt filter mellett a filter-LFO nem állítható. Aktív filter és kikapcsolt filter-LFO esetén a 3. potival kiválasztott fix cutoff érvényesül; aktív LFO-nál a cutoff a teljesen nyitott állás és a kiválasztott legmélyebb érték között lépcsőzetesen mozog. A filter és mindkét LFO csak a három élő voice-ra hat, a háttérszekvenszerre nem.
+Tips:
 
-A két PLAY LFO 32 bites fázisakkumulátorral, 2,5 kHz-es vezérlési frissítéssel működik. Az audio és a közös live mix továbbra is a teljes 20 kHz-es, Q7 belső felbontású hangúton fut.
+- Single-voice programs (`A03`, `C01`, `C02`, `D01`, `D02`) are polyphonic in PLAY, ideal for `POLY` and `CHRD`.
+- `C01` and `C02` swell in over about 0.8 s; in SEQ every step restarts the swell, so lower `LEN` there.
+- For the `E01` theme, hold step buttons 1, 3, 5, 7, and 8 in PLAY with `C`, `MAJ`, and `UPDN`.
+- `E02` ignores pitch; with `ENV` 0 and a short `LEN` it ticks like a hi-hat.
+- `DRM` plays one sound per step, and a new hit replaces the previous one.
 
-SHIFT-szerkesztés után mind a négy poti soft takeoverrel tér vissza a preset, a gyökérhang, a skála és a játékstílus vezérléséhez: egyik érték sem ugrik el a MODE felengedésekor, csak a poti következő szándékos elmozdításakor.
+## Parameters
 
-Live presetek: `PURE`, `SOFT`, `KEYS`, `PLUK`, `BASS`, `LEAD`, `ORGN`, `LOFI`.
+Each program offers up to eight of these parameters plus two LFOs, so it has up to four pages. SEQ and PLAY remember their own values; changing the program loads its defaults.
 
-## DRONE — nyolc folyamatos oszcillátor
+| Name | What it does | Range |
+|---|---|---|
+| `FLT` | Low-pass filter cutoff | 0-126 = about 100 Hz-3.3 kHz, 127 = open |
+| `RES` | Filter resonance | Q about 1-6 |
+| `FEG` | Filter envelope: opens the filter at each note, then closes it | 0 off - 127 |
+| `LEN` | Note length | about 0.2-6.5 s, 127 = HOLD |
+| `ENV` | Envelope shape (see below) | 0-5 |
+| `GLD` | Glide between notes | 0 off - 127 |
+| `VIB` | 5 Hz vibrato depth | 64 none - 127 |
+| `PWM` | Square-wave pulse width | 5-95% |
+| `CHR` | Juno-style chorus | 0 off, 1, 2 |
+| `MOR` | Speed of morphing between the program's first two waveforms | 0 off, 0.16-20 Hz |
+| `VCD` | Tremolo depth | 0-256 |
+| `VCR` | Tremolo rate | 0 off, 0.01-20 Hz |
+| `TUN` | Drum playback speed (`DRM`) | 0.75-1.25x |
+| `DEC` | Drum decay (`DRM`) | 25-100% of the sample |
+| `RAT` / `DEP` | LFO rate and depth | 1-94 (0.05-20 Hz) / 0-127 |
 
-DRONE mód leállítja a sequencert és külön, nyolcoszcillátoros audio keverőt használ.
+Envelopes: `0` fast decay, `1` smooth decay, `2` pad (soft attack, long sustain), `3` constant, `4` full level then a linear fade, `5` strike (quick drop to 40%, then slow decay). HOLD sustains until you release the note.
 
-- Paraméterpoti 1: az 1–2. oszcillátor hullámformája
-- Paraméterpoti 2: a 3–4. oszcillátor hullámformája
-- Paraméterpoti 3: az 5–6. oszcillátor hullámformája
-- Paraméterpoti 4: a 7–8. oszcillátor hullámformája
-- Step potik: folyamatos, nem kvantált frekvencia `80–600 Hz` között
-- Step gombok: a hozzájuk tartozó oszcillátor be/ki
+Good to know:
 
-Választható hullámformák: `SIN`, `TRI`, `SQR`, `SAW`. A gate-ek rövid amplitúdó-rámpát kapnak a kapcsolási kattanások mérséklésére. DRONE után a sequencer az első lépésről indul újra.
+- **LFOs** draw a triangle around the parameter's value. They can modulate `PWM`, `VIB`, `TUN`, `DEC`, `VCD`, `VCR`, `FLT`, and `RES`; depth 127 sweeps the whole range. A slot shown as `---` is unused.
+- **Filter:** a resonant 12 dB/octave filter. Resonance does not self-oscillate; high `RES` lowers the level a little and adds some grit where the peak clips. Changes glide smoothly, so sweeps do not click.
+- **Filter envelope:** there is one shared filter, so in PLAY each new note restarts the envelope for every sounding note. It closes within a quarter of `LEN` (about 0.5 s with HOLD).
+- **Chorus:** a mono, Juno-60-style chorus (1 slower at 0.51 Hz, 2 faster at 0.86 Hz).
+- **Morph** works only on multi-voice programs and fades between waveforms; pitch and envelope stay the same.
+- **Volume** is automatic: notes and drum hits share the output, and a built-in limiter keeps chords and overlapping notes from clipping.
 
-MODE nyomva tartása közben a négy paraméterpoti külön VCA-LFO sebességet állít az 1–2., 3–4., 5–6. és 7–8. oszcillátorpárhoz. A teljesen letekert állás `OFF`, fölötte a teljes potiút finom, `0,1 Hz`-es lépésekben fedi le a `0,1–5,0 Hz` tartományt. Ha LFO-t állítottál, a MODE felengedése nem vált üzemmódot, és a hullámforma csak a paraméterpoti következő szándékos elmozdításakor veszi vissza a vezérlést.
+## Hardware
 
-A PWM kimenet továbbra is 20 kHz-en frissül. A processzorterhelés kordában tartásához a drone motor a négy oszcillátorpárt körkörösen, páronként 5 kHz-en számolja újra, a köztes PWM mintákhoz pedig megtartja a párok legutóbbi értékét. Ez a 80–600 Hz-es drone tartományban tudatos hangminőség/teljesítmény kompromisszum.
+Three CD74HC4067 multiplexers share their address lines and read the pots and buttons.
 
-## LCD
+| Function | Pin |
+|---|---|
+| MUX address bits 0, 1, 2 | `D8`, `D11`, `D10` |
+| Four parameter pots | MUX to `A0` |
+| Eight step buttons | MUX to `A1` |
+| Eight step pots | MUX to `A2` |
+| MODE button | `A3` |
+| 16x2 LCD (`RS`, `E`, `D4`-`D7`) | `D2`-`D7` |
+| 9-bit PWM audio | `D9` |
 
-- SEQ: preset, BPM, COLOR/SHAPE, gate maszk és aktuális lépés
-- PLAY: preset, gyökér, skála, játékmód, oktáv és a háttérszekvenszer állapota
-- DRONE: a négy oszcillátorpár hullámformája és a nyolc gate
+The KiCad project and a wiring picture are in `schematic/`.
 
-A paraméterpotik értékei közvetlenül a főképernyőn változnak, nincs külön szerkesztési képernyő. Sequencer pitch szerkesztésekor a hangnév, PLAY shift-szerkesztéskor a `B:` hullámforma, az `L:` morph-LFO, az `F:` filterfrekvencia vagy az `FL:` filter-LFO értéke, drone pitch szerkesztésekor a frekvencia, VCA-LFO szerkesztésekor pedig az `L1`–`L4` csoport és annak `OFF`/Hz értéke jelenik meg röviden a főképernyő jobb oldalán. Az LCD csak a ténylegesen megváltozott karaktereket írja újra, így nem villog minden sequencer-lépésnél.
+### Audio output
 
-## Fordítás
-
-A program és a hozzá tartozó fejállományok az `src/` mappában, a
-Wokwi-konfigurációk pedig a `wokwi/` mappában találhatók.
-A projekthez telepítsd a hivatalos `LiquidCrystal` könyvtárat; a PlatformIO
-ezt a gyökérben lévő `platformio.ini` alapján automatikusan kezeli.
-
-### Wokwi VS Code
-
-A repository tartalmazza a teljes Wokwi kapcsolást (`wokwi/diagram.json`) és az indítási
-konfigurációt (`wokwi/wokwi.toml`). A szimulátor egy Arduino Unót használ, amely azonos
-ATmega328P/16 MHz cél a firmware szempontjából. A kapcsolásban benne van a három
-multiplexer, mind a tizenkét poti, a nyolc step gomb, a MODE gomb, a 16×2 LCD és
-az `accurate` módú piezo audiokimenet.
-
-1. Telepítsd a VS Code PlatformIO IDE és Wokwi bővítményét.
-2. A repository gyökeréből fordítsd le a firmware-t: `pio run -e wokwi`.
-3. Az első indításkor futtasd a `Wokwi: Select Config File` parancsot, és válaszd
-   ki a `wokwi/wokwi.toml` fájlt.
-4. Futtasd a `Wokwi: Start Simulator` parancsot.
-
-A step gombok az `1`–`8`, a MODE/PANIC gomb az `M` billentyűvel is kezelhető.
-A Wokwi nem fordít automatikusan, ezért forrásmódosítás után ismét futtasd a
-PlatformIO buildet. A Wokwi build megfordítja a virtuális potik ADC-irányát, így
-jobbra tekerve minden vezérlés – a BPM-et is beleértve – növekszik. Ez csak a
-szimulációs buildre vonatkozik, a fizikai hardver firmware-ét nem módosítja.
-
-A Wokwi piezo nem modellez analóg rekonstrukciós szűrőt: a 31,25 kHz-es
-hardveres PWM közvetlen lejátszása hallható alias- és pulzáló gépzajt okoz.
-Ezért a Wokwi buildben a `D9` nem PWM-vivőt, hanem a 20 kHz-en kiszámolt
-audióminták hard-clippelt, egybites előnézetét adja a piezónak. A hangmagasság,
-a ritmus, a voice-keverés és a moduláció hallható marad, de ez nem alkalmas a
-valódi analóg kimenet hangszínének megítélésére. A fizikai build továbbra is
-a teljes 9 bites PWM-jelet használja.
-
-### Analóg audiokimenet
-
-A valódi hardveren a `D9` PWM kimenethez az alábbi háromfokozatú passzív
-aluláteresztő és AC-csatolt vonalkimenet használható:
+`D9` outputs PWM, so it needs this low-pass filter before it reaches an audio input:
 
 ```text
-D9 PWM -- R1 2,2 kΩ --o-- R2 2,2 kΩ --o-- R3 2,2 kΩ --o-- (+) C4 4,7 µF --o-- VOL 50 kΩ log -- Rout 1 kΩ -- AUDIO OUT
-                     |               |               |                         |          |
-                  C1 4,7 nF       C2 4,7 nF       C3 6,8 nF               R4 100 kΩ    GND
-                     |               |               |                         |
-                    GND             GND             GND                       GND
+D9 PWM -- R1 2.2 kΩ --o-- R2 2.2 kΩ --o-- R3 2.2 kΩ --o-- (+) C4 4.7 µF --o-- VOL 50 kΩ log -- Rout 1 kΩ -- AUDIO OUT
+                      |                |                |                         |          |
+                   C1 4.7 nF       C2 4.7 nF       C3 6.8 nF                R4 100 kΩ    GND
+                      |                |                |                         |
+                     GND              GND              GND                       GND
 ```
 
-A `C4` elektrolit pozitív lába az `R3` felé nézzen. A hangerőpoti felső
-kivezetése a `C4/R4` csomópontra, alsó kivezetése GND-re, csúszkája pedig
-az 1 kΩ-os kimeneti ellenállásra kerül. Ez nagy impedanciájú vonalbemenethez
-való; hangszórót vagy alacsony impedanciájú fejhallgatót külön erősítő
-nélkül ne hajts meg róla.
+The `+` lead of `C4` faces `R3`. The volume pot's top goes to the `C4/R4` node, its bottom to ground, and its wiper through `Rout` to the output. This is a line output: use an amplifier for speakers or headphones.
 
-A Wokwi csak korlátozott analóg szimulációt ad, ezért a diagramon a fenti
-szűrő dokumentációként jelenik meg; az alkatrészek frekvenciamenetét a
-szimulátor nem számolja.
+## Under the hood
 
-## Korlátok
+- **Audio:** a 20 kHz timer interrupt outputs one sample at a time, while a second one renders the next eight samples in the background (AVR assembly in `src/synth_voices.S`). The output is 9-bit PWM at 31.25 kHz with dither.
+- **Voices:** five wavetable voices (four normal, one more for the background sequence), generated square and noise, and a separate eight-oscillator drone engine. Wavetables, envelopes, and drum samples (9-bit, 20 kHz, packed) live in flash.
+- **Controls:** analog readings are median-filtered, smoothed, and use hysteresis; buttons are debounced; the LCD only rewrites changed characters. Everything is driven through registers, with no libraries.
 
-- Nincs EEPROM-mentés; a beállítások újraindításkor alapértékre állnak.
-- A PLAY mód három élő voice-a közös, rezonancia nélküli egy pólusú low-pass szűrőt használ.
-- A normál hangmotor négyszólamú. PLAY módban ebből egy voice a háttérszekvenszeré és három az élő játéké.
-- A nyolc drone oszcillátor egyszerűsített, burkológörbe nélküli keverőágat használ az ATmega328P időkeretének betartásához.
+## Developer tools
+
+- **Cycle meter:** click the lower-right screw in the simulator to show the audio-interrupt load against its 800-cycle-per-sample budget, plus the worst eight-sample block (MAX). Each reopening starts a new measurement, and rare peaks can take a while to appear.
+- **Headless tests:** `util/fullsim.js` runs a scripted session through the whole firmware, and `util/isrbench.js` benchmarks the audio interrupt. Both need Deno; usage is at the top of each file.
+- **Custom wavetables:** prepare a 256-sample mono waveform in Audacity and export it as headerless signed 16-bit RAW. Set `RAW_TO_H_OUTPUT_BITS` to `9` in `util/raw_to_h.bat` and drag the `.raw` file onto it; drag the generated `.h` onto `util/sample_player.bat` to listen. Copy the array into `src/tables.h`, keeping its name, `PROGMEM`, 256 samples, and the signed 9-bit range.
+
+## Limitations
+
+- Settings and patterns are not saved; a reset restores the defaults.
+- PLAY has three live voices while the background sequence runs, and the background plays at most two voices of a program.
+- DRONE has no per-note envelopes.
+- Flash is almost full; check the size report after every change.
+
+## Repository layout
+
+```text
+src/             Firmware, synth engine, wavetables, envelopes, and drum samples
+simulator/       Browser front panel and simulator
+schematic/       KiCad project and wiring picture
+util/            Wavetable helpers and headless test tools
+platformio.ini   Build settings
+```
+
+## License
+
+MIT. See `LICENSE`.

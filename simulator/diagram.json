@@ -1,13 +1,13 @@
 {
   "version": 1,
   "author": "bitsynth",
-  "editor": "wokwi",
+  "editor": "bitsynth-browser",
   "parts": [
     { "type": "wokwi-arduino-uno", "id": "uno", "top": 48, "left": 0, "attrs": {} },
     { "type": "wokwi-lcd1602", "id": "lcd", "top": 0, "left": 336, "attrs": { "pins": "full", "background": "blue", "color": "white" } },
     { "type": "wokwi-buzzer", "id": "audio", "top": 72, "left": 758.4, "attrs": { "mode": "accurate", "volume": "0.35" } },
-    { "type": "wokwi-text", "id": "audioLabel", "top": 38.4, "left": 672, "attrs": { "text": "SIM AUDIO PREVIEW (1-bit)" } },
-    { "type": "wokwi-text", "id": "filterSchematic", "top": 0, "left": 902.4, "attrs": { "text": "REAL HARDWARE AUDIO FILTER (not simulated)\n\nD9 PWM -- R1 2k2 --o-- R2 2k2 --o-- R3 2k2 --o-- (+) C4 4u7 --o-- VOL 50k LOG -- Rout 1k -- AUDIO OUT\n                  |           |           |                       |       |\n               C1 4n7      C2 4n7      C3 6n8                 R4 100k   GND\n                  |           |           |                       |\n                 GND         GND         GND                     GND\n\nC4: positive lead toward R3. Audio out is for a high-impedance line input." } },
+    { "type": "wokwi-text", "id": "audioLabel", "top": 38.4, "left": 672, "attrs": { "text": "SIMULATED HARDWARE AUDIO" } },
+    { "type": "wokwi-text", "id": "filterSchematic", "top": 0, "left": 902.4, "attrs": { "text": "REAL HARDWARE AUDIO FILTER\n\nD9 PWM -- R1 2k2 --o-- R2 2k2 --o-- R3 2k2 --o-- (+) C4 4u7 --o-- VOL 50k LOG -- Rout 1k -- AUDIO OUT\n                  |           |           |                       |       |\n               C1 4n7      C2 4n7      C3 6n8                 R4 100k   GND\n                  |           |           |                       |\n                 GND         GND         GND                     GND\n\nC4: positive lead toward R3. Audio out is for a high-impedance line input." } },
 
     { "type": "board-cd74hc4067", "id": "settingsMux", "top": 249.6, "left": 0, "attrs": {} },
     { "type": "wokwi-text", "id": "settingsLabel", "top": 220.8, "left": 9.6, "attrs": { "text": "PARAMETER POTS (A0)" } },
@@ -15,10 +15,10 @@
     { "type": "wokwi-potentiometer", "id": "setting2", "top": 278.4, "left": 384, "attrs": { "value": "420" } },
     { "type": "wokwi-potentiometer", "id": "setting3", "top": 278.4, "left": 499.2, "attrs": { "value": "511" } },
     { "type": "wokwi-potentiometer", "id": "setting4", "top": 278.4, "left": 614.4, "attrs": { "value": "511" } },
-    { "type": "wokwi-text", "id": "settingText1", "top": 355.2, "left": 259.2, "attrs": { "text": "P1 PRESET" } },
-    { "type": "wokwi-text", "id": "settingText2", "top": 355.2, "left": 384, "attrs": { "text": "P2 BPM" } },
-    { "type": "wokwi-text", "id": "settingText3", "top": 355.2, "left": 489.6, "attrs": { "text": "P3 COLOR" } },
-    { "type": "wokwi-text", "id": "settingText4", "top": 355.2, "left": 604.8, "attrs": { "text": "P4 SHAPE" } },
+    { "type": "wokwi-text", "id": "settingText1", "top": 355.2, "left": 259.2, "attrs": { "text": "P1 MACRO" } },
+    { "type": "wokwi-text", "id": "settingText2", "top": 355.2, "left": 384, "attrs": { "text": "P2 MACRO" } },
+    { "type": "wokwi-text", "id": "settingText3", "top": 355.2, "left": 489.6, "attrs": { "text": "P3 MACRO" } },
+    { "type": "wokwi-text", "id": "settingText4", "top": 355.2, "left": 604.8, "attrs": { "text": "P4 MACRO" } },
 
     { "type": "board-cd74hc4067", "id": "buttonMux", "top": 432, "left": 0, "attrs": { "digitalMux": "1" } },
     { "type": "wokwi-text", "id": "buttonLabel", "top": 403.2, "left": 9.6, "attrs": { "text": "STEP BUTTONS (A1)" } },
