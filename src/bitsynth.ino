@@ -120,55 +120,110 @@ struct AnalogMotionState {
   bool ready;
 };
 
+// Melodic presets. Template (one MelodicPreset per entry):
+//
+//   {"LBL", voiceCount,
+//    {{wave, detuneCents, envelope, mod}, {voice 1}, {voice 2}, {voice 3}},
+//    len, pw, glide, vcaDepth, vcaRate, chorus, morph, cutoff, res, feg,
+//    {macro slot 0, slot 1, slot 2, slot 3, slot 4, slot 5, slot 6, slot 7},
+//    {lfo0Target, lfo1Target},
+//    {lfo0Rate, lfo1Rate}, {lfo0Depth, lfo1Depth}, level},
+//
+// label       LCD name, max 4 characters.
+// voiceCount  1: one voice per note from voices[0] (POLY/CHORD/ARP use several notes).
+//             2-4: every note stacks voices[0..voiceCount-1]; unused recipes are ignored.
+// voices[]    wave: SINE/TRIANGLE/SQUARE/SAW/NOISE.
+//             detuneCents: pitch offset from the note (1200 = +1 octave, 702 = fifth).
+//             envelope: ENVELOPE1-5 shape; voices[0] is the ENV macro's start value.
+//             mod: vibrato, 64 = off, distance from 64 = depth (0-127); voices[0] seeds VIB.
+// len         Envelope length 0-127; +12 doubles the time; a zero-step length means HOLD.
+// pw          SQUARE pulse width, 5-95 %.
+// glide       Portamento 0-127, 0 = off.
+// vcaDepth    Tremolo depth 0-256, 0 = off.
+// vcaRate     Tremolo rate index 0-98, 0 = off (presetVcaRateHundredths: 0.01-20 Hz).
+// chorus      SYNTH_CHORUS_OFF, SYNTH_CHORUS_1 (slow), SYNTH_CHORUS_2 (fast).
+// morph       Wave morph speed voices[0].wave -> voices[1].wave, 0-127, 0 = off.
+// cutoff      Low-pass cutoff 0-127, 127 = open (filter bypassed).
+// res         Resonance 0-127.
+// feg         Filter envelope amount 0-127, 0 = off.
+// macros[8]   MACRO_* on the eight macro slots in order; MACRO_NONE leaves a slot empty.
+// lfoTarget   MACRO_* modulated by LFO 0/1 with a triangle; MACRO_NONE = unused.
+// lfoRate     Index 0-93 (lfoRateForIndex: 0.05-20 Hz); the LCD shows index + 1.
+// lfoDepth    0-127, 0 = LFO idle.
+// level       Output level scale 0-255, 255 = full voice budget.
 const MelodicPreset kMelodicPresets[] PROGMEM = {
-  {"A01", 3, {{SAW, 0, ENVELOPE5, 64}, {SAW, 8, ENVELOPE5, 64}, {SQUARE, -1200, ENVELOPE5, 64}, {SINE, 0, ENVELOPE5, 64}},
+  {"A01", 3,
+   {{SAW, 0, ENVELOPE5, 64}, {SAW, 8, ENVELOPE5, 64}, {SQUARE, -1200, ENVELOPE5, 64}, {SINE, 0, ENVELOPE5, 64}},
    72, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 52, 24, 88,
    {MACRO_FILTER, MACRO_RESONANCE, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_GLIDE, MACRO_FILTER_ENVELOPE, MACRO_NONE, MACRO_NONE},
-   {MACRO_NONE, MACRO_NONE}, {0, 0}, {0, 0}, 255},
-  {"A02", 3, {{SAW, -14, ENVELOPE4, 64}, {SAW, 14, ENVELOPE4, 64}, {SINE, -1200, ENVELOPE4, 64}, {SINE, 0, ENVELOPE4, 64}},
+   {MACRO_NONE, MACRO_NONE},
+   {0, 0}, {0, 0}, 255},
+  {"A02", 3,
+   {{SAW, -14, ENVELOPE4, 64}, {SAW, 14, ENVELOPE4, 64}, {SINE, -1200, ENVELOPE4, 64}, {SINE, 0, ENVELOPE4, 64}},
    106, 50, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 60, 16, 0,
    {MACRO_FILTER, MACRO_RESONANCE, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_GLIDE, MACRO_NONE, MACRO_NONE, MACRO_NONE},
-   {MACRO_FILTER, MACRO_NONE}, {16, 0}, {12, 0}, 255},
-  {"A03", 1, {{SINE, 0, ENVELOPE1, 64}, {SINE, 0, ENVELOPE1, 64}, {SINE, 0, ENVELOPE1, 64}, {SINE, 0, ENVELOPE1, 64}},
+   {MACRO_FILTER, MACRO_NONE},
+   {16, 0}, {12, 0}, 255},
+  {"A03", 1,
+   {{SINE, 0, ENVELOPE1, 64}, {SINE, 0, ENVELOPE1, 64}, {SINE, 0, ENVELOPE1, 64}, {SINE, 0, ENVELOPE1, 64}},
    90, 50, 72, 0, 0, SYNTH_CHORUS_OFF, 0, 127, 0, 0,
    {MACRO_GLIDE, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE, MACRO_NONE},
-   {MACRO_NONE, MACRO_NONE}, {0, 0}, {0, 0}, 255},
-  {"B01", 2, {{SQUARE, 1200, ENVELOPE5, 64}, {SAW, 1205, ENVELOPE5, 64}, {SINE, 0, ENVELOPE5, 64}, {SINE, 0, ENVELOPE5, 64}},
+   {MACRO_NONE, MACRO_NONE},
+   {0, 0}, {0, 0}, 255},
+  {"B01", 2,
+   {{SQUARE, 1200, ENVELOPE5, 64}, {SAW, 1205, ENVELOPE5, 64}, {SINE, 0, ENVELOPE5, 64}, {SINE, 0, ENVELOPE5, 64}},
    87, 30, 0, 0, 0, SYNTH_CHORUS_OFF, 0, 88, 16, 80,
    {MACRO_PULSE_WIDTH, MACRO_FILTER, MACRO_RESONANCE, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_GLIDE, MACRO_VIBRATO, MACRO_FILTER_ENVELOPE},
-   {MACRO_NONE, MACRO_NONE}, {0, 0}, {0, 0}, 255},
-  {"B02", 4, {{SAW, 1200, ENVELOPE4, 64}, {SAW, 1185, ENVELOPE4, 64}, {SAW, 1215, ENVELOPE4, 64}, {SAW, 0, ENVELOPE4, 64}},
+   {MACRO_NONE, MACRO_NONE},
+   {0, 0}, {0, 0}, 255},
+  {"B02", 4,
+   {{SAW, 1200, ENVELOPE4, 64}, {SAW, 1185, ENVELOPE4, 64}, {SAW, 1215, ENVELOPE4, 64}, {SAW, 0, ENVELOPE4, 64}},
    106, 50, 12, 0, 74, SYNTH_CHORUS_1, 0, 101, 0, 0,
    {MACRO_FILTER, MACRO_RESONANCE, MACRO_GLIDE, MACRO_CHORUS, MACRO_VIBRATO, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_VCA_DEPTH},
-   {MACRO_FILTER, MACRO_NONE}, {5, 0}, {0, 0}, 255},
-  {"C01", 1, {{SQUARE, 0, ENVELOPE2, 64}, {SQUARE, 0, ENVELOPE2, 64}, {SQUARE, 0, ENVELOPE2, 64}, {SQUARE, 0, ENVELOPE2, 64}},
+   {MACRO_FILTER, MACRO_NONE},
+   {5, 0}, {0, 0}, 255},
+  {"C01", 1,
+   {{SQUARE, 0, ENVELOPE2, 64}, {SQUARE, 0, ENVELOPE2, 64}, {SQUARE, 0, ENVELOPE2, 64}, {SQUARE, 0, ENVELOPE2, 64}},
    99, 50, 0, 0, 0, SYNTH_CHORUS_1, 0, 84, 16, 0,
    {MACRO_PULSE_WIDTH, MACRO_FILTER, MACRO_RESONANCE, MACRO_CHORUS, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_NONE, MACRO_NONE},
-   {MACRO_PULSE_WIDTH, MACRO_FILTER}, {18, 5}, {49, 0}, 255},
-  {"C02", 1, {{SAW, 0, ENVELOPE2, 66}, {SAW, 0, ENVELOPE2, 66}, {SAW, 0, ENVELOPE2, 66}, {SAW, 0, ENVELOPE2, 66}},
+   {MACRO_PULSE_WIDTH, MACRO_FILTER},
+   {18, 5}, {49, 0}, 255},
+  {"C02", 1,
+   {{SAW, 0, ENVELOPE2, 66}, {SAW, 0, ENVELOPE2, 66}, {SAW, 0, ENVELOPE2, 66}, {SAW, 0, ENVELOPE2, 66}},
    99, 50, 0, 0, 0, SYNTH_CHORUS_2, 0, 80, 0, 0,
    {MACRO_FILTER, MACRO_RESONANCE, MACRO_CHORUS, MACRO_VIBRATO, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_NONE, MACRO_NONE},
-   {MACRO_FILTER, MACRO_NONE}, {7, 0}, {16, 0}, 255},
-  {"D01", 1, {{SAW, 0, ENVELOPE4, 64}, {SAW, 0, ENVELOPE4, 64}, {SAW, 0, ENVELOPE4, 64}, {SAW, 0, ENVELOPE4, 64}},
+   {MACRO_FILTER, MACRO_NONE},
+   {7, 0}, {16, 0}, 255},
+  {"D01", 1,
+   {{SAW, 0, ENVELOPE4, 64}, {SAW, 0, ENVELOPE4, 64}, {SAW, 0, ENVELOPE4, 64}, {SAW, 0, ENVELOPE4, 64}},
    106, 50, 0, 0, 0, SYNTH_CHORUS_1, 0, 88, 0, 64,
    {MACRO_FILTER, MACRO_RESONANCE, MACRO_CHORUS, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_GLIDE, MACRO_VIBRATO, MACRO_FILTER_ENVELOPE},
-   {MACRO_NONE, MACRO_NONE}, {0, 0}, {0, 0}, 255},
-  {"D02", 1, {{TRIANGLE, 0, ENVELOPE5, 64}, {TRIANGLE, 0, ENVELOPE5, 64}, {TRIANGLE, 0, ENVELOPE5, 64}, {TRIANGLE, 0, ENVELOPE5, 64}},
+   {MACRO_NONE, MACRO_NONE},
+   {0, 0}, {0, 0}, 255},
+  {"D02", 1,
+   {{TRIANGLE, 0, ENVELOPE5, 64}, {TRIANGLE, 0, ENVELOPE5, 64}, {TRIANGLE, 0, ENVELOPE5, 64}, {TRIANGLE, 0, ENVELOPE5, 64}},
    99, 50, 0, 96, 69, SYNTH_CHORUS_OFF, 0, 90, 0, 0,
    {MACRO_VCA_DEPTH, MACRO_VCA_RATE, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_FILTER, MACRO_RESONANCE, MACRO_CHORUS, MACRO_NONE},
-   {MACRO_NONE, MACRO_NONE}, {0, 0}, {0, 0}, 255},
-  {"D03", 4, {{SINE, 0, ENVELOPE3, 66}, {SINE, 1200, ENVELOPE3, 66}, {SINE, 702, ENVELOPE3, 66}, {SINE, -1200, ENVELOPE3, 66}},
+   {MACRO_NONE, MACRO_NONE},
+   {0, 0}, {0, 0}, 255},
+  {"D03", 4,
+   {{SINE, 0, ENVELOPE3, 66}, {SINE, 1200, ENVELOPE3, 66}, {SINE, 702, ENVELOPE3, 66}, {SINE, -1200, ENVELOPE3, 66}},
    127, 50, 0, 40, 70, SYNTH_CHORUS_2, 0, 127, 0, 0,
    {MACRO_VCA_RATE, MACRO_VCA_DEPTH, MACRO_VIBRATO, MACRO_CHORUS, MACRO_FILTER, MACRO_RESONANCE, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE},
-   {MACRO_NONE, MACRO_NONE}, {0, 0}, {0, 0}, 255},
-  {"E01", 2, {{SAW, 0, ENVELOPE1, 64}, {SQUARE, 6, ENVELOPE1, 64}, {SINE, 0, ENVELOPE1, 64}, {SINE, 0, ENVELOPE1, 64}},
+   {MACRO_NONE, MACRO_NONE},
+   {0, 0}, {0, 0}, 255},
+  {"E01", 2,
+   {{SAW, 0, ENVELOPE1, 64}, {SQUARE, 6, ENVELOPE1, 64}, {SINE, 0, ENVELOPE1, 64}, {SINE, 0, ENVELOPE1, 64}},
    66, 40, 0, 0, 0, SYNTH_CHORUS_OFF, 1, 72, 48, 64,
    {MACRO_FILTER, MACRO_RESONANCE, MACRO_MORPH, MACRO_PULSE_WIDTH, MACRO_CHORUS, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_GLIDE},
-   {MACRO_FILTER, MACRO_PULSE_WIDTH}, {5, 20}, {40, 28}, 255},
-  {"E02", 1, {{NOISE, 0, ENVELOPE3, 64}, {NOISE, 0, ENVELOPE3, 64}, {NOISE, 0, ENVELOPE3, 64}, {NOISE, 0, ENVELOPE3, 64}},
+   {MACRO_FILTER, MACRO_PULSE_WIDTH},
+   {5, 20}, {40, 28}, 255},
+  {"E02", 1,
+   {{NOISE, 0, ENVELOPE3, 64}, {NOISE, 0, ENVELOPE3, 64}, {NOISE, 0, ENVELOPE3, 64}, {NOISE, 0, ENVELOPE3, 64}},
    127, 50, 0, 200, 10, SYNTH_CHORUS_OFF, 0, 68, 48, 0,
    {MACRO_FILTER, MACRO_RESONANCE, MACRO_VCA_DEPTH, MACRO_VCA_RATE, MACRO_ENVELOPE_LENGTH, MACRO_ENVELOPE, MACRO_CHORUS, MACRO_NONE},
-   {MACRO_FILTER, MACRO_NONE}, {7, 0}, {45, 0}, 255}
+   {MACRO_FILTER, MACRO_NONE},
+   {7, 0}, {45, 0}, 255}
 };
 const uint8_t kMelodicPresetCount = sizeof(kMelodicPresets) / sizeof(kMelodicPresets[0]);
 const uint8_t PRESET_DRUM = kMelodicPresetCount;
