@@ -23,7 +23,7 @@ const uint8_t kAnalogFilterFractionBits = 4;
 const uint8_t kAnalogFilterAlphaNumerator = 2;
 const uint8_t kAnalogFilterAlphaDenominator = 8;
 const uint8_t kAnalogHysteresis = 12;
-const uint8_t kAnalogEndpointMargin = 32;
+const uint8_t kAnalogEndpointMargin = 16;
 const uint8_t kSettingMovementThreshold = 16;
 const uint8_t kStepMovementThreshold = 10;
 const uint8_t kDroneMovementThreshold = 8;
@@ -933,11 +933,12 @@ uint16_t rawForMappedValue(int16_t value, int16_t outMin, int16_t outMax) {
   return constrain(map(value, outMin, outMax, 0, 1023), 0, 1023);
 }
 
-static_assert(kAnalogEndpointMargin == 32, "usableAnalogRaw scales the 959-count usable span");
+static_assert(kAnalogEndpointMargin == 16, "usableAnalogRaw scales the 991-count usable span");
 
 // Stretches the span between the endpoint margins to 0-1022.
 uint16_t usableAnalogRaw(uint16_t raw) {
-  return (uint16_t)((raw - kAnalogEndpointMargin) << 4) / 15U;
+  raw -= kAnalogEndpointMargin;
+  return raw + (raw >> 5);
 }
 
 // Maps a pot to a range; the value changes only past a boundary plus hysteresis.
