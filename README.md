@@ -201,10 +201,10 @@ The KiCad project and a wiring picture are in `schematic/`.
 
 ```text
 D9 PWM -- R1 2.2 kΩ --o-- R2 2.2 kΩ --o-- R3 2.2 kΩ --o-- (+) C4 4.7 µF --o-- VOL 50 kΩ log -- Rout 1 kΩ -- AUDIO OUT
-                      |                |                |                         |          |
-                   C1 4.7 nF       C2 4.7 nF       C3 6.8 nF                R4 100 kΩ    GND
-                      |                |                |                         |
-                     GND              GND              GND                       GND
+                      |               |               |                   |           |
+                   C1 4.7 nF      C2 4.7 nF      C3 6.8 nF            R4 100 kΩ      GND
+                      |               |               |                   |
+                     GND             GND             GND                 GND
 ```
 
 The `+` lead of `C4` faces `R3`. The volume pot's top goes to the `C4/R4` node, its bottom to ground, and its wiper through `Rout` to the output. This is a line output: use an amplifier for speakers or headphones.
