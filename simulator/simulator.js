@@ -1132,21 +1132,24 @@ function unlockAudio() {
   if (running && audioContext.state !== 'running') audioContext.resume().catch(() => {});
 }
 
+// Loads the firmware published next to the page, else the local build output.
 async function loadDefaultFirmware() {
-  try {
-    const response = await fetch('../.pio/build/hardware/firmware.hex', { cache: 'no-store' });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const hex = new File([await response.blob()], 'firmware.hex');
-    await loadFirmware(hex, await fetchDefaultSymbols());
-  } catch {
-    setLcdLines('Click here to', 'load firmware');
+  for (const dir of ['./', '../.pio/build/hardware/']) {
+    try {
+      const response = await fetch(`${dir}firmware.hex`, { cache: 'no-store' });
+      if (!response.ok) continue;
+      const hex = new File([await response.blob()], 'firmware.hex');
+      await loadFirmware(hex, await fetchDefaultSymbols(dir));
+      return;
+    } catch {}
   }
+  setLcdLines('Click here to', 'load firmware');
 }
 
 // Fetches the build's ELF for the preset editor's symbol addresses.
-async function fetchDefaultSymbols() {
+async function fetchDefaultSymbols(dir) {
   try {
-    const response = await fetch('../.pio/build/hardware/firmware.elf', { cache: 'no-store' });
+    const response = await fetch(`${dir}firmware.elf`, { cache: 'no-store' });
     return response.ok ? parseElfSymbols(await response.arrayBuffer()) : null;
   } catch {
     return null;

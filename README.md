@@ -26,7 +26,9 @@ The target is an Arduino Pro Mini (ATmega328P, 5 V, 16 MHz); an Uno or Nano wire
 
 ### Try it in the browser
 
-After building, open `simulator/hardware.html` in a browser. It loads `.pio/build/hardware/firmware.hex` automatically and runs the real firmware with AVR8js. If local files are blocked, serve the repository root instead:
+The simulator is online at [akosturi.github.io/bitsynth](https://akosturi.github.io/bitsynth/), so no install is needed. Every push to `master` rebuilds the firmware and republishes it with GitHub Actions (`.github/workflows/pages.yml`).
+
+To run your own build locally, open `simulator/hardware.html` in a browser. It loads `.pio/build/hardware/firmware.hex` automatically and runs the real firmware with AVR8js. If local files are blocked, serve the repository root instead:
 
 ```sh
 python -m http.server 8000
@@ -237,6 +239,7 @@ simulator/       Browser front panel and simulator
 schematic/       KiCad project and wiring picture
 util/            Wavetable helpers and headless test tools
 platformio.ini   Build settings
+.github/         Workflow that publishes the simulator
 ```
 
 ## License
