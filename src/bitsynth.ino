@@ -22,12 +22,14 @@ const uint8_t kAnalogDiscardSamples = 2;
 const uint8_t kAnalogFilterFractionBits = 4;
 const uint8_t kAnalogFilterAlphaNumerator = 2;
 const uint8_t kAnalogFilterAlphaDenominator = 8;
-const uint8_t kAnalogHysteresis = 12;
-const uint8_t kAnalogEndpointMargin = 32;
-const uint8_t kSettingMovementThreshold = 16;
-const uint8_t kStepMovementThreshold = 10;
+const uint8_t kAnalogHysteresis = 6;
+const uint8_t kAnalogEndpointMargin = 16;
+const uint8_t kSettingMovementThreshold = 10;
+const uint8_t kStepMovementThreshold = 8;
 const uint8_t kDroneMovementThreshold = 8;
 const uint8_t kAnalogMovementConfirmations = 2;
+const uint8_t kAnalogTracking = 255;
+const uint8_t kAnalogTrackStep = 2;
 const uint8_t kMuxSettleUs = 50;
 const uint8_t kButtonDebounceMs = 25;
 const uint16_t kModeDoubleTapMs = 350;
@@ -894,7 +896,7 @@ uint16_t filterAnalog(uint16_t raw, uint16_t &filtered, bool &ready) {
   return (filtered + (1 << (kAnalogFilterFractionBits - 1))) >> kAnalogFilterFractionBits;
 }
 
-// Accepts sustained directional movement and rejects jitter.
+// Accepts sustained directional movement, then tracks it finely until it reverses.
 uint16_t acceptAnalogMovement(uint16_t raw, AnalogMotionState &state, uint8_t threshold) {
   if (!state.ready) {
     state.accepted = raw;
@@ -905,6 +907,13 @@ uint16_t acceptAnalogMovement(uint16_t raw, AnalogMotionState &state, uint8_t th
   }
 
   const int16_t delta = (int16_t)raw - (int16_t)state.accepted;
+  if (state.confirmations == kAnalogTracking) {
+    const int16_t forward = state.direction > 0 ? delta : -delta;
+    if (forward >= kAnalogTrackStep) { state.accepted = raw; return raw; }
+    if (forward > -(int16_t)threshold) return state.accepted;
+    state.confirmations = 0;
+    state.direction = 0;
+  }
   if (abs(delta) < threshold) {
     state.confirmations = 0;
     state.direction = 0;
@@ -915,14 +924,13 @@ uint16_t acceptAnalogMovement(uint16_t raw, AnalogMotionState &state, uint8_t th
   if (direction != state.direction) {
     state.direction = direction;
     state.confirmations = 1;
-  } else if (state.confirmations < kAnalogMovementConfirmations) {
+  } else {
     ++state.confirmations;
   }
 
   if (state.confirmations >= kAnalogMovementConfirmations) {
     state.accepted = raw;
-    state.confirmations = 0;
-    state.direction = 0;
+    state.confirmations = kAnalogTracking;
   }
   return state.accepted;
 }
@@ -933,11 +941,12 @@ uint16_t rawForMappedValue(int16_t value, int16_t outMin, int16_t outMax) {
   return constrain(map(value, outMin, outMax, 0, 1023), 0, 1023);
 }
 
-static_assert(kAnalogEndpointMargin == 32, "usableAnalogRaw scales the 959-count usable span");
+static_assert(kAnalogEndpointMargin == 16, "usableAnalogRaw scales the 991-count usable span");
 
 // Stretches the span between the endpoint margins to 0-1022.
 uint16_t usableAnalogRaw(uint16_t raw) {
-  return (uint16_t)((raw - kAnalogEndpointMargin) << 4) / 15U;
+  raw -= kAnalogEndpointMargin;
+  return raw + (raw >> 5);
 }
 
 // Maps a pot to a range; the value changes only past a boundary plus hysteresis.

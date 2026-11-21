@@ -33,20 +33,26 @@ const TCCR1A = 0x80;
 const TCCR1B = 0x81;
 const OCR1AL = 0x88;
 const OCR1AH = 0x89;
+const SRAM_SYMBOL_BASE = 0x800000;
+const PRESET_SIZE = 52;
+const PRESET_EDITOR_TICK_MS = 100;
+const PRESET_SETTLE_MS = 500;
+const PRESET_POT_MARGIN = 10;
+const ANALOG_ENDPOINT_MARGIN = 16;
+const MODE_SEQ = 0;
+const MODE_PLAY = 1;
+const PRESET_RAM_SYMBOLS = ['seqControls', 'playControls', 'instrumentMode', 'parameterPage',
+  'parameterPageLocked', 'parameterPageRaw', 'settingValues'];
+const WAVE_NAMES = ['SINE', 'TRIANGLE', 'SQUARE', 'SAW', 'NOISE'];
+const ENVELOPE_NAMES = ['ENVELOPE0', 'ENVELOPE1', 'ENVELOPE2', 'ENVELOPE3', 'ENVELOPE4', 'ENVELOPE5'];
+const CHORUS_NAMES = ['SYNTH_CHORUS_OFF', 'SYNTH_CHORUS_1', 'SYNTH_CHORUS_2'];
+const MACRO_NAMES = ['MACRO_NONE', 'MACRO_PULSE_WIDTH', 'MACRO_VIBRATO', 'MACRO_DRUM_TUNE', 'MACRO_DRUM_DECAY',
+  'MACRO_VCA_DEPTH', 'MACRO_VCA_RATE', 'MACRO_ENVELOPE', 'MACRO_ENVELOPE_LENGTH', 'MACRO_GLIDE', 'MACRO_CHORUS',
+  'MACRO_MORPH', 'MACRO_FILTER', 'MACRO_RESONANCE', 'MACRO_FILTER_ENVELOPE'];
 
 const FALLBACK_HARDWARE = {
-  source: 'embedded fallback',
-  settings: [0, 420, 511, 511].map((value, index) => ({
-    id: `setting${index + 1}`,
-    label: `P${index + 1} MACRO`,
-    value,
-  })),
-  steps: [0, 89, 178, 223, 312, 401, 489, 534].map((value, index) => ({
-    id: `stepPot${index + 1}`,
-    label: `STEP ${index + 1}`,
-    value,
-    key: String(index + 1),
-  })),
+  settings: Array.from({ length: 4 }, (_, index) => ({ label: `P${index + 1} MACRO` })),
+  steps: Array.from({ length: 8 }, (_, index) => ({ label: `STEP ${index + 1}`, key: String(index + 1) })),
   pins: {
     muxSelect: [8, 11, 10],
     settingsAnalog: 'A0',
@@ -59,37 +65,31 @@ const FALLBACK_HARDWARE = {
 
 const $ = (selector) => document.querySelector(selector);
 const ui = {
-  diagramStatus: $('#diagram-status'),
-  engineStatus: $('#engine-status'),
   firmwareFile: $('#firmware-file'),
-  firmwareName: $('#firmware-name'),
-  dropZone: $('#drop-zone'),
-  runButton: $('#run-button'),
-  resetButton: $('#reset-button'),
   settingsGrid: $('#settings-grid'),
   stepsGrid: $('#steps-grid'),
   modeButton: $('#mode-button'),
   lcdLines: [$('#lcd-line-1'), $('#lcd-line-2')],
   lcdCanvas: $('#lcd-dot-matrix'),
-  volume: $('#volume'),
-  runtimeNote: $('#runtime-note'),
-  scope: $('#scope'),
   cycleMeter: $('#cycle-meter'),
   cycleMeterScrew: $('#preset-screw'),
+  presetEditor: $('#preset-editor'),
+  presetSlot: $('#pe-slot'),
+  presetStatus: $('#pe-status'),
+  presetRevert: $('#pe-revert'),
+  presetBody: $('#pe-body'),
+  presetCode: $('#pe-code'),
+  presetCopy: $('#pe-copy'),
 };
-const hardwareView = document.body.classList.contains('hardware-ui');
 
 let hardware = FALLBACK_HARDWARE;
 let settings = [];
 let steps = [];
 let modePressed = false;
-let firmwareImage = null;
 let machine = null;
 let audioContext = null;
 let audioNode = null;
 let running = false;
-let audioFailureReported = false;
-let cycleMeterUpdatedAt = 0;
 
 const LCD_FONT_5X8 = new Uint8Array(`
   00 00 00 00 00  00 00 5f 00 00  00 07 00 07 00  14 7f 14 7f 14
@@ -118,14 +118,13 @@ const LCD_FONT_5X8 = new Uint8Array(`
   00 00 7f 00 00  00 41 36 08 00  08 04 08 10 08  00 06 09 09 06
 `.trim().split(/\s+/).map((value) => Number.parseInt(value, 16)));
 
-let lcdText = ui.lcdLines.map((line) => (line?.textContent ?? '').padEnd(16).slice(0, 16));
+let lcdText = ui.lcdLines.map((line) => line.textContent.padEnd(16).slice(0, 16));
 let lcdDrawFrame = 0;
 let lcdCgram = new Uint8Array(64);
 
 // Draws the LCD as a 5x8 dot matrix, CGRAM glyphs included.
 function drawLcdDotMatrix() {
   const canvas = ui.lcdCanvas;
-  if (!canvas) return;
   const rect = canvas.getBoundingClientRect();
   if (!rect.width || !rect.height) return;
 
@@ -198,16 +197,14 @@ function setLcdLines(line1, line2, cgram = lcdCgram) {
 }
 
 function scheduleLcdDotMatrix() {
-  if (!ui.lcdCanvas || lcdDrawFrame) return;
+  if (lcdDrawFrame) return;
   lcdDrawFrame = requestAnimationFrame(() => {
     lcdDrawFrame = 0;
     drawLcdDotMatrix();
   });
 }
 
-if (ui.lcdCanvas && 'ResizeObserver' in window) {
-  new ResizeObserver(scheduleLcdDotMatrix).observe(ui.lcdCanvas);
-}
+new ResizeObserver(scheduleLcdDotMatrix).observe(ui.lcdCanvas);
 
 function connectionOtherEnd(connections, endpoint) {
   for (const connection of connections) {
@@ -234,16 +231,11 @@ async function readDiagram() {
     const part = (id) => diagram.parts.find((item) => item.id === id);
     const label = (id, fallback) => part(id)?.attrs?.text || fallback;
     hardware = {
-      source: 'simulator/diagram.json',
       settings: Array.from({ length: 4 }, (_, index) => ({
-        id: `setting${index + 1}`,
         label: label(`settingText${index + 1}`, `P${index + 1}`),
-        value: Number(part(`setting${index + 1}`)?.attrs?.value ?? 0),
       })),
       steps: Array.from({ length: 8 }, (_, index) => ({
-        id: `stepPot${index + 1}`,
         label: part(`stepButton${index + 1}`)?.attrs?.label || `STEP ${index + 1}`,
-        value: Number(part(`stepPot${index + 1}`)?.attrs?.value ?? 0),
         key: part(`stepButton${index + 1}`)?.attrs?.key || String(index + 1),
       })),
       pins: {
@@ -258,36 +250,27 @@ async function readDiagram() {
     const pinSignature = JSON.stringify(hardware.pins);
     const expected = JSON.stringify(FALLBACK_HARDWARE.pins);
     if (pinSignature !== expected) throw new Error(`unsupported pin map ${pinSignature}`);
-    ui.diagramStatus.textContent = 'diagram: connected';
   } catch (error) {
     hardware = FALLBACK_HARDWARE;
-    ui.diagramStatus.textContent = 'diagram: fallback map';
-    ui.diagramStatus.title = String(error);
+    console.warn('diagram.json not used:', error);
   }
 }
 
-function makeKnob(control, small = false) {
+function makeKnob(control) {
   const card = document.createElement('div');
   card.className = 'control-card';
   const knob = document.createElement('div');
-  knob.className = `knob${small ? ' small' : ''}`;
+  knob.className = 'knob';
   knob.tabIndex = 0;
   knob.setAttribute('role', 'slider');
   knob.setAttribute('aria-label', control.label);
   knob.setAttribute('aria-valuemin', '0');
   knob.setAttribute('aria-valuemax', '1023');
-  const name = document.createElement('div');
-  name.className = 'control-name';
-  name.textContent = control.label;
-  const value = document.createElement('div');
-  value.className = 'control-value';
 
-  control.value = Math.max(0, Math.min(1023, Number(control.value) || 0));
   const render = () => {
     const angle = -135 + (control.value / 1023) * 270;
     knob.style.setProperty('--turn', `${angle}deg`);
     knob.setAttribute('aria-valuenow', String(control.value));
-    value.textContent = `${Math.round((control.value / 1023) * 100)}%`;
     machine?.updateInputs();
   };
   const setValue = (next) => {
@@ -322,8 +305,7 @@ function makeKnob(control, small = false) {
     event.preventDefault();
   });
 
-  control.element = knob;
-  card.append(knob, name, value);
+  card.append(knob);
   render();
   return card;
 }
@@ -360,17 +342,14 @@ function bindMomentary(element, setter) {
 }
 
 function buildControls() {
-  settings = hardware.settings.map((item) => ({ ...item, value: hardwareView ? 511 : item.value }));
-  steps = hardware.steps.map((item) => ({ ...item, value: hardwareView ? 511 : item.value, pressed: false }));
-  ui.settingsGrid.replaceChildren(...settings.map((control) => makeKnob(control)));
+  settings = hardware.settings.map((item) => ({ ...item, value: 511 }));
+  steps = hardware.steps.map((item) => ({ ...item, value: 511, pressed: false }));
+  ui.settingsGrid.replaceChildren(...settings.map(makeKnob));
   const cards = steps.map((control, index) => {
-    const card = makeKnob(control, true);
+    const card = makeKnob(control);
     const button = document.createElement('button');
     button.className = 'pad';
     button.setAttribute('aria-label', `${control.label}, key ${control.key}`);
-    button.dataset.step = String(index + 1);
-    button.dataset.key = control.key;
-    button.innerHTML = `<span class="keycap">${control.key}</span><span class="step-number">${index + 1}</span>`;
     control.button = button;
     bindMomentary(button, (pressed) => setStepPressed(index, pressed));
     card.append(button);
@@ -759,10 +738,12 @@ class MonitorAntiAliasFilter {
 }
 
 class BitsynthMachine {
-  constructor(bytes) {
+  constructor(bytes, symbols = null) {
     this.program = new Uint16Array(PROGRAM_WORDS);
     this.program.fill(0xffff);
-    new Uint8Array(this.program.buffer).set(bytes.subarray(0, FLASH_BYTES));
+    this.flash = new Uint8Array(this.program.buffer);
+    this.flash.set(bytes.subarray(0, FLASH_BYTES));
+    this.presets = resolvePresetTable(symbols, this.flash);
     this.cpu = new CPU(this.program);
     this.timer0 = new AVRTimer(this.cpu, timer0Config);
     this.timer2 = new CtcTimer2(this.cpu);
@@ -775,8 +756,6 @@ class BitsynthMachine {
     this.lcd = new HD44780(setLcdLines);
     this.portValues = { B: 0, C: 0, D: 0 };
     this.audioHigh = false;
-    this.scope = new Float32Array(2048);
-    this.scopeIndex = 0;
     this.sampleCycle = 0;
     this.antiAlias = null;
     this.antiAliasSampleRate = 0;
@@ -929,7 +908,7 @@ class BitsynthMachine {
   }
 
   // Runs the firmware for one audio callback and samples the filtered output.
-  renderAudio(outputLeft, outputRight, volume) {
+  renderAudio(outputLeft, outputRight) {
     const outputSampleRate = audioContext.sampleRate;
     if (!this.antiAlias || this.antiAliasSampleRate !== outputSampleRate) {
       this.antiAlias = new MonitorAntiAliasFilter(outputSampleRate);
@@ -937,7 +916,7 @@ class BitsynthMachine {
     }
     this.audioIsrBlockMax = 0;
     this.audioIsrCallbackCycles = 0;
-    this.meterWindows = ui.cycleMeter && !ui.cycleMeter.hidden ? 1 + CYCLE_METER_BLOCKS : 0;
+    this.meterWindows = ui.cycleMeter.hidden ? 0 : 1 + CYCLE_METER_BLOCKS;
     this.isrStack.length = 0;
     this.audioIsrWindowCycles = 0;
     this.audioIsrWindowStart = this.cpu.cycles;
@@ -954,10 +933,7 @@ class BitsynthMachine {
         const voltage = this.filter.sample(this.cpu.cycles);
         sample = this.antiAlias.process(voltage / 2.5);
       }
-      const monitored = Math.max(-1, Math.min(1, sample * volume));
-      outputLeft[index] = monitored;
-      outputRight[index] = monitored;
-      this.scope[this.scopeIndex++ & (this.scope.length - 1)] = monitored;
+      outputLeft[index] = outputRight[index] = Math.max(-1, Math.min(1, sample));
     }
     if (this.audioIsrBlockMax) {
       const average = this.audioIsrCallbackCycles * AUDIO_ISR_BUDGET_CYCLES /
@@ -1004,7 +980,7 @@ function parseIntelHex(text) {
     }
   }
   if (!written) throw new Error('HEX contains no ATmega328P flash data');
-  return { bytes: bytes.slice(0, highest), detail: `${written.toLocaleString()} flash bytes` };
+  return bytes.slice(0, highest);
 }
 
 function parseElf(buffer) {
@@ -1035,205 +1011,503 @@ function parseElf(buffer) {
     highest = Math.max(highest, flashAddress + length);
   }
   if (!written) throw new Error('ELF has no loadable AVR flash segment');
-  return { bytes: output.slice(0, highest), detail: `${written.toLocaleString()} flash bytes` };
+  return output.slice(0, highest);
+}
+
+// Reads the ELF symbol table as name -> { value, size }; null if it has none.
+function parseElfSymbols(buffer) {
+  try {
+    const view = new DataView(buffer);
+    if (view.byteLength < 52 || view.getUint32(0, false) !== 0x7f454c46) return null;
+    const bytes = new Uint8Array(buffer);
+    const sectionOffset = view.getUint32(32, true);
+    const sectionSize = view.getUint16(46, true);
+    const sectionCount = view.getUint16(48, true);
+    const section = (index) => {
+      const offset = sectionOffset + index * sectionSize;
+      return {
+        type: view.getUint32(offset + 4, true),
+        offset: view.getUint32(offset + 16, true),
+        size: view.getUint32(offset + 20, true),
+        link: view.getUint32(offset + 24, true),
+      };
+    };
+    const decoder = new TextDecoder();
+    const symbols = new Map();
+    for (let index = 0; index < sectionCount; index++) {
+      const table = section(index);
+      if (table.type !== 2) continue;
+      const strings = section(table.link);
+      for (let offset = table.offset; offset + 16 <= table.offset + table.size; offset += 16) {
+        const start = strings.offset + view.getUint32(offset, true);
+        let end = start;
+        while (end < bytes.length && bytes[end]) end++;
+        const name = decoder.decode(bytes.subarray(start, end));
+        if (name && !symbols.has(name)) {
+          symbols.set(name, { value: view.getUint32(offset + 4, true), size: view.getUint32(offset + 8, true) });
+        }
+      }
+    }
+    return symbols.size ? symbols : null;
+  } catch {
+    return null;
+  }
+}
+
+// Locates kMelodicPresets and the RAM state the editor needs; null if anything looks wrong.
+function resolvePresetTable(symbols, flash) {
+  const table = symbols?.get('kMelodicPresets') ?? symbols?.get('_ZL15kMelodicPresets');
+  if (!table || !table.size || table.size % PRESET_SIZE || table.value + table.size > FLASH_BYTES) return null;
+  if (PRESET_RAM_SYMBOLS.some((name) => !(symbols.get(name)?.value >= SRAM_SYMBOL_BASE))) return null;
+  const count = table.size / PRESET_SIZE;
+  for (let slot = 0; slot < count; slot++) {
+    const preset = flash.subarray(table.value + slot * PRESET_SIZE, table.value + (slot + 1) * PRESET_SIZE);
+    const end = preset.indexOf(0);
+    if (end < 1 || end > 4 || preset.subarray(0, end).some((code) => code < 32 || code > 126)) return null;
+    if (preset[5] < 1 || preset[5] > 4) return null;
+  }
+  const ram = Object.fromEntries(PRESET_RAM_SYMBOLS.map((name) => [name, symbols.get(name).value - SRAM_SYMBOL_BASE]));
+  return { base: table.value, count, ram, original: flash.slice(table.value, table.value + table.size) };
 }
 
 async function decodeFirmware(file) {
   const buffer = await file.arrayBuffer();
   const name = file.name.toLowerCase();
-  if (name.endsWith('.hex')) return parseIntelHex(new TextDecoder().decode(buffer));
-  if (name.endsWith('.elf') || new Uint8Array(buffer, 0, Math.min(4, buffer.byteLength))[0] === 0x7f) return parseElf(buffer);
+  if (name.endsWith('.hex')) return { bytes: parseIntelHex(new TextDecoder().decode(buffer)), symbols: null };
+  if (name.endsWith('.elf') || new Uint8Array(buffer, 0, Math.min(4, buffer.byteLength))[0] === 0x7f) {
+    return { bytes: parseElf(buffer), symbols: parseElfSymbols(buffer) };
+  }
   if (buffer.byteLength > FLASH_BYTES) throw new Error(`Raw binary exceeds ${FLASH_BYTES} bytes`);
   if (!buffer.byteLength) throw new Error('Firmware file is empty');
-  return { bytes: new Uint8Array(buffer), detail: `${buffer.byteLength.toLocaleString()} raw bytes` };
+  return { bytes: new Uint8Array(buffer), symbols: null };
 }
 
-async function loadFirmware(file, autoStart = false) {
+async function loadFirmware(file, fallbackSymbols = null) {
   stopAudio();
   try {
-    const decoded = await decodeFirmware(file);
-    firmwareImage = { ...decoded, name: file.name };
-    machine = new BitsynthMachine(decoded.bytes);
-    ui.firmwareName.textContent = file.name;
-    ui.engineStatus.textContent = 'firmware: ready';
-    ui.engineStatus.className = 'badge';
-    ui.runtimeNote.textContent = `${decoded.detail}. Press Start audio.`;
-    ui.runButton.disabled = false;
-    ui.resetButton.disabled = false;
-    ui.runButton.textContent = 'Start audio';
-    if (autoStart) await startAudio(true);
+    const { bytes, symbols } = await decodeFirmware(file);
+    machine = new BitsynthMachine(bytes, symbols || fallbackSymbols);
+    presetEditor.slot = -1;
+    presetEditor.pending = false;
+    startAudio();
   } catch (error) {
-    firmwareImage = null;
     machine = null;
-    ui.firmwareName.textContent = 'Could not load firmware';
-    ui.engineStatus.textContent = 'firmware: error';
-    ui.engineStatus.className = 'badge error';
-    ui.runtimeNote.textContent = error instanceof Error ? error.message : String(error);
-    ui.runButton.disabled = true;
-    ui.resetButton.disabled = true;
+    console.error('Could not load firmware:', error);
   }
 }
 
-async function ensureAudio(resume = true) {
-  if (!audioContext) audioContext = new AudioContext({ latencyHint: 'interactive' });
-  if (resume) await audioContext.resume();
-  if (!audioNode) {
+// Starts the firmware's audio; a blocked context resumes on the first click or key.
+function startAudio() {
+  if (!audioContext) {
+    audioContext = new AudioContext({ latencyHint: 'interactive' });
     audioNode = audioContext.createScriptProcessor(AUDIO_BUFFER_SIZE, 0, 2);
     audioNode.onaudioprocess = (event) => {
       const left = event.outputBuffer.getChannelData(0);
       const right = event.outputBuffer.getChannelData(1);
-      if (!running || !machine) {
-        left.fill(0);
-        right.fill(0);
-        return;
-      }
-      try {
-        machine.renderAudio(left, right, Number(ui.volume.value));
-      } catch (error) {
-        left.fill(0);
-        right.fill(0);
-        if (!audioFailureReported) {
-          audioFailureReported = true;
-          queueMicrotask(() => reportRuntimeError(error));
+      if (running) {
+        try {
+          machine.renderAudio(left, right);
+          return;
+        } catch (error) {
+          running = false;
+          queueMicrotask(stopAudio);
+          console.error('Simulation stopped:', error);
         }
       }
+      left.fill(0);
+      right.fill(0);
     };
   }
-}
-
-async function startAudio(automatic = false) {
-  if (!machine) return;
-  await ensureAudio(!automatic);
-  if (automatic) audioContext.resume().catch(() => {});
+  audioContext.resume().catch(() => {});
   running = true;
-  audioFailureReported = false;
   audioNode.connect(audioContext.destination);
-  ui.runButton.textContent = 'Stop';
-  ui.runButton.classList.add('active');
-  if (audioContext.state === 'running') {
-    ui.engineStatus.textContent = 'engine: running';
-    ui.engineStatus.className = 'badge live';
-  } else {
-    ui.engineStatus.textContent = 'audio: click to enable';
-    ui.engineStatus.className = 'badge';
-  }
-}
-
-async function unlockAudio() {
-  if (!running || !audioContext || audioContext.state === 'running') return;
-  try {
-    await audioContext.resume();
-    ui.engineStatus.textContent = 'engine: running';
-    ui.engineStatus.className = 'badge live';
-  } catch {}
-}
-
-function showHardwareLoadPrompt() {
-  setLcdLines('Click here to', 'load firmware');
-  ui.engineStatus.textContent = 'firmware: choose file';
-  ui.engineStatus.className = 'badge';
-  ui.runtimeNote.textContent = 'Default firmware.hex was not found.';
-}
-
-async function loadDefaultHardwareFirmware() {
-  try {
-    const response = await fetch('../.pio/build/hardware/firmware.hex', { cache: 'no-store' });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const buffer = await response.arrayBuffer();
-    const file = new File([buffer], 'firmware.hex', { type: 'text/plain' });
-    await loadFirmware(file, true);
-  } catch {
-    showHardwareLoadPrompt();
-  }
 }
 
 function stopAudio() {
   running = false;
-  ui.runButton.classList.remove('active');
-  if (audioNode) {
-    try { audioNode.disconnect(); } catch {}
+  audioNode?.disconnect();
+}
+
+function unlockAudio() {
+  if (running && audioContext.state !== 'running') audioContext.resume().catch(() => {});
+}
+
+// Loads the firmware published next to the page, else the local build output.
+async function loadDefaultFirmware() {
+  for (const dir of ['./', '../.pio/build/hardware/']) {
+    try {
+      const response = await fetch(`${dir}firmware.hex`, { cache: 'no-store' });
+      if (!response.ok) continue;
+      const hex = new File([await response.blob()], 'firmware.hex');
+      await loadFirmware(hex, await fetchDefaultSymbols(dir));
+      return;
+    } catch {}
   }
-  if (firmwareImage) {
-    ui.runButton.textContent = 'Start audio';
-    ui.engineStatus.textContent = 'engine: paused';
-    ui.engineStatus.className = 'badge';
+  setLcdLines('Click here to', 'load firmware');
+}
+
+// Fetches the build's ELF for the preset editor's symbol addresses.
+async function fetchDefaultSymbols(dir) {
+  try {
+    const response = await fetch(`${dir}firmware.elf`, { cache: 'no-store' });
+    return response.ok ? parseElfSymbols(await response.arrayBuffer()) : null;
+  } catch {
+    return null;
   }
 }
 
-function reportRuntimeError(error) {
-  stopAudio();
-  ui.engineStatus.textContent = 'engine: fault';
-  ui.engineStatus.className = 'badge error';
-  ui.runtimeNote.textContent = error instanceof Error ? error.message : String(error);
+function updateCycleMeter() {
+  if (ui.cycleMeter.hidden) return;
+  const cycles = Math.round(machine?.audioIsrCycles || 0);
+  const maxCycles = machine?.audioIsrMaxCycles || 0;
+  const text = cycles
+    ? `ISR ${cycles} / ${AUDIO_ISR_BUDGET_CYCLES} cycles (${Math.round(cycles / AUDIO_ISR_BUDGET_CYCLES * 100)}%) · MAX ${maxCycles}`
+    : `ISR -- / ${AUDIO_ISR_BUDGET_CYCLES} cycles · MAX --`;
+  if (ui.cycleMeter.textContent !== text) ui.cycleMeter.textContent = text;
+  ui.cycleMeter.classList.toggle('over-budget', maxCycles > AUDIO_ISR_BUDGET_CYCLES);
 }
 
-async function resetMachine() {
-  if (!firmwareImage) return;
-  const wasRunning = running;
-  stopAudio();
-  machine = new BitsynthMachine(firmwareImage.bytes);
-  ui.runtimeNote.textContent = `${firmwareImage.detail}. Reset complete.`;
-  if (wasRunning) await startAudio();
+const presetEditor = { slot: -1, pending: false, settleUntil: 0, fields: [], voiceGroups: [] };
+
+// Mirrors presetVcaRateHundredths() in src/bitsynth.ino.
+function presetVcaRateHundredths(index) {
+  if (index === 0) return 0;
+  if (index <= 20) return index;
+  if (index <= 68) return 20 + (index - 20) * 10;
+  return 500 + (Math.min(index, 98) - 68) * 50;
 }
 
-function drawScope(now = performance.now()) {
-  const canvas = ui.scope;
-  if (canvas) {
-    const rect = canvas.getBoundingClientRect();
-    const scale = Math.min(2, devicePixelRatio || 1);
-    const width = Math.max(1, Math.round(rect.width * scale));
-    const height = Math.max(1, Math.round(rect.height * scale));
-    if (canvas.width !== width || canvas.height !== height) {
-      canvas.width = width;
-      canvas.height = height;
+// Mirrors lfoRateForIndex() in src/bitsynth.ino.
+function lfoRateForIndex(index) {
+  if (index < 16) return 5 + index;
+  if (index < 64) return 20 + (index - 15) * 10;
+  return 500 + (index - 63) * 50;
+}
+
+function formatHundredthsHz(hundredths) {
+  return hundredths ? `${(hundredths / 100).toFixed(2)} Hz` : 'off';
+}
+
+const namedOptions = (names) => names.map((name, value) => [name, value]);
+const macroOptions = namedOptions(MACRO_NAMES)
+  .filter(([name]) => !name.startsWith('MACRO_DRUM'))
+  .map(([name, value]) => [name.slice(6), value]);
+const lfoOptions = macroOptions.filter(([name]) =>
+  ['NONE', 'PULSE_WIDTH', 'VIBRATO', 'VCA_DEPTH', 'VCA_RATE', 'FILTER', 'RESONANCE'].includes(name));
+
+// Field layout of MelodicPreset in src/bitsynth.ino; keep offsets and the name tables in sync.
+function presetEditorGroups() {
+  const field = (label, offset, options = {}) => ({ label, offset, type: 'u8', min: 0, max: 127, ...options });
+  return [
+    { title: 'Preset', fields: [
+      field('Label', 0, { type: 'label' }),
+      field('Voices', 5, { options: [1, 2, 3, 4].map((count) => [String(count), count]) }),
+      field('Level', 51, { max: 255 }),
+    ] },
+    ...[0, 1, 2, 3].map((voice) => {
+      const offset = 6 + voice * 5;
+      return { title: `Voice ${voice + 1}`, voice, fields: [
+        field('Wave', offset, { options: namedOptions(WAVE_NAMES) }),
+        field('Detune', offset + 1, { type: 's16', min: -2400, max: 2400 }),
+        field('Envelope', offset + 3, { options: namedOptions(ENVELOPE_NAMES) }),
+        field('Vibrato', offset + 4, { format: (value) => value === 64 ? 'off' : '' }),
+      ] };
+    }),
+    { title: 'Amp', fields: [
+      field('Length', 26),
+      field('Pulse width', 27, { min: 5, max: 95, format: (value) => `${value}%` }),
+      field('Glide', 28),
+    ] },
+    { title: 'Filter', fields: [
+      field('Cutoff', 34, { format: (value) => value === 127 ? 'open' : '' }),
+      field('Resonance', 35),
+      field('Filter env', 36),
+    ] },
+    { title: 'VCA and FX', fields: [
+      field('VCA depth', 29, { type: 'u16', max: 256 }),
+      field('VCA rate', 31, { max: 98, format: (value) => formatHundredthsHz(presetVcaRateHundredths(value)) }),
+      field('Chorus', 32, { options: namedOptions(CHORUS_NAMES) }),
+      field('Morph', 33),
+    ] },
+    { title: 'Macros', fields: Array.from({ length: 8 }, (_, slot) =>
+      field(`Slot ${slot + 1}`, 37 + slot, { options: macroOptions, macroSlot: true })) },
+    ...[0, 1].map((lfo) => ({ title: `LFO ${lfo + 1}`, fields: [
+      field('Target', 45 + lfo, { options: lfoOptions }),
+      field('Rate', 47 + lfo, { max: 93, format: (value) => formatHundredthsHz(lfoRateForIndex(value)) }),
+      field('Depth', 49 + lfo),
+    ] })),
+  ];
+}
+
+function editedPresetBytes() {
+  const table = machine?.presets;
+  if (!table || presetEditor.slot < 0) return null;
+  return machine.flash.subarray(table.base + presetEditor.slot * PRESET_SIZE, table.base + (presetEditor.slot + 1) * PRESET_SIZE);
+}
+
+function presetLabel(bytes) {
+  const end = bytes.indexOf(0);
+  return String.fromCharCode(...bytes.subarray(0, end < 0 ? 5 : end));
+}
+
+function readPresetField(bytes, field) {
+  if (field.type === 'label') return presetLabel(bytes);
+  if (field.type === 'u8') return bytes[field.offset];
+  const value = bytes[field.offset] | (bytes[field.offset + 1] << 8);
+  return field.type === 's16' ? (value << 16) >> 16 : value;
+}
+
+function writePresetField(bytes, field, value) {
+  if (field.type === 'label') {
+    const text = String(value).toUpperCase().replace(/[^\x20-\x7e]|["\\]/g, '').slice(0, 4) || '?';
+    bytes.fill(0, 0, 5);
+    for (let index = 0; index < text.length; index++) bytes[index] = text.charCodeAt(index);
+    return;
+  }
+  const number = Math.max(field.options ? 0 : field.min, Math.min(field.options ? 255 : field.max, Math.round(Number(value) || 0)));
+  bytes[field.offset] = number & 0xff;
+  if (field.type !== 'u8') bytes[field.offset + 1] = (number >> 8) & 0xff;
+}
+
+// Formats a preset like the kMelodicPresets entries in src/bitsynth.ino.
+function presetCode(bytes) {
+  const u16 = (offset) => bytes[offset] | (bytes[offset + 1] << 8);
+  const s16 = (offset) => (u16(offset) << 16) >> 16;
+  const name = (names, value) => names[value] ?? String(value);
+  const macros = (offset, count) => Array.from({ length: count }, (_, index) => name(MACRO_NAMES, bytes[offset + index])).join(', ');
+  const voices = [0, 1, 2, 3].map((voice) => {
+    const offset = 6 + voice * 5;
+    return `{${name(WAVE_NAMES, bytes[offset])}, ${s16(offset + 1)}, ${name(ENVELOPE_NAMES, bytes[offset + 3])}, ${bytes[offset + 4]}}`;
+  }).join(', ');
+  return [
+    `  {"${presetLabel(bytes)}", ${bytes[5]},`,
+    `   {${voices}},`,
+    `   ${bytes[26]}, ${bytes[27]}, ${bytes[28]}, ${u16(29)}, ${bytes[31]}, ${name(CHORUS_NAMES, bytes[32])}, ` +
+      `${bytes[33]}, ${bytes[34]}, ${bytes[35]}, ${bytes[36]},`,
+    `   {${macros(37, 8)}},`,
+    `   {${macros(45, 2)}},`,
+    `   {${bytes[47]}, ${bytes[48]}}, {${bytes[49]}, ${bytes[50]}}, ${bytes[51]}},`,
+  ].join('\n');
+}
+
+function makeEditorField(field) {
+  const row = document.createElement('label');
+  row.className = 'pe-field';
+  const caption = document.createElement('span');
+  caption.textContent = field.label;
+  const note = document.createElement('span');
+  note.className = 'pe-note';
+  const inputs = [];
+  if (field.type === 'label') {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.maxLength = 4;
+    input.spellcheck = false;
+    inputs.push(input);
+  } else if (field.options) {
+    const select = document.createElement('select');
+    for (const [text, value] of field.options) select.add(new Option(text, String(value)));
+    inputs.push(select);
+  } else {
+    for (const type of ['range', 'number']) {
+      const input = document.createElement('input');
+      input.type = type;
+      input.min = String(field.min);
+      input.max = String(field.max);
+      input.step = '1';
+      inputs.push(input);
     }
-    const context = canvas.getContext('2d');
-    context.clearRect(0, 0, width, height);
-    context.strokeStyle = '#1c332a';
-    context.lineWidth = 1;
-    context.beginPath();
-    context.moveTo(0, height / 2);
-    context.lineTo(width, height / 2);
-    context.stroke();
-    if (machine) {
-      context.strokeStyle = '#72e4d1';
-      context.lineWidth = Math.max(1, scale);
-      context.beginPath();
-      const visible = Math.min(machine.scope.length, Math.round(width / scale) * 2);
-      for (let index = 0; index < visible; index++) {
-        const ringIndex = (machine.scopeIndex - visible + index) & (machine.scope.length - 1);
-        const x = (index / (visible - 1)) * width;
-        const y = height * (0.5 - machine.scope[ringIndex] * 0.42);
-        if (index === 0) context.moveTo(x, y);
-        else context.lineTo(x, y);
-      }
-      context.stroke();
+  }
+  if (field.options) field.select = inputs[0];
+  const control = document.createElement('span');
+  control.className = 'pe-control';
+  control.append(...inputs);
+  row.append(caption, control, note);
+
+  field.show = (value) => {
+    for (const input of inputs) if (input !== document.activeElement || input.type === 'range') input.value = String(value);
+    if (field.options && ![...inputs[0].options].some((option) => option.value === String(value))) {
+      inputs[0].add(new Option(String(value), String(value)));
+      inputs[0].value = String(value);
     }
+    note.textContent = field.format ? field.format(Number(value)) : '';
+  };
+  for (const input of inputs) {
+    input.addEventListener('input', () => {
+      const bytes = editedPresetBytes();
+      if (!bytes) return;
+      writePresetField(bytes, field, input.value);
+      for (const other of inputs) if (other !== input) other.value = input.value;
+      note.textContent = field.format ? field.format(readPresetField(bytes, field)) : '';
+      presetEditorChanged(bytes);
+    });
+    input.addEventListener('change', () => refreshPresetEditor());
   }
-  if (running && machine) {
-    ui.runtimeNote.textContent = `9-bit Fast PWM · 31.25 kHz · ${audioContext.sampleRate.toLocaleString()} Hz monitor · local execution`;
-  }
-  if (ui.cycleMeter && !ui.cycleMeter.hidden &&
-      now - cycleMeterUpdatedAt >= CYCLE_METER_UPDATE_MS) {
-    cycleMeterUpdatedAt = now;
-    const cycles = Math.round(machine?.audioIsrCycles || 0);
-    const maxCycles = machine?.audioIsrMaxCycles || 0;
-    const text = cycles
-      ? `ISR ${cycles} / ${AUDIO_ISR_BUDGET_CYCLES} cycles (${Math.round(cycles / AUDIO_ISR_BUDGET_CYCLES * 100)}%) · MAX ${maxCycles}`
-      : `ISR -- / ${AUDIO_ISR_BUDGET_CYCLES} cycles · MAX --`;
-    if (ui.cycleMeter.textContent !== text) ui.cycleMeter.textContent = text;
-    ui.cycleMeter.classList.toggle('over-budget', maxCycles > AUDIO_ISR_BUDGET_CYCLES);
-  }
-  requestAnimationFrame(drawScope);
+  return row;
 }
 
-function isTextEntry(target) {
-  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable;
+function buildPresetEditor() {
+  const groups = presetEditorGroups().map((group) => {
+    const element = document.createElement('fieldset');
+    element.className = 'pe-group';
+    const legend = document.createElement('legend');
+    legend.textContent = group.title;
+    element.append(legend, ...group.fields.map(makeEditorField));
+    presetEditor.fields.push(...group.fields);
+    if (group.voice !== undefined) presetEditor.voiceGroups[group.voice] = element;
+    return element;
+  });
+  ui.presetBody.replaceChildren(...groups);
 }
+
+// Disables macros already taken by another slot, since each macro has one pot.
+function updateMacroChoices(bytes) {
+  const slots = presetEditor.fields.filter((field) => field.macroSlot);
+  for (const field of slots) {
+    for (const option of field.select.options) {
+      const value = Number(option.value);
+      option.disabled = value !== 0 && slots.some((other) => other !== field && bytes[other.offset] === value);
+    }
+  }
+}
+
+function presetEditorChanged(bytes) {
+  updateMacroChoices(bytes);
+  presetEditor.voiceGroups.forEach((group, voice) => group.classList.toggle('pe-unused', voice >= bytes[5]));
+  ui.presetCode.value = presetCode(bytes);
+  const option = ui.presetSlot.options[presetEditor.slot];
+  if (option) option.textContent = presetLabel(bytes);
+  presetEditor.pending = true;
+}
+
+function refreshPresetEditor() {
+  const table = machine?.presets;
+  const bytes = editedPresetBytes();
+  ui.presetBody.disabled = !bytes;
+  ui.presetRevert.disabled = !bytes;
+  ui.presetCopy.disabled = !bytes;
+  if (!table) {
+    ui.presetSlot.replaceChildren();
+    ui.presetCode.value = '';
+    return;
+  }
+  if (ui.presetSlot.options.length !== table.count) {
+    ui.presetSlot.replaceChildren(...Array.from({ length: table.count }, (_, slot) => new Option('', String(slot))));
+  }
+  for (let slot = 0; slot < table.count; slot++) {
+    ui.presetSlot.options[slot].textContent = presetLabel(machine.flash.subarray(table.base + slot * PRESET_SIZE));
+  }
+  if (!bytes) return;
+  ui.presetSlot.value = String(presetEditor.slot);
+  for (const field of presetEditor.fields) field.show(readPresetField(bytes, field));
+  updateMacroChoices(bytes);
+  presetEditor.voiceGroups.forEach((group, voice) => group.classList.toggle('pe-unused', voice >= bytes[5]));
+  ui.presetCode.value = presetCode(bytes);
+}
+
+function selectEditorSlot(slot, audition) {
+  presetEditor.slot = slot;
+  if (audition) presetEditor.pending = true;
+  refreshPresetEditor();
+}
+
+// Returns the firmware's active SEQ or PLAY preset state, or null in DRONE.
+function presetTarget() {
+  const table = machine?.presets;
+  if (!table) return null;
+  const data = machine.cpu.data;
+  const mode = data[table.ram.instrumentMode];
+  if (mode !== MODE_SEQ && mode !== MODE_PLAY) return null;
+  const controls = table.ram[mode === MODE_SEQ ? 'seqControls' : 'playControls'];
+  return { mode, controls, active: data[controls], count: table.count + (mode === MODE_SEQ ? 1 : 0) };
+}
+
+// Mirrors reversedIndexForRaw(usableAnalogRaw(raw)) in src/bitsynth.ino.
+function presetIndexForRaw(raw, count) {
+  const usable = raw - ANALOG_ENDPOINT_MARGIN + ((raw - ANALOG_ENDPOINT_MARGIN) >> 5);
+  return count - 1 - Math.min(Math.floor(usable * count / 1024), count - 1);
+}
+
+function presetPotSelects(raw, slot, count) {
+  return raw > ANALOG_ENDPOINT_MARGIN + PRESET_POT_MARGIN && raw < 1023 - ANALOG_ENDPOINT_MARGIN - PRESET_POT_MARGIN &&
+    presetIndexForRaw(raw - PRESET_POT_MARGIN, count) === slot && presetIndexForRaw(raw + PRESET_POT_MARGIN, count) === slot;
+}
+
+// Makes the firmware run its own preset-change path for the edited slot; false while the pot still settles.
+function requestPresetReload(target) {
+  const { ram } = machine.presets;
+  const data = machine.cpu.data;
+  const slot = presetEditor.slot;
+  if (data[ram.parameterPage] !== 0) {
+    data[ram.parameterPage] = 0;
+    for (let pot = 0; pot < 4; pot++) {
+      data[ram.parameterPageRaw + pot * 2] = data[ram.settingValues + pot * 2];
+      data[ram.parameterPageRaw + pot * 2 + 1] = data[ram.settingValues + pot * 2 + 1];
+      data[ram.parameterPageLocked + pot] = 1;
+    }
+  }
+  const raw = data[ram.settingValues] | (data[ram.settingValues + 1] << 8);
+  if (!presetPotSelects(raw, slot, target.count)) {
+    const usable = (target.count - 1 - slot + 0.5) * 1024 / target.count;
+    settings[0]?.setValue(1023 - (ANALOG_ENDPOINT_MARGIN + usable * 32 / 33));
+    return false;
+  }
+  data[target.controls] = slot > 0 ? slot - 1 : slot + 1;
+  data[ram.parameterPageLocked] = 0;
+  return true;
+}
+
+function presetEditorTick() {
+  if (ui.presetEditor.hidden) return;
+  const table = machine?.presets;
+  const target = presetTarget();
+  if (!table) {
+    ui.presetStatus.textContent = machine ? 'Needs firmware.elf symbols' : 'No firmware';
+    refreshPresetEditor();
+    return;
+  }
+  if (presetEditor.slot < 0) {
+    selectEditorSlot(target && target.active < table.count ? target.active : 0, false);
+  }
+  if (!target) {
+    ui.presetStatus.textContent = 'Switch to SEQ or PLAY to listen';
+    return;
+  }
+  const now = performance.now();
+  if (presetEditor.pending) {
+    if (requestPresetReload(target)) {
+      presetEditor.pending = false;
+      presetEditor.settleUntil = now + PRESET_SETTLE_MS;
+    }
+  } else if (target.active < table.count && target.active !== presetEditor.slot && now > presetEditor.settleUntil) {
+    selectEditorSlot(target.active, false);
+  }
+  const mode = target.mode === MODE_SEQ ? 'SEQ' : 'PLAY';
+  ui.presetStatus.textContent = target.active === presetEditor.slot ? `${mode}: playing`
+    : (presetEditor.pending || now <= presetEditor.settleUntil ? `${mode}: loading` : `${mode}: drum kit`);
+}
+
+ui.presetSlot.addEventListener('change', () => selectEditorSlot(Number(ui.presetSlot.value), true));
+ui.presetRevert.addEventListener('click', () => {
+  const bytes = editedPresetBytes();
+  if (!bytes) return;
+  const start = presetEditor.slot * PRESET_SIZE;
+  bytes.set(machine.presets.original.subarray(start, start + PRESET_SIZE));
+  presetEditor.pending = true;
+  refreshPresetEditor();
+});
+ui.presetCopy.addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(ui.presetCode.value);
+  } catch {
+    ui.presetCode.select();
+    document.execCommand('copy');
+  }
+});
 
 document.addEventListener('keydown', (event) => {
   unlockAudio();
-  if (isTextEntry(event.target) || event.repeat) return;
+  if (event.repeat || event.target.closest?.('input, select, textarea')) return;
   const key = event.key.toLowerCase();
   const index = steps.findIndex((step) => step.key.toLowerCase() === key);
   if (index >= 0) {
@@ -1260,43 +1534,29 @@ document.addEventListener('pointerdown', unlockAudio);
 
 ui.firmwareFile.addEventListener('change', () => {
   const [file] = ui.firmwareFile.files;
-  if (file) loadFirmware(file, hardwareView);
+  if (file) loadFirmware(file);
 });
-for (const type of ['dragenter', 'dragover']) {
-  ui.dropZone.addEventListener(type, (event) => {
-    event.preventDefault();
-    ui.dropZone.classList.add('drag');
-  });
-}
-for (const type of ['dragleave', 'drop']) {
-  ui.dropZone.addEventListener(type, (event) => {
-    event.preventDefault();
-    ui.dropZone.classList.remove('drag');
-  });
-}
-ui.dropZone.addEventListener('drop', (event) => {
-  const [file] = event.dataTransfer.files;
-  if (file) loadFirmware(file, hardwareView);
-});
-ui.runButton.addEventListener('click', () => {
-  if (running) stopAudio();
-  else startAudio().catch(reportRuntimeError);
-});
-ui.resetButton.addEventListener('click', () => resetMachine().catch(reportRuntimeError));
 
 await readDiagram();
 buildControls();
-ui.cycleMeterScrew?.addEventListener('click', () => {
+buildPresetEditor();
+ui.cycleMeterScrew.addEventListener('click', () => {
   const show = ui.cycleMeter.hidden;
   ui.cycleMeter.hidden = !show;
-  ui.cycleMeterScrew.setAttribute('aria-label', `${show ? 'Hide' : 'Show'} audio ISR cycle meter`);
+  ui.presetEditor.hidden = !show;
+  ui.cycleMeterScrew.setAttribute('aria-label', `${show ? 'Hide' : 'Show'} cycle meter and preset editor`);
   ui.cycleMeterScrew.setAttribute('aria-pressed', String(show));
   if (show && machine) {
     machine.audioIsrCycles = 0;
     machine.audioIsrMaxCycles = 0;
   }
-  cycleMeterUpdatedAt = 0;
+  updateCycleMeter();
+  if (show) {
+    refreshPresetEditor();
+    presetEditorTick();
+  }
 });
-drawScope();
+setInterval(updateCycleMeter, CYCLE_METER_UPDATE_MS);
+setInterval(presetEditorTick, PRESET_EDITOR_TICK_MS);
 scheduleLcdDotMatrix();
-if (hardwareView) await loadDefaultHardwareFirmware();
+await loadDefaultFirmware();

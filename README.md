@@ -26,7 +26,9 @@ The target is an Arduino Pro Mini (ATmega328P, 5 V, 16 MHz); an Uno or Nano wire
 
 ### Try it in the browser
 
-After building, open `simulator/hardware.html` in a browser. It loads `.pio/build/hardware/firmware.hex` automatically and runs the real firmware with AVR8js. If local files are blocked, serve the repository root instead:
+The simulator is online at [akosturi.github.io/bitsynth](https://akosturi.github.io/bitsynth/), so no install is needed. Every push to `master` rebuilds the firmware and republishes it with GitHub Actions (`.github/workflows/pages.yml`).
+
+To run your own build locally, open `simulator/hardware.html` in a browser. It loads `.pio/build/hardware/firmware.hex` automatically and runs the real firmware with AVR8js. If local files are blocked, serve the repository root instead:
 
 ```sh
 python -m http.server 8000
@@ -201,10 +203,10 @@ The KiCad project and a wiring picture are in `schematic/`.
 
 ```text
 D9 PWM -- R1 2.2 kΩ --o-- R2 2.2 kΩ --o-- R3 2.2 kΩ --o-- (+) C4 4.7 µF --o-- VOL 50 kΩ log -- Rout 1 kΩ -- AUDIO OUT
-                      |                |                |                         |          |
-                   C1 4.7 nF       C2 4.7 nF       C3 6.8 nF                R4 100 kΩ    GND
-                      |                |                |                         |
-                     GND              GND              GND                       GND
+                      |               |               |                   |          |
+                   C1 4.7 nF      C2 4.7 nF      C3 6.8 nF            R4 100 kΩ      |
+                      |               |               |                   |          |
+                     GND             GND             GND                 GND        GND
 ```
 
 The `+` lead of `C4` faces `R3`. The volume pot's top goes to the `C4/R4` node, its bottom to ground, and its wiper through `Rout` to the output. This is a line output: use an amplifier for speakers or headphones.
@@ -218,6 +220,7 @@ The `+` lead of `C4` faces `R3`. The volume pot's top goes to the `C4/R4` node, 
 ## Developer tools
 
 - **Cycle meter:** click the lower-right screw in the simulator to show the audio-interrupt load against its 800-cycle-per-sample budget, plus the worst eight-sample block (MAX). Each reopening starts a new measurement, and rare peaks can take a while to appear.
+- **Preset editor:** the same screw opens a preset editor below the panel. It edits every field of the current SEQ or PLAY preset right in the simulated flash, and you hear each change at once. To try a new preset, take over any slot. The box at the bottom shows the entry formatted like `kMelodicPresets` in `src/bitsynth.ino`, ready to paste; **Revert slot** restores the original. Edits change the preset's macro and LFO defaults, so the edited preset reloads and moves to the first parameter page; changes are lost when the page reloads. The editor reads the table address from `.pio/build/hardware/firmware.elf`, so a hand-loaded HEX or BIN file has no editor.
 - **Headless tests:** `util/fullsim.js` runs a scripted session through the whole firmware, and `util/isrbench.js` benchmarks the audio interrupt. Both need Deno; usage is at the top of each file.
 - **Custom wavetables:** prepare a 256-sample mono waveform in Audacity and export it as headerless signed 16-bit RAW. Set `RAW_TO_H_OUTPUT_BITS` to `9` in `util/raw_to_h.bat` and drag the `.raw` file onto it; drag the generated `.h` onto `util/sample_player.bat` to listen. Copy the array into `src/tables.h`, keeping its name, `PROGMEM`, 256 samples, and the signed 9-bit range.
 
@@ -236,6 +239,7 @@ simulator/       Browser front panel and simulator
 schematic/       KiCad project and wiring picture
 util/            Wavetable helpers and headless test tools
 platformio.ini   Build settings
+.github/         Workflow that publishes the simulator
 ```
 
 ## License

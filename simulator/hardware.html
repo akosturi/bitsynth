@@ -17,14 +17,13 @@
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
 
-    button, input { font: inherit; }
-    button { color: inherit; }
-
     .workbench {
       width: 100%;
       min-height: 100vh;
       padding: 12px;
       display: flex;
+      flex-direction: column;
+      gap: 12px;
       align-items: center;
       justify-content: center;
     }
@@ -152,10 +151,7 @@
       transform-origin: 50% 50%;
     }
 
-    .knob::before { display: none; }
     .knob:focus-visible { filter: drop-shadow(0 0 5px #fff); }
-
-    .control-name, .control-value { display: none; }
 
     #mode-button {
       position: absolute;
@@ -177,8 +173,6 @@
 
     #mode-button.active { background-image: url('./assets/black_button_pressed.png'); }
     #mode-button:focus-visible { filter: drop-shadow(0 0 5px #fff) drop-shadow(5px 7px 5px #000e); }
-    #mode-button::after { display: none; }
-    #mode-button .keycap, #mode-button strong { display: none; }
 
     .pad {
       position: absolute;
@@ -201,8 +195,6 @@
 
     .pad.active { background-image: url('./assets/red_button_pressed.png'); }
     .pad:focus-visible { filter: drop-shadow(0 0 5px #fff) drop-shadow(5px 7px 5px #000e); }
-    .pad .keycap, .pad .step-number { display: none; }
-    .pad::after { display: none; }
 
     #preset-screw {
       position: absolute;
@@ -239,24 +231,91 @@
     }
 
     #cycle-meter.over-budget { color: #ff8b80; border-color: #ff5d5066; }
-    #cycle-meter[hidden] { display: none; }
+
+    #preset-editor {
+      width: min(1400px, 100%);
+      padding: 12px 16px 16px;
+      border: 1px solid #ffffff1f;
+      border-radius: 6px;
+      background: #181818;
+      font-size: 13px;
+    }
+
+    #preset-editor[hidden] { display: none; }
+
+    .pe-header {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 14px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .pe-header h2 { margin: 0; font-size: 15px; font-weight: 600; }
+    #pe-status { flex: 1; color: #9a968f; }
+
+    #pe-body {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 10px;
+      min-width: 0;
+      margin: 0;
+      padding: 0;
+      border: 0;
+    }
+
+    .pe-group {
+      min-width: 0;
+      margin: 0;
+      padding: 6px 10px 8px;
+      border: 1px solid #ffffff1a;
+      border-radius: 4px;
+    }
+
+    .pe-group legend { padding: 0 4px; color: #c8c3b8; font-weight: 600; }
+    .pe-group.pe-unused { opacity: .45; }
+
+    .pe-field {
+      display: grid;
+      grid-template-columns: 6.5em minmax(0, 1fr) 4.8em;
+      gap: 6px;
+      align-items: center;
+      min-height: 26px;
+    }
+
+    .pe-control { display: flex; gap: 6px; min-width: 0; }
+    .pe-control input[type="range"] { flex: 1; min-width: 0; accent-color: #d9483b; }
+    .pe-control input[type="number"] { width: 5.2em; }
+    .pe-control select, .pe-control input[type="text"] { flex: 1; min-width: 0; }
+    .pe-note { color: #9a968f; font-size: 12px; white-space: nowrap; }
+
+    #preset-editor select, #preset-editor input, #preset-editor button, #preset-editor textarea {
+      color: #f1eee8;
+      background: #0f0f0f;
+      border: 1px solid #ffffff2e;
+      border-radius: 3px;
+      font: inherit;
+    }
+
+    #preset-editor input[type="range"] { border: 0; background: transparent; }
+    #preset-editor button { padding: 3px 12px; cursor: pointer; }
+    #preset-editor button:disabled { cursor: default; opacity: .5; }
+
+    .pe-output { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; }
+
+    #pe-code {
+      flex: 1;
+      min-width: 0;
+      padding: 8px;
+      font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+      white-space: pre;
+      resize: vertical;
+    }
   </style>
 </head>
-<body class="hardware-ui">
+<body>
   <main class="workbench">
-    <!-- Kept hidden because simulator.js uses these values and status hooks. -->
-    <div class="simulator-runtime" hidden aria-hidden="true">
-      <label id="drop-zone">
-        <input id="firmware-file" type="file" accept=".elf,.hex,.bin,application/octet-stream" hidden>
-        <span id="firmware-name">Load firmware</span>
-      </label>
-      <span id="diagram-status">diagram: loading</span>
-      <span id="engine-status">firmware: empty</span>
-      <input id="volume" type="range" min="0" max="1" step="0.01" value="1" aria-label="Monitor volume">
-      <button id="reset-button" disabled>Reset</button>
-      <button id="run-button" type="button" disabled>Start audio</button>
-      <span id="runtime-note">Waiting for firmware.</span>
-    </div>
+    <input id="firmware-file" type="file" accept=".elf,.hex,.bin,application/octet-stream" hidden>
 
     <div class="panel-scroll">
       <section class="panel-stage" aria-label="Bitsynth hardware panel">
@@ -266,12 +325,26 @@
           <div class="lcd-text" id="lcd-line-2">TO BEGIN        </div>
         </label>
         <div id="settings-grid"></div>
-        <button id="mode-button" aria-label="Mode or panic, key M"><span class="keycap">M</span><strong>MODE</strong></button>
+        <button id="mode-button" aria-label="Mode or panic, key M"></button>
         <div id="steps-grid"></div>
         <output id="cycle-meter" title="Smoothed audio interrupt cycles per 20 kHz sample period and the highest eight-sample block average" hidden>ISR -- / 800 cycles · MAX --</output>
-        <button id="preset-screw" type="button" aria-label="Show audio ISR cycle meter"></button>
+        <button id="preset-screw" type="button" aria-label="Show cycle meter and preset editor"></button>
       </section>
     </div>
+
+    <section id="preset-editor" aria-label="Preset editor" hidden>
+      <header class="pe-header">
+        <h2>Preset editor</h2>
+        <label>Slot <select id="pe-slot"></select></label>
+        <span id="pe-status"></span>
+        <button id="pe-revert" type="button">Revert slot</button>
+      </header>
+      <fieldset id="pe-body"></fieldset>
+      <div class="pe-output">
+        <textarea id="pe-code" rows="6" readonly spellcheck="false" aria-label="Preset code"></textarea>
+        <button id="pe-copy" type="button">Copy</button>
+      </div>
+    </section>
   </main>
 
   <script type="module" src="./simulator.js"></script>
