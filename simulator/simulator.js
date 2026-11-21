@@ -35,18 +35,8 @@ const OCR1AL = 0x88;
 const OCR1AH = 0x89;
 
 const FALLBACK_HARDWARE = {
-  source: 'embedded fallback',
-  settings: [0, 420, 511, 511].map((value, index) => ({
-    id: `setting${index + 1}`,
-    label: `P${index + 1} MACRO`,
-    value,
-  })),
-  steps: [0, 89, 178, 223, 312, 401, 489, 534].map((value, index) => ({
-    id: `stepPot${index + 1}`,
-    label: `STEP ${index + 1}`,
-    value,
-    key: String(index + 1),
-  })),
+  settings: Array.from({ length: 4 }, (_, index) => ({ label: `P${index + 1} MACRO` })),
+  steps: Array.from({ length: 8 }, (_, index) => ({ label: `STEP ${index + 1}`, key: String(index + 1) })),
   pins: {
     muxSelect: [8, 11, 10],
     settingsAnalog: 'A0',
@@ -59,37 +49,24 @@ const FALLBACK_HARDWARE = {
 
 const $ = (selector) => document.querySelector(selector);
 const ui = {
-  diagramStatus: $('#diagram-status'),
-  engineStatus: $('#engine-status'),
   firmwareFile: $('#firmware-file'),
-  firmwareName: $('#firmware-name'),
-  dropZone: $('#drop-zone'),
-  runButton: $('#run-button'),
-  resetButton: $('#reset-button'),
   settingsGrid: $('#settings-grid'),
   stepsGrid: $('#steps-grid'),
   modeButton: $('#mode-button'),
   lcdLines: [$('#lcd-line-1'), $('#lcd-line-2')],
   lcdCanvas: $('#lcd-dot-matrix'),
-  volume: $('#volume'),
-  runtimeNote: $('#runtime-note'),
-  scope: $('#scope'),
   cycleMeter: $('#cycle-meter'),
   cycleMeterScrew: $('#preset-screw'),
 };
-const hardwareView = document.body.classList.contains('hardware-ui');
 
 let hardware = FALLBACK_HARDWARE;
 let settings = [];
 let steps = [];
 let modePressed = false;
-let firmwareImage = null;
 let machine = null;
 let audioContext = null;
 let audioNode = null;
 let running = false;
-let audioFailureReported = false;
-let cycleMeterUpdatedAt = 0;
 
 const LCD_FONT_5X8 = new Uint8Array(`
   00 00 00 00 00  00 00 5f 00 00  00 07 00 07 00  14 7f 14 7f 14
@@ -118,14 +95,13 @@ const LCD_FONT_5X8 = new Uint8Array(`
   00 00 7f 00 00  00 41 36 08 00  08 04 08 10 08  00 06 09 09 06
 `.trim().split(/\s+/).map((value) => Number.parseInt(value, 16)));
 
-let lcdText = ui.lcdLines.map((line) => (line?.textContent ?? '').padEnd(16).slice(0, 16));
+let lcdText = ui.lcdLines.map((line) => line.textContent.padEnd(16).slice(0, 16));
 let lcdDrawFrame = 0;
 let lcdCgram = new Uint8Array(64);
 
 // Draws the LCD as a 5x8 dot matrix, CGRAM glyphs included.
 function drawLcdDotMatrix() {
   const canvas = ui.lcdCanvas;
-  if (!canvas) return;
   const rect = canvas.getBoundingClientRect();
   if (!rect.width || !rect.height) return;
 
@@ -198,16 +174,14 @@ function setLcdLines(line1, line2, cgram = lcdCgram) {
 }
 
 function scheduleLcdDotMatrix() {
-  if (!ui.lcdCanvas || lcdDrawFrame) return;
+  if (lcdDrawFrame) return;
   lcdDrawFrame = requestAnimationFrame(() => {
     lcdDrawFrame = 0;
     drawLcdDotMatrix();
   });
 }
 
-if (ui.lcdCanvas && 'ResizeObserver' in window) {
-  new ResizeObserver(scheduleLcdDotMatrix).observe(ui.lcdCanvas);
-}
+new ResizeObserver(scheduleLcdDotMatrix).observe(ui.lcdCanvas);
 
 function connectionOtherEnd(connections, endpoint) {
   for (const connection of connections) {
@@ -234,16 +208,11 @@ async function readDiagram() {
     const part = (id) => diagram.parts.find((item) => item.id === id);
     const label = (id, fallback) => part(id)?.attrs?.text || fallback;
     hardware = {
-      source: 'simulator/diagram.json',
       settings: Array.from({ length: 4 }, (_, index) => ({
-        id: `setting${index + 1}`,
         label: label(`settingText${index + 1}`, `P${index + 1}`),
-        value: Number(part(`setting${index + 1}`)?.attrs?.value ?? 0),
       })),
       steps: Array.from({ length: 8 }, (_, index) => ({
-        id: `stepPot${index + 1}`,
         label: part(`stepButton${index + 1}`)?.attrs?.label || `STEP ${index + 1}`,
-        value: Number(part(`stepPot${index + 1}`)?.attrs?.value ?? 0),
         key: part(`stepButton${index + 1}`)?.attrs?.key || String(index + 1),
       })),
       pins: {
@@ -258,43 +227,33 @@ async function readDiagram() {
     const pinSignature = JSON.stringify(hardware.pins);
     const expected = JSON.stringify(FALLBACK_HARDWARE.pins);
     if (pinSignature !== expected) throw new Error(`unsupported pin map ${pinSignature}`);
-    ui.diagramStatus.textContent = 'diagram: connected';
   } catch (error) {
     hardware = FALLBACK_HARDWARE;
-    ui.diagramStatus.textContent = 'diagram: fallback map';
-    ui.diagramStatus.title = String(error);
+    console.warn('diagram.json not used:', error);
   }
 }
 
-function makeKnob(control, small = false) {
+function makeKnob(control) {
   const card = document.createElement('div');
   card.className = 'control-card';
   const knob = document.createElement('div');
-  knob.className = `knob${small ? ' small' : ''}`;
+  knob.className = 'knob';
   knob.tabIndex = 0;
   knob.setAttribute('role', 'slider');
   knob.setAttribute('aria-label', control.label);
   knob.setAttribute('aria-valuemin', '0');
   knob.setAttribute('aria-valuemax', '1023');
-  const name = document.createElement('div');
-  name.className = 'control-name';
-  name.textContent = control.label;
-  const value = document.createElement('div');
-  value.className = 'control-value';
 
-  control.value = Math.max(0, Math.min(1023, Number(control.value) || 0));
   const render = () => {
     const angle = -135 + (control.value / 1023) * 270;
     knob.style.setProperty('--turn', `${angle}deg`);
     knob.setAttribute('aria-valuenow', String(control.value));
-    value.textContent = `${Math.round((control.value / 1023) * 100)}%`;
     machine?.updateInputs();
   };
   const setValue = (next) => {
     control.value = Math.max(0, Math.min(1023, Math.round(next)));
     render();
   };
-  control.setValue = setValue;
 
   let dragStartY = 0;
   let dragStartValue = 0;
@@ -322,8 +281,7 @@ function makeKnob(control, small = false) {
     event.preventDefault();
   });
 
-  control.element = knob;
-  card.append(knob, name, value);
+  card.append(knob);
   render();
   return card;
 }
@@ -360,17 +318,14 @@ function bindMomentary(element, setter) {
 }
 
 function buildControls() {
-  settings = hardware.settings.map((item) => ({ ...item, value: hardwareView ? 511 : item.value }));
-  steps = hardware.steps.map((item) => ({ ...item, value: hardwareView ? 511 : item.value, pressed: false }));
-  ui.settingsGrid.replaceChildren(...settings.map((control) => makeKnob(control)));
+  settings = hardware.settings.map((item) => ({ ...item, value: 511 }));
+  steps = hardware.steps.map((item) => ({ ...item, value: 511, pressed: false }));
+  ui.settingsGrid.replaceChildren(...settings.map(makeKnob));
   const cards = steps.map((control, index) => {
-    const card = makeKnob(control, true);
+    const card = makeKnob(control);
     const button = document.createElement('button');
     button.className = 'pad';
     button.setAttribute('aria-label', `${control.label}, key ${control.key}`);
-    button.dataset.step = String(index + 1);
-    button.dataset.key = control.key;
-    button.innerHTML = `<span class="keycap">${control.key}</span><span class="step-number">${index + 1}</span>`;
     control.button = button;
     bindMomentary(button, (pressed) => setStepPressed(index, pressed));
     card.append(button);
@@ -775,8 +730,6 @@ class BitsynthMachine {
     this.lcd = new HD44780(setLcdLines);
     this.portValues = { B: 0, C: 0, D: 0 };
     this.audioHigh = false;
-    this.scope = new Float32Array(2048);
-    this.scopeIndex = 0;
     this.sampleCycle = 0;
     this.antiAlias = null;
     this.antiAliasSampleRate = 0;
@@ -929,7 +882,7 @@ class BitsynthMachine {
   }
 
   // Runs the firmware for one audio callback and samples the filtered output.
-  renderAudio(outputLeft, outputRight, volume) {
+  renderAudio(outputLeft, outputRight) {
     const outputSampleRate = audioContext.sampleRate;
     if (!this.antiAlias || this.antiAliasSampleRate !== outputSampleRate) {
       this.antiAlias = new MonitorAntiAliasFilter(outputSampleRate);
@@ -937,7 +890,7 @@ class BitsynthMachine {
     }
     this.audioIsrBlockMax = 0;
     this.audioIsrCallbackCycles = 0;
-    this.meterWindows = ui.cycleMeter && !ui.cycleMeter.hidden ? 1 + CYCLE_METER_BLOCKS : 0;
+    this.meterWindows = ui.cycleMeter.hidden ? 0 : 1 + CYCLE_METER_BLOCKS;
     this.isrStack.length = 0;
     this.audioIsrWindowCycles = 0;
     this.audioIsrWindowStart = this.cpu.cycles;
@@ -954,10 +907,7 @@ class BitsynthMachine {
         const voltage = this.filter.sample(this.cpu.cycles);
         sample = this.antiAlias.process(voltage / 2.5);
       }
-      const monitored = Math.max(-1, Math.min(1, sample * volume));
-      outputLeft[index] = monitored;
-      outputRight[index] = monitored;
-      this.scope[this.scopeIndex++ & (this.scope.length - 1)] = monitored;
+      outputLeft[index] = outputRight[index] = Math.max(-1, Math.min(1, sample));
     }
     if (this.audioIsrBlockMax) {
       const average = this.audioIsrCallbackCycles * AUDIO_ISR_BUDGET_CYCLES /
@@ -1004,7 +954,7 @@ function parseIntelHex(text) {
     }
   }
   if (!written) throw new Error('HEX contains no ATmega328P flash data');
-  return { bytes: bytes.slice(0, highest), detail: `${written.toLocaleString()} flash bytes` };
+  return bytes.slice(0, highest);
 }
 
 function parseElf(buffer) {
@@ -1035,7 +985,7 @@ function parseElf(buffer) {
     highest = Math.max(highest, flashAddress + length);
   }
   if (!written) throw new Error('ELF has no loadable AVR flash segment');
-  return { bytes: output.slice(0, highest), detail: `${written.toLocaleString()} flash bytes` };
+  return output.slice(0, highest);
 }
 
 async function decodeFirmware(file) {
@@ -1045,195 +995,80 @@ async function decodeFirmware(file) {
   if (name.endsWith('.elf') || new Uint8Array(buffer, 0, Math.min(4, buffer.byteLength))[0] === 0x7f) return parseElf(buffer);
   if (buffer.byteLength > FLASH_BYTES) throw new Error(`Raw binary exceeds ${FLASH_BYTES} bytes`);
   if (!buffer.byteLength) throw new Error('Firmware file is empty');
-  return { bytes: new Uint8Array(buffer), detail: `${buffer.byteLength.toLocaleString()} raw bytes` };
+  return new Uint8Array(buffer);
 }
 
-async function loadFirmware(file, autoStart = false) {
+async function loadFirmware(file) {
   stopAudio();
   try {
-    const decoded = await decodeFirmware(file);
-    firmwareImage = { ...decoded, name: file.name };
-    machine = new BitsynthMachine(decoded.bytes);
-    ui.firmwareName.textContent = file.name;
-    ui.engineStatus.textContent = 'firmware: ready';
-    ui.engineStatus.className = 'badge';
-    ui.runtimeNote.textContent = `${decoded.detail}. Press Start audio.`;
-    ui.runButton.disabled = false;
-    ui.resetButton.disabled = false;
-    ui.runButton.textContent = 'Start audio';
-    if (autoStart) await startAudio(true);
+    machine = new BitsynthMachine(await decodeFirmware(file));
+    startAudio();
   } catch (error) {
-    firmwareImage = null;
     machine = null;
-    ui.firmwareName.textContent = 'Could not load firmware';
-    ui.engineStatus.textContent = 'firmware: error';
-    ui.engineStatus.className = 'badge error';
-    ui.runtimeNote.textContent = error instanceof Error ? error.message : String(error);
-    ui.runButton.disabled = true;
-    ui.resetButton.disabled = true;
+    console.error('Could not load firmware:', error);
   }
 }
 
-async function ensureAudio(resume = true) {
-  if (!audioContext) audioContext = new AudioContext({ latencyHint: 'interactive' });
-  if (resume) await audioContext.resume();
-  if (!audioNode) {
+// Starts the firmware's audio; a blocked context resumes on the first click or key.
+function startAudio() {
+  if (!audioContext) {
+    audioContext = new AudioContext({ latencyHint: 'interactive' });
     audioNode = audioContext.createScriptProcessor(AUDIO_BUFFER_SIZE, 0, 2);
     audioNode.onaudioprocess = (event) => {
       const left = event.outputBuffer.getChannelData(0);
       const right = event.outputBuffer.getChannelData(1);
-      if (!running || !machine) {
-        left.fill(0);
-        right.fill(0);
-        return;
-      }
-      try {
-        machine.renderAudio(left, right, Number(ui.volume.value));
-      } catch (error) {
-        left.fill(0);
-        right.fill(0);
-        if (!audioFailureReported) {
-          audioFailureReported = true;
-          queueMicrotask(() => reportRuntimeError(error));
+      if (running) {
+        try {
+          machine.renderAudio(left, right);
+          return;
+        } catch (error) {
+          running = false;
+          queueMicrotask(stopAudio);
+          console.error('Simulation stopped:', error);
         }
       }
+      left.fill(0);
+      right.fill(0);
     };
   }
-}
-
-async function startAudio(automatic = false) {
-  if (!machine) return;
-  await ensureAudio(!automatic);
-  if (automatic) audioContext.resume().catch(() => {});
+  audioContext.resume().catch(() => {});
   running = true;
-  audioFailureReported = false;
   audioNode.connect(audioContext.destination);
-  ui.runButton.textContent = 'Stop';
-  ui.runButton.classList.add('active');
-  if (audioContext.state === 'running') {
-    ui.engineStatus.textContent = 'engine: running';
-    ui.engineStatus.className = 'badge live';
-  } else {
-    ui.engineStatus.textContent = 'audio: click to enable';
-    ui.engineStatus.className = 'badge';
-  }
-}
-
-async function unlockAudio() {
-  if (!running || !audioContext || audioContext.state === 'running') return;
-  try {
-    await audioContext.resume();
-    ui.engineStatus.textContent = 'engine: running';
-    ui.engineStatus.className = 'badge live';
-  } catch {}
-}
-
-function showHardwareLoadPrompt() {
-  setLcdLines('Click here to', 'load firmware');
-  ui.engineStatus.textContent = 'firmware: choose file';
-  ui.engineStatus.className = 'badge';
-  ui.runtimeNote.textContent = 'Default firmware.hex was not found.';
-}
-
-async function loadDefaultHardwareFirmware() {
-  try {
-    const response = await fetch('../.pio/build/hardware/firmware.hex', { cache: 'no-store' });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const buffer = await response.arrayBuffer();
-    const file = new File([buffer], 'firmware.hex', { type: 'text/plain' });
-    await loadFirmware(file, true);
-  } catch {
-    showHardwareLoadPrompt();
-  }
 }
 
 function stopAudio() {
   running = false;
-  ui.runButton.classList.remove('active');
-  if (audioNode) {
-    try { audioNode.disconnect(); } catch {}
-  }
-  if (firmwareImage) {
-    ui.runButton.textContent = 'Start audio';
-    ui.engineStatus.textContent = 'engine: paused';
-    ui.engineStatus.className = 'badge';
+  audioNode?.disconnect();
+}
+
+function unlockAudio() {
+  if (running && audioContext.state !== 'running') audioContext.resume().catch(() => {});
+}
+
+async function loadDefaultFirmware() {
+  try {
+    const response = await fetch('../.pio/build/hardware/firmware.hex', { cache: 'no-store' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    await loadFirmware(new File([await response.blob()], 'firmware.hex'));
+  } catch {
+    setLcdLines('Click here to', 'load firmware');
   }
 }
 
-function reportRuntimeError(error) {
-  stopAudio();
-  ui.engineStatus.textContent = 'engine: fault';
-  ui.engineStatus.className = 'badge error';
-  ui.runtimeNote.textContent = error instanceof Error ? error.message : String(error);
-}
-
-async function resetMachine() {
-  if (!firmwareImage) return;
-  const wasRunning = running;
-  stopAudio();
-  machine = new BitsynthMachine(firmwareImage.bytes);
-  ui.runtimeNote.textContent = `${firmwareImage.detail}. Reset complete.`;
-  if (wasRunning) await startAudio();
-}
-
-function drawScope(now = performance.now()) {
-  const canvas = ui.scope;
-  if (canvas) {
-    const rect = canvas.getBoundingClientRect();
-    const scale = Math.min(2, devicePixelRatio || 1);
-    const width = Math.max(1, Math.round(rect.width * scale));
-    const height = Math.max(1, Math.round(rect.height * scale));
-    if (canvas.width !== width || canvas.height !== height) {
-      canvas.width = width;
-      canvas.height = height;
-    }
-    const context = canvas.getContext('2d');
-    context.clearRect(0, 0, width, height);
-    context.strokeStyle = '#1c332a';
-    context.lineWidth = 1;
-    context.beginPath();
-    context.moveTo(0, height / 2);
-    context.lineTo(width, height / 2);
-    context.stroke();
-    if (machine) {
-      context.strokeStyle = '#72e4d1';
-      context.lineWidth = Math.max(1, scale);
-      context.beginPath();
-      const visible = Math.min(machine.scope.length, Math.round(width / scale) * 2);
-      for (let index = 0; index < visible; index++) {
-        const ringIndex = (machine.scopeIndex - visible + index) & (machine.scope.length - 1);
-        const x = (index / (visible - 1)) * width;
-        const y = height * (0.5 - machine.scope[ringIndex] * 0.42);
-        if (index === 0) context.moveTo(x, y);
-        else context.lineTo(x, y);
-      }
-      context.stroke();
-    }
-  }
-  if (running && machine) {
-    ui.runtimeNote.textContent = `9-bit Fast PWM · 31.25 kHz · ${audioContext.sampleRate.toLocaleString()} Hz monitor · local execution`;
-  }
-  if (ui.cycleMeter && !ui.cycleMeter.hidden &&
-      now - cycleMeterUpdatedAt >= CYCLE_METER_UPDATE_MS) {
-    cycleMeterUpdatedAt = now;
-    const cycles = Math.round(machine?.audioIsrCycles || 0);
-    const maxCycles = machine?.audioIsrMaxCycles || 0;
-    const text = cycles
-      ? `ISR ${cycles} / ${AUDIO_ISR_BUDGET_CYCLES} cycles (${Math.round(cycles / AUDIO_ISR_BUDGET_CYCLES * 100)}%) · MAX ${maxCycles}`
-      : `ISR -- / ${AUDIO_ISR_BUDGET_CYCLES} cycles · MAX --`;
-    if (ui.cycleMeter.textContent !== text) ui.cycleMeter.textContent = text;
-    ui.cycleMeter.classList.toggle('over-budget', maxCycles > AUDIO_ISR_BUDGET_CYCLES);
-  }
-  requestAnimationFrame(drawScope);
-}
-
-function isTextEntry(target) {
-  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable;
+function updateCycleMeter() {
+  if (ui.cycleMeter.hidden) return;
+  const cycles = Math.round(machine?.audioIsrCycles || 0);
+  const maxCycles = machine?.audioIsrMaxCycles || 0;
+  const text = cycles
+    ? `ISR ${cycles} / ${AUDIO_ISR_BUDGET_CYCLES} cycles (${Math.round(cycles / AUDIO_ISR_BUDGET_CYCLES * 100)}%) · MAX ${maxCycles}`
+    : `ISR -- / ${AUDIO_ISR_BUDGET_CYCLES} cycles · MAX --`;
+  if (ui.cycleMeter.textContent !== text) ui.cycleMeter.textContent = text;
+  ui.cycleMeter.classList.toggle('over-budget', maxCycles > AUDIO_ISR_BUDGET_CYCLES);
 }
 
 document.addEventListener('keydown', (event) => {
   unlockAudio();
-  if (isTextEntry(event.target) || event.repeat) return;
+  if (event.repeat) return;
   const key = event.key.toLowerCase();
   const index = steps.findIndex((step) => step.key.toLowerCase() === key);
   if (index >= 0) {
@@ -1260,33 +1095,12 @@ document.addEventListener('pointerdown', unlockAudio);
 
 ui.firmwareFile.addEventListener('change', () => {
   const [file] = ui.firmwareFile.files;
-  if (file) loadFirmware(file, hardwareView);
+  if (file) loadFirmware(file);
 });
-for (const type of ['dragenter', 'dragover']) {
-  ui.dropZone.addEventListener(type, (event) => {
-    event.preventDefault();
-    ui.dropZone.classList.add('drag');
-  });
-}
-for (const type of ['dragleave', 'drop']) {
-  ui.dropZone.addEventListener(type, (event) => {
-    event.preventDefault();
-    ui.dropZone.classList.remove('drag');
-  });
-}
-ui.dropZone.addEventListener('drop', (event) => {
-  const [file] = event.dataTransfer.files;
-  if (file) loadFirmware(file, hardwareView);
-});
-ui.runButton.addEventListener('click', () => {
-  if (running) stopAudio();
-  else startAudio().catch(reportRuntimeError);
-});
-ui.resetButton.addEventListener('click', () => resetMachine().catch(reportRuntimeError));
 
 await readDiagram();
 buildControls();
-ui.cycleMeterScrew?.addEventListener('click', () => {
+ui.cycleMeterScrew.addEventListener('click', () => {
   const show = ui.cycleMeter.hidden;
   ui.cycleMeter.hidden = !show;
   ui.cycleMeterScrew.setAttribute('aria-label', `${show ? 'Hide' : 'Show'} audio ISR cycle meter`);
@@ -1295,8 +1109,8 @@ ui.cycleMeterScrew?.addEventListener('click', () => {
     machine.audioIsrCycles = 0;
     machine.audioIsrMaxCycles = 0;
   }
-  cycleMeterUpdatedAt = 0;
+  updateCycleMeter();
 });
-drawScope();
+setInterval(updateCycleMeter, CYCLE_METER_UPDATE_MS);
 scheduleLcdDotMatrix();
-if (hardwareView) await loadDefaultHardwareFirmware();
+await loadDefaultFirmware();

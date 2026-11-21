@@ -17,9 +17,6 @@
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
 
-    button, input { font: inherit; }
-    button { color: inherit; }
-
     .workbench {
       width: 100%;
       min-height: 100vh;
@@ -152,10 +149,7 @@
       transform-origin: 50% 50%;
     }
 
-    .knob::before { display: none; }
     .knob:focus-visible { filter: drop-shadow(0 0 5px #fff); }
-
-    .control-name, .control-value { display: none; }
 
     #mode-button {
       position: absolute;
@@ -177,8 +171,6 @@
 
     #mode-button.active { background-image: url('./assets/black_button_pressed.png'); }
     #mode-button:focus-visible { filter: drop-shadow(0 0 5px #fff) drop-shadow(5px 7px 5px #000e); }
-    #mode-button::after { display: none; }
-    #mode-button .keycap, #mode-button strong { display: none; }
 
     .pad {
       position: absolute;
@@ -201,8 +193,6 @@
 
     .pad.active { background-image: url('./assets/red_button_pressed.png'); }
     .pad:focus-visible { filter: drop-shadow(0 0 5px #fff) drop-shadow(5px 7px 5px #000e); }
-    .pad .keycap, .pad .step-number { display: none; }
-    .pad::after { display: none; }
 
     #preset-screw {
       position: absolute;
@@ -239,24 +229,11 @@
     }
 
     #cycle-meter.over-budget { color: #ff8b80; border-color: #ff5d5066; }
-    #cycle-meter[hidden] { display: none; }
   </style>
 </head>
-<body class="hardware-ui">
+<body>
   <main class="workbench">
-    <!-- Kept hidden because simulator.js uses these values and status hooks. -->
-    <div class="simulator-runtime" hidden aria-hidden="true">
-      <label id="drop-zone">
-        <input id="firmware-file" type="file" accept=".elf,.hex,.bin,application/octet-stream" hidden>
-        <span id="firmware-name">Load firmware</span>
-      </label>
-      <span id="diagram-status">diagram: loading</span>
-      <span id="engine-status">firmware: empty</span>
-      <input id="volume" type="range" min="0" max="1" step="0.01" value="1" aria-label="Monitor volume">
-      <button id="reset-button" disabled>Reset</button>
-      <button id="run-button" type="button" disabled>Start audio</button>
-      <span id="runtime-note">Waiting for firmware.</span>
-    </div>
+    <input id="firmware-file" type="file" accept=".elf,.hex,.bin,application/octet-stream" hidden>
 
     <div class="panel-scroll">
       <section class="panel-stage" aria-label="Bitsynth hardware panel">
@@ -266,7 +243,7 @@
           <div class="lcd-text" id="lcd-line-2">TO BEGIN        </div>
         </label>
         <div id="settings-grid"></div>
-        <button id="mode-button" aria-label="Mode or panic, key M"><span class="keycap">M</span><strong>MODE</strong></button>
+        <button id="mode-button" aria-label="Mode or panic, key M"></button>
         <div id="steps-grid"></div>
         <output id="cycle-meter" title="Smoothed audio interrupt cycles per 20 kHz sample period and the highest eight-sample block average" hidden>ISR -- / 800 cycles · MAX --</output>
         <button id="preset-screw" type="button" aria-label="Show audio ISR cycle meter"></button>
