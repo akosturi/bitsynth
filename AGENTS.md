@@ -16,6 +16,7 @@
 - Preserve the README's existing language, style, structure, and level of detail. Update it whenever behavior, features, controls, hardware, simulator operation, dependencies, or build/upload instructions change; do not duplicate the README wholesale elsewhere.
 - Preserve control robustness unless intentionally changing it: multiplexed analog reads depend on settling/discard reads, median filtering, smoothing, movement confirmation, hysteresis, and soft takeover; buttons depend on debounce; LCD output uses a changed-character shadow buffer.
 - Drum data must remain flash-resident signed 9-bit PCM at 20 kHz in the packed representation expected by `synthRenderDrum`; retain or update the compile-time sample/table assertions when formats change.
+- The simulator preset editor mirrors `MelodicPreset` offsets, the wave/envelope/chorus/`MACRO_*` value order, and the RAM symbols it pokes (`seqControls`, `playControls`, `instrumentMode`, `parameterPage*`, `settingValues`); update `simulator/simulator.js` when those change.
 - Keep `src/synth_voices.S` bit-exact with the formulas documented above each of its routines, and keep its `VOICE_*` offsets in sync with `struct SynthVoice`.
 - Comments: short one-line comments above functions only, no inline comments, and none for obvious code. Only `src/synth_voices.S` may use longer multi-line comments.
 
